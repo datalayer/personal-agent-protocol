@@ -70,6 +70,13 @@ export interface PairwiseUserIdStore {
 export interface AuthorizationStateStore {
   put(reference: string, value: unknown, options: { readonly expiresAt: Date }): Promise<void>;
   take(reference: string): Promise<unknown | undefined>;
+  /**
+   * Reads a record without consuming it (`undefined` when unknown or expired). A store SHOULD
+   * have it (since 0.37.2): `DirectSignInClient.openLink` reads a sign-in link's record with it,
+   * so opening a link never races the `take` of a completing callback. Without it the link is read
+   * by `take` then `put`.
+   */
+  get?(reference: string): Promise<unknown | undefined>;
 }
 
 export interface ProtocolCache {
@@ -364,7 +371,7 @@ export function createPapCorePlugin(options: PapCoreOptions = {}) {
   }
   return definePlugin({
     name: "@datalayer/personal-agent-protocol-core",
-    version: "0.37.1",
+    version: "0.37.2",
     contributionPoints: [
       DiscoveryTransports,
       UrlSafetyPolicies,

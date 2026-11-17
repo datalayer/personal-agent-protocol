@@ -772,7 +772,8 @@ test("opening a link never takes the callback state", async () => {
     return take(reference);
   };
   await browser.open(await client.openLink(link));
-  assert.ok(taken.length > 0 && taken.every((reference) => !reference.startsWith("direct:")));
+  // Read with the store's `get`: an opening consumes nothing, the link's record included.
+  assert.deepEqual(taken, []);
   // Opened twice, then completed: complete() alone consumes the state, once.
   await client.openLink(link);
   const callbackUrl = await w.shop.approveAuthorization(browser.requestId, { accountId: "acct_ada" });
@@ -802,4 +803,96 @@ test("an empty event name is the default message event", async () => {
     items.map((item) => item.kind ?? item.type),
     ["state"],
   );
+});
+
+async function pushedLink(w, browser) {
+  const client = new DirectSignInClient({ reactor: w.reactor, fetch: w.fetch });
+  const start = await client.begin(
+    directArguments(w, {
+      pushedAuthorizationRequestEndpoint: w.metadata.pushed_authorization_request_endpoint,
+      requirePushedAuthorizationRequests: true,
+      linkPage: "https://atlas.example/sign-in/{link}",
+    }),
+  );
+  return { client, link: browser.urls.at(-1).split("/").at(-1), start };
+}
+
+const hex = async (prefix, value) =>
+  `${prefix}:${Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("")}`;
+
+test("an opening paused while the callback completes never restores the link", async () => {
+  // Copilot's review of 0.37.1: an opening paused between reading the link and writing it back,
+  // while complete() consumed the sign-in, restored a link whose callbacks could not succeed.
+  const { w, browser } = await recordingWorld({ pushedAuthorizationRequests: "required" });
+  const { client, link } = await pushedLink(w, browser);
+  await browser.open(await client.openLink(link));
+  const callbackUrl = await w.shop.approveAuthorization(browser.requestId, { accountId: "acct_ada" });
+  const store = firstContribution(w.reactor, AuthorizationStateStores, "authorization state store");
+  const get = store.get.bind(store);
+  let read;
+  let resume;
+  const wasRead = new Promise((resolve) => (read = resolve));
+  const resumed = new Promise((resolve) => (resume = resolve));
+  store.get = async (reference) => {
+    const value = await get(reference);
+    read();
+    await resumed;
+    return value;
+  };
+  const opening = client.openLink(link);
+  await wasRead;
+  store.get = get;
+  assert.ok((await client.complete({ callbackUrl })).token !== undefined);
+  resume();
+  await opening; // it read before the sign-in completed
+  await assert.rejects(client.openLink(link), AuthorizationError);
+});
+
+test("a link begun by 0.37.0 opens after an upgrade without consuming its state", async () => {
+  const { w, browser } = await recordingWorld({ pushedAuthorizationRequests: "required" });
+  const { client, link, start } = await pushedLink(w, browser);
+  const store = firstContribution(w.reactor, AuthorizationStateStores, "authorization state store");
+  const reference = await hex("direct", start.state.reveal());
+  await store.put(await hex("direct-link", link), reference, { expiresAt: new Date(Date.now() + 300_000) });
+  await browser.open(await client.openLink(link));
+  assert.ok((await store.get(reference)) !== undefined); // the state is still there
+  const callbackUrl = await w.shop.approveAuthorization(browser.requestId, { accountId: "acct_ada" });
+  assert.ok((await client.complete({ callbackUrl })).token !== undefined);
+  await assert.rejects(client.openLink(link), AuthorizationError);
+});
+
+test("a store without get is read by taking and putting back", async () => {
+  const { w, browser } = await recordingWorld({ pushedAuthorizationRequests: "offered" });
+  const { client, link } = await pushedLink(w, browser);
+  const store = firstContribution(w.reactor, AuthorizationStateStores, "authorization state store");
+  store.get = undefined; // a store written before 0.37.2
+  assert.ok((await client.openLink(link)).reveal().includes("request_uri="));
+  assert.ok((await client.openLink(link)).reveal().includes("request_uri="));
+});
+
+test("the start names the state the callback carries", async () => {
+  const { w, browser } = await recordingWorld();
+  const client = new DirectSignInClient({ reactor: w.reactor, fetch: w.fetch });
+  const start = await client.begin(directArguments(w, { linkPage: "https://atlas.example/sign-in/{link}" }));
+  const opened = await client.openLink(browser.urls.at(-1).split("/").at(-1));
+  assert.equal(new URL(opened.reveal()).searchParams.get("state"), start.state.reveal());
+});
+
+test("a 0.37.0 link in a store without get opens again until the sign-in completes", async () => {
+  // Copilot's review of #20: a store without get took the 0.37.0 string record to read it, and
+  // nothing put it back, so the link opened once only.
+  const { w, browser } = await recordingWorld({ pushedAuthorizationRequests: "required" });
+  const { client, link, start } = await pushedLink(w, browser);
+  const store = firstContribution(w.reactor, AuthorizationStateStores, "authorization state store");
+  await store.put(await hex("direct-link", link), await hex("direct", start.state.reveal()), {
+    expiresAt: new Date(Date.now() + 300_000),
+  });
+  store.get = undefined;
+  await client.openLink(link);
+  await browser.open(await client.openLink(link)); // opens again
+  const callbackUrl = await w.shop.approveAuthorization(browser.requestId, { accountId: "acct_ada" });
+  assert.ok((await client.complete({ callbackUrl })).token !== undefined);
+  await assert.rejects(client.openLink(link), AuthorizationError);
 });

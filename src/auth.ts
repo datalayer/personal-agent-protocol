@@ -21,6 +21,7 @@ import {
   type SignInResult,
 } from "./sessions.js";
 import {
+  type AuthorizationStateStore,
   AuthorizationStateStores,
   BrowserHandoffs,
   Clocks,
@@ -313,6 +314,12 @@ export interface DirectSignInStart {
    * (§4.2): a cross-device flow, as Device Sign-In always is (§10.8).
    */
   readonly crossDevice: boolean;
+  /**
+   * The request's `state`, for a host whose redirect lands in another service than the one that
+   * began (its callback keyed by it there): with PAR or a `linkPage` the URL the browser opens does
+   * not carry it. Never shown to the User or a model.
+   */
+  readonly state?: SecretValue;
 }
 
 /**
@@ -407,6 +414,19 @@ async function stateReference(state: string): Promise<string> {
   return `direct:${Array.from(new Uint8Array(digest), (byte) =>
     byte.toString(16).padStart(2, "0"),
   ).join("")}`;
+}
+
+/**
+ * A state record read without consuming it: the store's `get` when it has one (the contract's
+ * SHOULD since 0.37.2). A store with only `put` and `take` is read by taking and putting back,
+ * which a `complete` running between the two steps can race: such a store SHOULD add `get`.
+ */
+async function peek(store: AuthorizationStateStore, reference: string): Promise<unknown> {
+  if (typeof store.get === "function") return store.get(reference);
+  const value = await store.take(reference);
+  const expiresAt = (value as { expiresAt?: unknown } | undefined)?.expiresAt;
+  if (value !== undefined && expiresAt instanceof Date) await store.put(reference, value, { expiresAt });
+  return value;
 }
 
 /** A sign-in link's key in the authorization state store: its digest, never the link. */
@@ -574,7 +594,7 @@ export class DirectSignInClient {
       if (link !== undefined) await store.take(await linkReference(link));
       throw new AuthorizationError("browser_handoff_failed", "Browser handoff failed", { cause });
     }
-    return { expiresAt, requestedScopes: request.scopes, crossDevice };
+    return { expiresAt, requestedScopes: request.scopes, crossDevice, state: request.state };
   }
 
   /**
@@ -587,15 +607,24 @@ export class DirectSignInClient {
   async openLink(link: string): Promise<SecretValue> {
     const store = firstContribution(this.#reactor, AuthorizationStateStores, "authorization state store");
     const clock = firstContribution(this.#reactor, Clocks, "clock");
-    // Only the link's own record is read (taken and put back): the callback state, which
-    // `complete` consumes once, is never touched, so an opening and a completing callback can
-    // interleave.
+    // Read, never consumed: only the callback `complete` receives takes state, so an opening and
+    // a completing callback can interleave, and a completed sign-in's link opens nothing more.
     const linkKey = await linkReference(link);
-    const pending = await store.take(linkKey);
+    let pending = await peek(store, linkKey);
+    if (typeof pending === "string") {
+      // A link begun by 0.37.0, whose record names the callback state's reference: that state is
+      // followed, still never consumed, so a link left unexpired across an upgrade opens as before.
+      const legacy = pending;
+      pending = legacy.startsWith("direct:") ? await peek(store, legacy) : undefined;
+      if (isPendingDirectSignIn(pending) && typeof store.get !== "function") {
+        // A store without `get` took the string record to read it: put back, with the sign-in's
+        // expiry, so the link opens again until the sign-in completes.
+        await store.put(linkKey, legacy, { expiresAt: pending.expiresAt });
+      }
+    }
     if (!isPendingDirectSignIn(pending) || clock.now().getTime() > pending.expiresAt.getTime()) {
       throw new AuthorizationError("invalid_or_expired_state", "The sign-in link is unknown or has expired");
     }
-    await store.put(linkKey, pending, { expiresAt: pending.expiresAt });
     return this.#authorizationUrl(pending);
   }
 

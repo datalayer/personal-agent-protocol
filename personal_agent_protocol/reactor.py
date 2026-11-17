@@ -120,7 +120,14 @@ class PairwiseUserIdStore(Protocol):
 
 @runtime_checkable
 class AuthorizationStateStore(Protocol):
-    """Persist and atomically consume short-lived authorization state."""
+    """Persist and atomically consume short-lived authorization state.
+
+    A store SHOULD also have `async def get(reference) -> object | None`, which reads a
+    record without consuming it (`None` when unknown or expired): `DirectSignInClient.open_link`
+    reads a sign-in link's record with it, so opening a link never races the `take` of a
+    completing callback. Without `get` the link is read by `take` then `put`. `get` is not
+    part of this runtime-checked Protocol, so stores written before 0.37.2 still qualify.
+    """
 
     async def put(self, reference: str, value: object, *, expires_at: datetime) -> None: ...
 
@@ -1081,7 +1088,7 @@ def build_pap_reactor(
     platform.register_plugin(
         PluginManifest(
             name="personal-agent-protocol.core",
-            version="0.37.1",
+            version="0.37.2",
             contribution_points=[
                 DISCOVERY_TRANSPORTS.id,
                 URL_SAFETY_POLICIES.id,

@@ -271,6 +271,10 @@ class DirectSignInStart(ProtocolModel):
     #: Whether the authorization URL opens on a device other than the one the User is
     #: using (§4.2): a cross-device flow, as Device Sign-In always is (§10.8).
     cross_device: bool = False
+    #: The request's `state`, for a host whose redirect lands in another service than the
+    #: one that began (its callback keyed by it there): with PAR or a `link_page` the URL the
+    #: browser opens does not carry it. Never shown to the User or a model.
+    state: SecretStr | None = None
 
 
 #: The longest a Direct Sign-In request lives when its link opens on another device: a
@@ -295,6 +299,22 @@ class _PendingDirectSignIn:
     #: The link the agent's own page opens it by (`begin(link_page=...)`), dropped with the
     #: state when the sign-in completes.
     link: str | None = None
+
+
+async def _peek(store: AuthorizationStateStore, reference: str) -> object | None:
+    """A state record read without consuming it: the store's `get` when it has one (the
+    contract's SHOULD since 0.37.2). A store with only `put` and `take` is read by taking
+    and putting back, which a `complete` running between the two steps can race: such a
+    store SHOULD add `get`."""
+
+    get = getattr(store, "get", None)
+    if callable(get):
+        return await get(reference)
+    value = await store.take(reference)
+    expires_at = getattr(value, "expires_at", None)
+    if value is not None and isinstance(expires_at, datetime):
+        await store.put(reference, value, expires_at=expires_at)
+    return value
 
 
 def _link_reference(link: str) -> str:
@@ -473,6 +493,7 @@ class DirectSignInClient:
             expires_at=expires_at,
             requested_scopes=request.scopes,
             cross_device=cross_device,
+            state=request.state,
         )
 
     async def open_link(self, link: str) -> SecretStr:
@@ -489,16 +510,27 @@ class DirectSignInClient:
             ),
         )
         clock = cast(Clock, first_contribution(self.reactor, CLOCKS, "clock"))
-        # Only the link's own record is read (taken and put back): the callback state, which
-        # `complete` consumes once, is never touched, so an opening and a completing callback
-        # can interleave.
+        # Read, never consumed: only the callback `complete` receives takes state, so an
+        # opening and a completing callback can interleave, and a completed sign-in's link
+        # opens nothing more.
         link_reference = _link_reference(link)
-        pending = await store.take(link_reference)
+        pending = await _peek(store, link_reference)
+        if isinstance(pending, str):
+            # A link begun by 0.37.0, whose record names the callback state's reference: that
+            # state is followed, still never consumed, so a link left unexpired across an
+            # upgrade opens as before.
+            legacy = pending
+            pending = await _peek(store, legacy) if legacy.startswith("direct:") else None
+            if isinstance(pending, _PendingDirectSignIn) and not callable(
+                getattr(store, "get", None)
+            ):
+                # A store without `get` took the string record to read it: put back, with the
+                # sign-in's expiry, so the link opens again until the sign-in completes.
+                await store.put(link_reference, legacy, expires_at=pending.expires_at)
         if not isinstance(pending, _PendingDirectSignIn) or clock.now() > pending.expires_at:
             raise AuthorizationError(
                 "invalid_or_expired_state", "the sign-in link is unknown or has expired"
             )
-        await store.put(link_reference, pending, expires_at=pending.expires_at)
         return await self._authorization_url(pending)
 
     async def _authorization_url(self, pending: _PendingDirectSignIn) -> SecretStr:

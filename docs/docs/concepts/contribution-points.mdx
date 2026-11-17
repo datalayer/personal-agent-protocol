@@ -44,7 +44,7 @@ other fails CI.
 | `pap.signer` | `SIGNERS` | `Signers` | The agent's client assertions and delegations (keys stay in custody) | — (host contributes) |  |
 | `pap.tokenStore` | `TOKEN_STORES` | `TokenStores` | Refresh tokens behind opaque references | — (host contributes) |  |
 | `pap.pairwiseUserIdStore` | `PAIRWISE_USER_ID_STORES` | `PairwiseUserIdStores` | Stable pairwise user IDs by tenant, local user, and issuer | — (host contributes) | yes |
-| `pap.authorizationStateStore` | `AUTHORIZATION_STATE_STORES` | `AuthorizationStateStores` | Expiring one-use sign-in state (put, take) | — (host contributes) |  |
+| `pap.authorizationStateStore` | `AUTHORIZATION_STATE_STORES` | `AuthorizationStateStores` | Expiring one-use sign-in state (put, take; get SHOULD, read without consuming, since 0.37.2) | — (host contributes) |  |
 | `pap.cache` | `CACHES` | `Caches` | Bounded cache of public metadata | `memory` |  |
 | `pap.browserHandoff` | `BROWSER_HANDOFFS` | `BrowserHandoffs` | Opens a sign-in page on a trusted surface | — (host contributes) |  |
 | `pap.browserJoin` | `BROWSER_JOINS` | `BrowserJoins` | The agent's own browser: loads the join form's one-time code and submits the form | — (host contributes) |  |

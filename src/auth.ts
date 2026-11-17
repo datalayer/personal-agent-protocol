@@ -301,6 +301,8 @@ interface PendingDirectSignIn {
   readonly pairwiseUserId: string | undefined;
   /** Where the request is pushed (RFC 9126), when it is: each opening pushes it again. */
   readonly pushedAuthorizationRequestEndpoint: string | undefined;
+  /** The link the agent's own page opens it by (`begin({ linkPage })`), dropped with the state. */
+  readonly link?: string;
 }
 
 export interface DirectSignInStart {
@@ -537,6 +539,7 @@ export class DirectSignInClient {
     const tokenEndpoint = httpsUrl(options.tokenEndpoint, "tokenEndpoint").toString();
     const expiresAt = new Date(clock.now().getTime() + lifetimeSeconds * 1000);
     const reference = await stateReference(request.state.reveal());
+    const link = linkPage === undefined ? undefined : base64Url(entropy(16, (length) => random.bytes(length)));
     const pending: PendingDirectSignIn = {
       kind: "pap.direct-sign-in.v1",
       request,
@@ -546,14 +549,15 @@ export class DirectSignInClient {
       dpopSigningAlgs: options.dpopSigningAlgs,
       pairwiseUserId: options.pairwiseUserId,
       pushedAuthorizationRequestEndpoint: pushedEndpoint,
+      ...(link === undefined ? {} : { link }),
     };
     await store.put(reference, pending, { expiresAt });
-    let link: string | undefined;
     let opened: SecretValue;
     try {
-      if (linkPage !== undefined) {
-        link = base64Url(entropy(16, (length) => random.bytes(length)));
-        await store.put(await linkReference(link), reference, { expiresAt });
+      if (linkPage !== undefined && link !== undefined) {
+        // The link's own record, a copy of the request: opening the link never takes the
+        // callback state `complete` consumes (§4.2).
+        await store.put(await linkReference(link), pending, { expiresAt });
         opened = new SecretValue(linkPage.replaceAll("{link}", link));
       } else {
         opened = await this.#authorizationUrl(pending);
@@ -583,14 +587,15 @@ export class DirectSignInClient {
   async openLink(link: string): Promise<SecretValue> {
     const store = firstContribution(this.#reactor, AuthorizationStateStores, "authorization state store");
     const clock = firstContribution(this.#reactor, Clocks, "clock");
+    // Only the link's own record is read (taken and put back): the callback state, which
+    // `complete` consumes once, is never touched, so an opening and a completing callback can
+    // interleave.
     const linkKey = await linkReference(link);
-    const reference = await store.take(linkKey);
-    const pending = typeof reference === "string" ? await store.take(reference) : undefined;
+    const pending = await store.take(linkKey);
     if (!isPendingDirectSignIn(pending) || clock.now().getTime() > pending.expiresAt.getTime()) {
       throw new AuthorizationError("invalid_or_expired_state", "The sign-in link is unknown or has expired");
     }
-    await store.put(reference as string, pending, { expiresAt: pending.expiresAt });
-    await store.put(linkKey, reference, { expiresAt: pending.expiresAt });
+    await store.put(linkKey, pending, { expiresAt: pending.expiresAt });
     return this.#authorizationUrl(pending);
   }
 
@@ -704,6 +709,8 @@ export class DirectSignInClient {
         "Authorization state is unknown, expired, or already used",
       );
     }
+    // The sign-in is used up: its link opens nothing more.
+    if (pending.link !== undefined) await store.take(await linkReference(pending.link));
     const clock = firstContribution(this.#reactor, Clocks, "clock");
     if (clock.now().getTime() > pending.expiresAt.getTime()) {
       throw new AuthorizationError("invalid_or_expired_state", "Authorization state has expired");

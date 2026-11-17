@@ -127,7 +127,7 @@ export function createCompanyDefaultsPlugin(
 ) {
   return definePlugin({
     name: "personal-agent-protocol.company",
-    version: "0.37.0",
+    version: "0.37.1",
     contributionPoints: [
       CompanyStores,
       CompanyAccounts,

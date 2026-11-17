@@ -12,7 +12,7 @@ import hmac
 import re
 import secrets
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import cast
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
@@ -292,6 +292,9 @@ class _PendingDirectSignIn:
     pairwise_user_id: str | None = None
     #: Where the request is pushed (RFC 9126), when it is: each opening pushes it again.
     pushed_authorization_request_endpoint: str | None = None
+    #: The link the agent's own page opens it by (`begin(link_page=...)`), dropped with the
+    #: state when the sign-in completes.
+    link: str | None = None
 
 
 def _link_reference(link: str) -> str:
@@ -450,12 +453,14 @@ class DirectSignInClient:
                 else _https_url(pushed_authorization_request_endpoint, "PAR endpoint")
             ),
         )
+        link = None if link_page is None else _base64url(_entropy(16, random_source.bytes))
+        pending = replace(pending, link=link)
         await store.put(reference, pending, expires_at=expires_at)
-        link: str | None = None
         try:
-            if link_page is not None:
-                link = _base64url(_entropy(16, random_source.bytes))
-                await store.put(_link_reference(link), reference, expires_at=expires_at)
+            if link_page is not None and link is not None:
+                # The link's own record, a copy of the request: opening the link never takes
+                # the callback state `complete` consumes (§4.2).
+                await store.put(_link_reference(link), pending, expires_at=expires_at)
                 await browser.open(SecretStr(link_page.replace("{link}", link)))
             else:
                 await browser.open(await self._authorization_url(pending))
@@ -484,15 +489,16 @@ class DirectSignInClient:
             ),
         )
         clock = cast(Clock, first_contribution(self.reactor, CLOCKS, "clock"))
+        # Only the link's own record is read (taken and put back): the callback state, which
+        # `complete` consumes once, is never touched, so an opening and a completing callback
+        # can interleave.
         link_reference = _link_reference(link)
-        reference = await store.take(link_reference)
-        pending = await store.take(reference) if isinstance(reference, str) else None
+        pending = await store.take(link_reference)
         if not isinstance(pending, _PendingDirectSignIn) or clock.now() > pending.expires_at:
             raise AuthorizationError(
                 "invalid_or_expired_state", "the sign-in link is unknown or has expired"
             )
-        await store.put(cast(str, reference), pending, expires_at=pending.expires_at)
-        await store.put(link_reference, cast(str, reference), expires_at=pending.expires_at)
+        await store.put(link_reference, pending, expires_at=pending.expires_at)
         return await self._authorization_url(pending)
 
     async def _authorization_url(self, pending: _PendingDirectSignIn) -> SecretStr:
@@ -598,6 +604,9 @@ class DirectSignInClient:
                 "invalid_or_expired_state",
                 "authorization state is unknown, expired, or already used",
             )
+        if pending.link is not None:
+            # The sign-in is used up: its link opens nothing more.
+            await store.take(_link_reference(pending.link))
         clock = cast(Clock, first_contribution(self.reactor, CLOCKS, "clock"))
         if clock.now() > pending.expires_at:
             raise AuthorizationError("invalid_or_expired_state", "authorization state has expired")

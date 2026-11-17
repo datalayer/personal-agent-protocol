@@ -2740,11 +2740,14 @@ caseFor("dpop.pushed-authorization-request")(async (ctx) => {
     scopes: ctx.scenario.scopes,
   });
   const unpushed = await ctx.send("GET", request.authorizationUrl.reveal());
+  // An explicit OAuth refusal: an error response, or a redirect carrying `error` (RFC 6749
+  // §4.1.2.1). A redirect to a login or consent page, which has no `code` yet, is no refusal.
   const location = unpushed.headers.get("location") ?? "";
-  check(
-    unpushed.status >= 400 || !location.includes("code="),
-    `a request that wasn't pushed is refused, got ${unpushed.status}`,
-  );
+  const redirected = location ? new URL(location, "https://invalid.example").searchParams : new URLSearchParams();
+  const refused =
+    (unpushed.status >= 400 && unpushed.status < 600) ||
+    (unpushed.status >= 300 && unpushed.status < 400 && redirected.has("error") && !redirected.has("code"));
+  check(refused, `a request that wasn't pushed is refused, got ${unpushed.status}`);
   check(!(await textOf(unpushed)).includes("request_id"), "no consent page for it");
 });
 
@@ -2845,18 +2848,21 @@ caseFor("dpop.mcp-bearer-without-a-proof")(async (ctx, fixture) => {
 });
 
 caseFor("dpop.mcp-server-decides-the-proof")(async (ctx) => {
-  // The issuer lists ES256; a server that doesn't gets Bearer, with no proof (§7).
+  // The issuer lists ES256: the refresh for the MCP server's token proves with the refresh
+  // token's key (§4.4), and the token is the type the server takes, Bearer for a server whose
+  // metadata lists no DPoP algorithm (§4.5, §7); the agent uses it as its type names.
   const url = await mcpUrl(ctx);
   const metadata = await ctx.metadata();
   check(metadata.dpop_signing_alg_values_supported?.length, "the issuer lists DPoP");
   const [, signed] = await signedInUser(ctx);
   const served = await fetchMcpServerMetadata(url, { issuer: metadata.issuer, fetch: ctx.fetch });
-  const { dpop_signing_alg_values_supported: _listed, ...plain } = served;
   const result = await ctx.agent.accounts.tokenForMcp(signed.reference, {
     context: await ctx.accountContext(signed.session.sub),
-    server: plain,
+    server: served,
   });
-  check(result.token.tokenType === "Bearer", "a server without the field gets Bearer");
+  check(result.status === "signed_in", "the refresh, with the refresh token's proof, works");
+  const wanted = (served.dpop_signing_alg_values_supported ?? []).includes("ES256") ? "DPoP" : "Bearer";
+  check(result.token.tokenType === wanted, `a token the server takes, ${wanted}`);
   const listed = await mcpClient(ctx, signed.session, result.token, url).callTool(tool(ctx.scenario.mcp_read_tool));
   check(!listed.isError, "and takes it");
 });

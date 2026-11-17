@@ -3752,11 +3752,13 @@ async def _dpop_pushed(ctx: ConformanceContext, _: FixtureCase) -> None:
         scopes=ctx.scenario.scopes,
     )
     unpushed = await ctx.send("GET", request.authorization_url.get_secret_value())
-    location = unpushed.headers.get("location", "")
-    check(
-        unpushed.status_code >= 400 or "code=" not in location,
-        f"a request that wasn't pushed is refused, got {unpushed.status_code}",
+    # An explicit OAuth refusal: an error response, or a redirect carrying `error` (RFC 6749
+    # §4.1.2.1). A redirect to a login or consent page, which has no `code` yet, is no refusal.
+    redirected = dict(parse_qsl(urlsplit(unpushed.headers.get("location", "")).query))
+    refused = 400 <= unpushed.status_code < 600 or (
+        300 <= unpushed.status_code < 400 and "error" in redirected and "code" not in redirected
     )
+    check(refused, f"a request that wasn't pushed is refused, got {unpushed.status_code}")
     check("request_id" not in unpushed.text, "no consent page for it")
 
 
@@ -3891,19 +3893,23 @@ async def _dpop_mcp_bearer(ctx: ConformanceContext, fixture: FixtureCase) -> Non
 
 @case("dpop.mcp-server-decides-the-proof")
 async def _dpop_mcp_decides(ctx: ConformanceContext, _: FixtureCase) -> None:
-    """The issuer lists ES256; a server that doesn't gets Bearer, with no proof (§7)."""
+    """The issuer lists ES256: the refresh for the MCP server's token proves with the refresh
+    token's key (§4.4), and the token is the type the server takes, Bearer for a server whose
+    metadata lists no DPoP algorithm (§4.5, §7); the agent uses it as its type names."""
 
     url = await _mcp_url(ctx)
     metadata = await ctx.metadata()
     check(metadata.dpop_signing_alg_values_supported, "the issuer lists DPoP")
     _user, signed = await _signed_in_user(ctx)
     served = await fetch_mcp_server_metadata(ctx.http, url, issuer=metadata.issuer)
-    plain = served.model_copy(update={"dpop_signing_alg_values_supported": None})
     result = await ctx.agent.accounts.token_for_mcp(
-        signed.reference, context=await ctx.account_context(signed.session.sub), server=plain
+        signed.reference, context=await ctx.account_context(signed.session.sub), server=served
     )
+    check(result.status == "signed_in", "the refresh, with the refresh token's proof, works")
     token = cast(AccessToken, result.token)
-    check(token.token_type == "Bearer", "a server without the field gets Bearer")  # noqa: S105
+    takes_dpop = DPOP_ALGORITHM in (served.dpop_signing_alg_values_supported or ())
+    wanted = "DPoP" if takes_dpop else "Bearer"
+    check(token.token_type == wanted, f"a token the server takes, {wanted}")
     listed = await (await _mcp_client(ctx, signed.session, token, url)).call_tool(
         _tool(ctx.scenario.mcp_read_tool)
     )

@@ -816,11 +816,13 @@ export function signInScopes(event: ConversationEvent): readonly string[] {
  * shared (from 1.0).
  */
 export function effectiveContext(messages: Iterable<Pick<Message, "context">>): Record<string, unknown> {
+  // Own data properties, defined, never assigned: a field named `__proto__` is a field, never
+  // the object's prototype, as in json.ts.
   const shared: Record<string, unknown> = {};
   for (const message of messages) {
     for (const [name, value] of Object.entries(message.context ?? {})) {
       if (value === null) delete shared[name];
-      else shared[name] = value;
+      else Object.defineProperty(shared, name, { value, enumerable: true, writable: true, configurable: true });
     }
   }
   return shared;

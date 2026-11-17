@@ -2538,6 +2538,10 @@ class CompanyService:
         follows RFC 6749: left out when it grants exactly the scopes requested.
         """
 
+        if resource is not None and not self._takes_dpop(resource):
+            # A server that takes only Bearer gets a Bearer token, even after a proof that a
+            # bound refresh token needed (§4.4, §4.5).
+            jkt = None
         access_token = self._id("at")
         digest = _digest(access_token)
         expires_at = self._now() + self.config.access_token_lifetime
@@ -2568,6 +2572,15 @@ class CompanyService:
         if refresh_token is not None:
             body["refresh_token"] = refresh_token
         return CompanyResponse(200, body, {"Cache-Control": "no-store"})
+
+    def _takes_dpop(self, resource: str) -> bool:
+        """Whether the service at `resource` takes DPoP tokens: the MCP server when its
+        protected resource metadata lists ES256 (§7), any other service of this company."""
+
+        if self._mcp() is not None and resource == self.config.mcp_url:
+            listed = self.protected_resource_metadata().get("dpop_signing_alg_values_supported")
+            return DPOP_ALGORITHM in (listed or ())
+        return True
 
     async def _access_token(self, token: str) -> IssuedAccessToken | None:
         """The access token's record while it works: issued here, unexpired, sign-in not ended."""

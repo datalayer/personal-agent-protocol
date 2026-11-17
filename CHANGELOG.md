@@ -28,6 +28,8 @@ Fixes from the review of 0.37.0, in both SDKs. No API change.
 - **Conformance**: `dpop.pushed-authorization-request` requires an explicit OAuth refusal (an
   error response, or a redirect with `error`) for a request that wasn't pushed; a redirect to a
   login page no longer passes.
+- CI: the Examples job tests the released Agent Runtimes again (1.6.83 accepts 0.37):
+  `AGENT_RUNTIMES_REF` emptied.
 - Python 3.10: the RSA key-size check reads the modulus with an explicit byte order (fixed
   before the 0.37.0 tag; the 3.10 CI job runs the PS384 tests).
 

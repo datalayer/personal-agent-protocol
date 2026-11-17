@@ -59,9 +59,9 @@ jobs:
       # to have no upper bound. The ref is the Agent Runtimes branch that adopts the new
       # SDK.
       #
-      # 0.37 breaks the API: Agent Runtimes adopts it on feat/scenes (pin >=0.37.0,<0.38), so
-      # the job installs Agent Runtimes from that branch until a release accepts 0.37.
-      AGENT_RUNTIMES_REF: feat/scenes
+      # Empty: Agent Runtimes 1.6.83 accepts 0.37 (personal-agent-protocol >=0.37.0,<0.38),
+      # so the job tests the released package.
+      AGENT_RUNTIMES_REF: ''
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v7

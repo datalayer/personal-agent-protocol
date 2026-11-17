@@ -21,7 +21,9 @@ lands in another service. In both SDKs; additive API only.
   stores have it.
 - **A link begun by 0.37.0 still opens after an upgrade.** 0.37.0 kept the callback state's
   reference under the link's key; 0.37.1 rejected such a link and dropped it. The reader now
-  follows the reference to the pending sign-in, without consuming it.
+  follows the reference to the pending sign-in, without consuming it; a store without `get`,
+  which takes the record to read it, gets it back with the sign-in's expiry, so the link opens
+  again until the sign-in completes.
   *Mixed versions:* a 0.37.0 replica cannot read a link begun by 0.37.1 or later (it takes the
   record and rejects it); when replicas share a state store, finish rolling every replica that
   serves link pages to 0.37.2 before links are begun on the new version, or route link pages to

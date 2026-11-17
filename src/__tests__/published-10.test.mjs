@@ -879,3 +879,20 @@ test("the start names the state the callback carries", async () => {
   const opened = await client.openLink(browser.urls.at(-1).split("/").at(-1));
   assert.equal(new URL(opened.reveal()).searchParams.get("state"), start.state.reveal());
 });
+
+test("a 0.37.0 link in a store without get opens again until the sign-in completes", async () => {
+  // Copilot's review of #20: a store without get took the 0.37.0 string record to read it, and
+  // nothing put it back, so the link opened once only.
+  const { w, browser } = await recordingWorld({ pushedAuthorizationRequests: "required" });
+  const { client, link, start } = await pushedLink(w, browser);
+  const store = firstContribution(w.reactor, AuthorizationStateStores, "authorization state store");
+  await store.put(await hex("direct-link", link), await hex("direct", start.state.reveal()), {
+    expiresAt: new Date(Date.now() + 300_000),
+  });
+  store.get = undefined;
+  await client.openLink(link);
+  await browser.open(await client.openLink(link)); // opens again
+  const callbackUrl = await w.shop.approveAuthorization(browser.requestId, { accountId: "acct_ada" });
+  assert.ok((await client.complete({ callbackUrl })).token !== undefined);
+  await assert.rejects(client.openLink(link), AuthorizationError);
+});

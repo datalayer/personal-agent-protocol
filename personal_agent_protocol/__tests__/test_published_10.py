@@ -1091,3 +1091,26 @@ async def test_the_start_names_the_state_the_callback_carries() -> None:
     assert start.state is not None
     assert parse_qs(urlsplit(browser.urls[-1]).query)["state"] == [start.state.get_secret_value()]
     assert start.state.get_secret_value() not in repr(start)
+
+
+@pytest.mark.asyncio
+async def test_a_0_37_0_link_in_a_store_without_get_opens_again_until_the_sign_in_completes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Copilot's review of #20: a store without `get` took the 0.37.0 string record to read it,
+    and nothing put it back, so the link opened once only."""
+    from personal_agent_protocol.auth import _link_reference, _state_reference
+
+    world, browser = _recording_world(replace(CONFIG, pushed_authorization_requests="required"))
+    client, link, start = await _pushed_link(world, browser)
+    store = first_contribution(world.reactor, AUTHORIZATION_STATE_STORES, "state store")
+    reference = _state_reference(start.state.get_secret_value())
+    until = world.clock.now() + timedelta(minutes=5)
+    await store.put(_link_reference(link), reference, expires_at=until)
+    monkeypatch.setattr(store, "get", None)
+    await client.open_link(link)
+    await browser.open(await client.open_link(link))  # opens again
+    callback = await world.shop.approve_authorization(browser.request_id, account_id="acct_ada")  # type: ignore[arg-type]
+    assert (await client.complete(callback)).token is not None
+    with pytest.raises(AuthorizationError):
+        await client.open_link(link)

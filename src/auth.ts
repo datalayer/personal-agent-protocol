@@ -609,11 +609,18 @@ export class DirectSignInClient {
     const clock = firstContribution(this.#reactor, Clocks, "clock");
     // Read, never consumed: only the callback `complete` receives takes state, so an opening and
     // a completing callback can interleave, and a completed sign-in's link opens nothing more.
-    let pending = await peek(store, await linkReference(link));
+    const linkKey = await linkReference(link);
+    let pending = await peek(store, linkKey);
     if (typeof pending === "string") {
       // A link begun by 0.37.0, whose record names the callback state's reference: that state is
       // followed, still never consumed, so a link left unexpired across an upgrade opens as before.
-      pending = pending.startsWith("direct:") ? await peek(store, pending) : undefined;
+      const legacy = pending;
+      pending = legacy.startsWith("direct:") ? await peek(store, legacy) : undefined;
+      if (isPendingDirectSignIn(pending) && typeof store.get !== "function") {
+        // A store without `get` took the string record to read it: put back, with the sign-in's
+        // expiry, so the link opens again until the sign-in completes.
+        await store.put(linkKey, legacy, { expiresAt: pending.expiresAt });
+      }
     }
     if (!isPendingDirectSignIn(pending) || clock.now().getTime() > pending.expiresAt.getTime()) {
       throw new AuthorizationError("invalid_or_expired_state", "The sign-in link is unknown or has expired");

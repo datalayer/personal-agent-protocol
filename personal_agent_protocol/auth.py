@@ -513,12 +513,20 @@ class DirectSignInClient:
         # Read, never consumed: only the callback `complete` receives takes state, so an
         # opening and a completing callback can interleave, and a completed sign-in's link
         # opens nothing more.
-        pending = await _peek(store, _link_reference(link))
+        link_reference = _link_reference(link)
+        pending = await _peek(store, link_reference)
         if isinstance(pending, str):
             # A link begun by 0.37.0, whose record names the callback state's reference: that
             # state is followed, still never consumed, so a link left unexpired across an
             # upgrade opens as before.
-            pending = await _peek(store, pending) if pending.startswith("direct:") else None
+            legacy = pending
+            pending = await _peek(store, legacy) if legacy.startswith("direct:") else None
+            if isinstance(pending, _PendingDirectSignIn) and not callable(
+                getattr(store, "get", None)
+            ):
+                # A store without `get` took the string record to read it: put back, with the
+                # sign-in's expiry, so the link opens again until the sign-in completes.
+                await store.put(link_reference, legacy, expires_at=pending.expires_at)
         if not isinstance(pending, _PendingDirectSignIn) or clock.now() > pending.expires_at:
             raise AuthorizationError(
                 "invalid_or_expired_state", "the sign-in link is unknown or has expired"

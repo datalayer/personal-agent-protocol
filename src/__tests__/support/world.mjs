@@ -300,6 +300,7 @@ export async function agentHost({ identity, fetch, clock, answers = [], controll
           value: {
             async put(reference, value) { state.set(reference, value); },
             async take(reference) { const value = state.get(reference); state.delete(reference); return value; },
+            async get(reference) { return state.get(reference); },
           },
           options: { id: "vault" },
         },

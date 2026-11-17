@@ -6,6 +6,30 @@
 
 # Changelog
 
+## 0.37.2 (2026-11-17)
+
+Fixes from the review of 0.37.1, and what a host needs to push a Direct Sign-In whose redirect
+lands in another service. In both SDKs; additive API only.
+
+- **Opening a sign-in link consumes nothing** (spec 4.2). `open_link` (`openLink`) took the
+  link's record and put it back; an opening paused between the two while `complete` consumed
+  the sign-in restored a link whose callbacks could no longer succeed. It now reads the record
+  with the state store's `get`, a new optional method of `AuthorizationStateStore` (a SHOULD:
+  `get(reference)` returns the record without consuming it, `None`/`undefined` when unknown or
+  expired). `take` stays the callback's alone. A store without `get` is still accepted and read
+  by `take` then `put`, which keeps the old race: add `get` to it. The SDKs' own in-memory
+  stores have it.
+- **A link begun by 0.37.0 still opens after an upgrade.** 0.37.0 kept the callback state's
+  reference under the link's key; 0.37.1 rejected such a link and dropped it. The reader now
+  follows the reference to the pending sign-in, without consuming it.
+  *Mixed versions:* a 0.37.0 replica cannot read a link begun by 0.37.1 or later (it takes the
+  record and rejects it); when replicas share a state store, finish rolling every replica that
+  serves link pages to 0.37.2 before links are begun on the new version, or route link pages to
+  upgraded replicas.
+- **`DirectSignInStart.state`**: the request's `state`, as a secret (never in `repr`), for a
+  host whose redirect URI is served by another service that keys the callback by it. With PAR
+  or a `link_page` the URL the browser opens does not carry it.
+
 ## 0.37.1 (2026-11-17)
 
 Fixes from the review of 0.37.0, in both SDKs. No API change.

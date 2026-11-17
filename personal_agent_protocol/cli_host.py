@@ -202,6 +202,12 @@ class MemoryStateStore:
     async def put(self, reference: str, value: object, *, expires_at: datetime) -> None:
         self.values[reference] = (value, expires_at)
 
+    async def get(self, reference: str) -> object | None:
+        value, expires_at = self.values.get(reference, (None, None))
+        if expires_at is not None and self.now() > expires_at:
+            return None
+        return value
+
     async def take(self, reference: str) -> object | None:
         value, expires_at = self.values.pop(reference, (None, None))
         if expires_at is not None and self.now() > expires_at:

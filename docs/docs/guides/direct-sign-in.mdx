@@ -123,6 +123,15 @@ on their phone, goes to a page of your own: pass
 `link_page="https://agent.example/sign-in/{link}"` (`linkPage`) and the browser
 handoff gets that page; when it is opened, it calls `open_link(link)`
 (`openLink`), which pushes the request then, and redirects to the URL it returns.
+Opening a link reads its record without consuming it, through the state store's
+`get`; give your store one (a store with only `put` and `take` is read by taking
+and putting back, which a completing callback can race). A link may be opened
+again until its sign-in completes; then it opens nothing.
+
+With PAR or a link page, the URL the browser opens carries no `state`. When your
+redirect URI is served by another service than the one that called `begin`, key
+the callback there by `started.state` (`DirectSignInStart.state`, a secret), the
+value the company sends back with the code.
 
 A sign-in names no `resource`: it covers every service the company offers, those
 it adds later too, and each token request names one (§4.5, see

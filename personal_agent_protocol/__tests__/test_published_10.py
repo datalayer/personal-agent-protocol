@@ -956,7 +956,8 @@ async def test_opening_a_link_never_takes_the_callback_state(
 
     monkeypatch.setattr(store, "take", recording)
     await browser.open(await client.open_link(link))
-    assert taken and all(not reference.startswith("direct:") for reference in taken)
+    # Read with the store's `get`: an opening consumes nothing, the link's record included.
+    assert taken == []
     # Opened twice, then completed: complete() alone consumes the state, once.
     await client.open_link(link)
     callback = await world.shop.approve_authorization(browser.request_id, account_id="acct_ada")  # type: ignore[arg-type]
@@ -995,3 +996,98 @@ async def test_an_empty_event_name_is_the_default_message_event() -> None:
         items = [item async for item in client.stream(f"{SHOP}/poppy", "cnv_1", session=session)]
         reactor.stop()
     assert [type(item).__name__ for item in items] == ["ConversationEvent"]
+
+
+async def _pushed_link(world: World, browser: Any) -> tuple[DirectSignInClient, str, Any]:
+    await world.signed_out_session()
+    metadata = world.company.oauth_metadata
+    assert metadata is not None
+    client = DirectSignInClient(reactor=world.reactor, http_client=world.http)
+    start = await client.begin(
+        **_direct_arguments(
+            world,
+            pushed_authorization_request_endpoint=metadata.pushed_authorization_request_endpoint,
+            require_pushed_authorization_requests=True,
+            link_page="https://atlas.example/sign-in/{link}",
+        )
+    )
+    return client, browser.urls[-1].rsplit("/", 1)[1], start
+
+
+@pytest.mark.asyncio
+async def test_an_opening_paused_while_the_callback_completes_never_restores_the_link() -> None:
+    """Copilot's review of 0.37.1: an opening paused between reading the link and writing it
+    back, while `complete` consumed the sign-in, restored a link whose callbacks could not
+    succeed. An opening reads only (`get`), so the completed sign-in's link stays gone."""
+    import asyncio
+
+    world, browser = _recording_world(replace(CONFIG, pushed_authorization_requests="required"))
+    client, link, _ = await _pushed_link(world, browser)
+    await browser.open(await client.open_link(link))
+    callback = await world.shop.approve_authorization(browser.request_id, account_id="acct_ada")  # type: ignore[arg-type]
+    store = first_contribution(world.reactor, AUTHORIZATION_STATE_STORES, "state store")
+    read, resume = asyncio.Event(), asyncio.Event()
+    get = store.get
+
+    async def pausing(reference: str) -> object:
+        value = await get(reference)
+        read.set()
+        await resume.wait()
+        return value
+
+    store.get = pausing  # type: ignore[method-assign]
+    opening = asyncio.create_task(client.open_link(link))
+    await read.wait()
+    store.get = get  # type: ignore[method-assign]
+    assert (await client.complete(callback)).token is not None
+    resume.set()
+    await opening  # it read before the sign-in completed
+    with pytest.raises(AuthorizationError):
+        await client.open_link(link)
+
+
+@pytest.mark.asyncio
+async def test_a_link_begun_by_0_37_0_opens_after_an_upgrade_without_consuming_its_state() -> None:
+    """0.37.0 kept the callback state's reference under the link's key: the reader follows it,
+    never consuming the state, so the sign-in still completes."""
+    from personal_agent_protocol.auth import _link_reference, _state_reference
+
+    world, browser = _recording_world(replace(CONFIG, pushed_authorization_requests="required"))
+    client, link, start = await _pushed_link(world, browser)
+    store = first_contribution(world.reactor, AUTHORIZATION_STATE_STORES, "state store")
+    reference = _state_reference(start.state.get_secret_value())
+    until = world.clock.now() + timedelta(minutes=5)
+    await store.put(_link_reference(link), reference, expires_at=until)
+    await browser.open(await client.open_link(link))
+    assert await store.get(reference) is not None  # the state is still there
+    callback = await world.shop.approve_authorization(browser.request_id, account_id="acct_ada")  # type: ignore[arg-type]
+    assert (await client.complete(callback)).token is not None
+    with pytest.raises(AuthorizationError):
+        await client.open_link(link)
+
+
+@pytest.mark.asyncio
+async def test_a_store_without_get_is_read_by_taking_and_putting_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world, browser = _recording_world(replace(CONFIG, pushed_authorization_requests="offered"))
+    client, link, _ = await _pushed_link(world, browser)
+    store = first_contribution(world.reactor, AUTHORIZATION_STATE_STORES, "state store")
+    # A store written before 0.37.2: `put` and `take` only.
+    monkeypatch.setattr(store, "get", None)
+    first = await client.open_link(link)
+    again = await client.open_link(link)
+    assert "request_uri=" in first.get_secret_value() and "request_uri=" in again.get_secret_value()
+
+
+@pytest.mark.asyncio
+async def test_the_start_names_the_state_the_callback_carries() -> None:
+    """A host whose redirect lands in another service keys the callback by `state`, which a
+    pushed request's URL does not carry (PAR): the start names it."""
+    world, browser = _recording_world()
+    await world.signed_out_session()
+    client = DirectSignInClient(reactor=world.reactor, http_client=world.http)
+    start = await client.begin(**_direct_arguments(world))
+    assert start.state is not None
+    assert parse_qs(urlsplit(browser.urls[-1]).query)["state"] == [start.state.get_secret_value()]
+    assert start.state.get_secret_value() not in repr(start)

@@ -135,6 +135,7 @@ test("the reference company offers Direct Sign-In", () => {
     name: "Bank",
     domain: "bank.example",
     scopes: ["accounts:read"],
+    agentDescription: "Anything about your account",
     scopeDescriptions: { "accounts:read": "See your accounts" },
     operations: false,
     device: false,

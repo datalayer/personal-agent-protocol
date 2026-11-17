@@ -98,7 +98,10 @@ def test_an_operations_fixture_is_valid_by_its_upstream_schema(fixture: str, sch
     [
         case
         for case in load_fixture_cases(("protocol",))
-        if case.check == "discovery_document" and case.kind == "positive"
+        if case.check == "discovery_document"
+        and case.kind == "positive"
+        # The schemas are 1.0's: a 0.4 document is checked by the SDK alone.
+        and not str(case.input.get("protocol_version", "")).startswith("0.")
     ],
     ids=lambda case: case.id,
 )

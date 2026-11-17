@@ -58,6 +58,7 @@ from .store import (
     MEDIATED,
     OPERATION,
     PROPOSAL,
+    PUSHED_REQUEST,
     RECORD_KINDS,
     RECORD_TYPES,
     REFRESH_TOKEN,
@@ -84,6 +85,7 @@ from .store import (
     PendingAuthorization,
     PendingDevice,
     PendingMediated,
+    PushedAuthorization,
     ReplayMark,
     RequestReceipt,
     SignInAttempts,
@@ -164,16 +166,30 @@ def record_samples(now: datetime) -> dict[str, Any]:
             ended=True,
         ),
         ACCESS_TOKEN: access,
-        REFRESH_TOKEN: AccountGrant("acct_1", "c", ("a", "b"), later, True, "fam_1", now),
+        REFRESH_TOKEN: AccountGrant("acct_1", "c", ("a", "b"), later, True, "fam_1", now, "jkt"),
         ACCOUNT_FAMILY: AccountFamily("c", "acct_1", ("t1", "t2"), ("a1",), True),
         ACCOUNT_AGENT: AccountAgent(("fam_1", "fam_2")),
         CLIENT: KnownClient(),
         DEVICE: PendingDevice("c", ("a",), "ABCD-EFGH", later, 10, now, "acct_1", ("a",), True),
         USER_CODE: UserCode("dev_digest"),
         AUTHORIZATION: PendingAuthorization(
-            "c", "https://atlas.example/cb", ("a",), "st", "chal", later, "Atlas", "bind"
+            "c",
+            "https://atlas.example/cb",
+            ("a",),
+            "st",
+            "chal",
+            later,
+            "Atlas",
+            "bind",
+            prompt="consent",
+            dpop_jkt="jkt",
         ),
-        CODE: IssuedCode("c", "https://atlas.example/cb", "chal", ("a",), "acct_1", ("a",), later),
+        PUSHED_REQUEST: PushedAuthorization(
+            "c", {"response_type": "code", "scope": "a"}, later, dpop_jkt="jkt"
+        ),
+        CODE: IssuedCode(
+            "c", "https://atlas.example/cb", "chal", ("a",), "acct_1", ("a",), later, "jkt"
+        ),
         MEDIATED: PendingMediated(
             "c", "acct_1", ("a",), "ref", later, "a•••@example.com", ("k1", "k2"), 2, "failed"
         ),

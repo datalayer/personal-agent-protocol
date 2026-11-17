@@ -6,16 +6,16 @@ title: Compatibility and conformance report
 
 # Compatibility and conformance report
 
-SDK version **0.36.1**, PAP profile **0.4** (as published 2026-11-10), Operations extension **v3**; the pairings run at protocol version **1.0**, the default (the 1.0 draft as of 2026-11-11). Each pairing runs every positive, negative and recovery fixture case over real TCP and TLS, the personal agent in one language and the reference company (Manzanita) in the other. A case is skipped, never passed, when a side lacks what it needs; the reason is listed below.
+SDK version **0.37.0**, PAP profile **0.4** (as published 2026-11-10), Operations extension **v3**; the pairings run at protocol version **1.0**, the default (1.0 as published 2026-11-14); the suite also runs at 0.4 in every pairing. Each pairing runs every positive, negative and recovery fixture case over real TCP and TLS, the personal agent in one language and the reference company (Manzanita) in the other. A case is skipped, never passed, when a side lacks what it needs; the reason is listed below.
 
 ## Pairings
 
 | Personal agent | Company | Passed | Failed | Skipped |
 | --- | --- | ---: | ---: | ---: |
-| Python | Python | 175 | 0 | 0 |
-| Python | TypeScript | 175 | 0 | 0 |
-| TypeScript | Python | 175 | 0 | 0 |
-| TypeScript | TypeScript | 175 | 0 | 0 |
+| Python | Python | 178 | 0 | 0 |
+| Python | TypeScript | 178 | 0 | 0 |
+| TypeScript | Python | 178 | 0 | 0 |
+| TypeScript | TypeScript | 178 | 0 | 0 |
 
 ## Protocol
 
@@ -28,6 +28,7 @@ SDK version **0.36.1**, PAP profile **0.4** (as published 2026-11-10), Operation
 | `protocol.tasks-per-session` | positive | PAP-9-01 | pass | pass | pass | pass |
 | `protocol.feedback-report` | positive | PAP-9.3-01, PAP-9.3-06 | pass | pass | pass | pass |
 | `protocol.ucp-profile` | positive | UCP-4-03, UCP-4-04 | pass | pass | pass | pass |
+| `protocol.agent-protocols-described` | positive | PAP10-8.1-01, PAP10-3.4-01 | pass | pass | pass | pass |
 
 ## Security
 
@@ -186,6 +187,8 @@ SDK version **0.36.1**, PAP profile **0.4** (as published 2026-11-10), Operation
 | `dpop.mcp-challenges-bearer-then-dpop` | positive | GUIDE-co-session-06, GUIDE-mcp-01 | pass | pass | pass | pass |
 | `dpop.mcp-bearer-without-a-proof` | positive | GUIDE-mcp-01 | pass | pass | pass | pass |
 | `dpop.mcp-server-decides-the-proof` | positive | GUIDE-mcp-01 | pass | pass | pass | pass |
+| `dpop.refresh-bound-to-its-key` | recovery | PAP10-4.4-01 | pass | pass | pass | pass |
+| `dpop.pushed-authorization-request` | positive | PAP10-4.2-02, PAP10-4.2-03 | pass | pass | pass | pass |
 
 ## Operator signatures
 
@@ -218,7 +221,7 @@ SDK version **0.36.1**, PAP profile **0.4** (as published 2026-11-10), Operation
 
 ## Decided by each SDK alone
 
-82 fixture cases need no company: parsing, extension negotiation, URL safety and bounded discovery. Python runs them in `test_fixtures.py` and TypeScript in `conformance-fixtures.test.mjs`; a case marked for one SDK only is listed with it.
+91 fixture cases need no company: parsing, extension negotiation, URL safety and bounded discovery. Python runs them in `test_fixtures.py` and TypeScript in `conformance-fixtures.test.mjs`; a case marked for one SDK only is listed with it.
 
 | Case | Kind | Check | SDKs |
 | --- | --- | --- | --- |
@@ -281,6 +284,15 @@ SDK version **0.36.1**, PAP profile **0.4** (as published 2026-11-10), Operation
 | `protocol.tasks-endpoint-https` | negative | discovery_document | python, typescript |
 | `protocol.tasks-endpoint-listed` | positive | discovery_document | python, typescript |
 | `protocol.extensions-header` | positive | extensions_header | python, typescript |
+| `protocol.agent-protocol-description-required` | negative | discovery_document | python, typescript |
+| `protocol.agent-protocol-description-not-in-04` | positive | discovery_document | python, typescript |
+| `protocol.organization-domain-port` | positive | discovery | python, typescript |
+| `protocol.organization-domain-port-not-allowed` | negative | discovery | python, typescript |
+| `protocol.organization-domain-port-other-domain` | negative | discovery | python, typescript |
+| `protocol.organization-domain-port-04` | negative | discovery_document | python, typescript |
+| `protocol.unknown-role-and-author-type` | positive | message_tolerance | python, typescript |
+| `protocol.authorization-error-unknown` | positive | authorization_event | python, typescript |
+| `protocol.context-cleared` | positive | effective_context | python, typescript |
 | `security.duplicate-json-members` | negative | strict_json | python, typescript |
 | `security.ssrf-loopback` | negative | url_safety | python, typescript |
 | `security.ssrf-private` | negative | url_safety | python, typescript |

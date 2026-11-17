@@ -22,6 +22,7 @@ from personal_agent_protocol.conformance import (
 from personal_agent_protocol.demo.conformance import ManzanitaConformance
 
 DPOP_WORLD = "dpop-binding"
+PUSHED_WORLD = "pushed-requests"
 NO_ISSUER_WORLD = "no-issuer"
 OPERATOR_WORLDS = ("operator-signatures", "operator-signatures-required")
 
@@ -82,6 +83,26 @@ async def test_python_agent_python_company_binding_with_dpop_over_tls() -> None:
 
 
 @pytest.mark.asyncio
+async def test_python_agent_python_company_with_pushed_requests_over_tls() -> None:
+    """The pushed-requests world's cases: Manzanita requires Pushed Authorization Requests
+    and binds refresh tokens to their DPoP key (§4.2, §4.4, RFC 9126)."""
+
+    pytest.importorskip("uvicorn")
+    from personal_agent_protocol.demo.sockets import served_over_tls
+
+    world = ManzanitaConformance(PUSHED_WORLD)
+    cases = select_cases(world=PUSHED_WORLD)
+    async with served_over_tls(world.network) as network:
+        assert network.socket_transport is not None
+        report = await run_conformance(world.context(), cases=cases)
+    save_world_report(report, "python-agent-python-company", PUSHED_WORLD)
+    assert _failures(report) == []
+    assert {r.id for r in report.results} == {case.id for case in cases}
+    assert {r.outcome for r in report.results} == {"passed"}
+    assert len(cases) >= 2
+
+
+@pytest.mark.asyncio
 async def test_python_agent_python_company_with_no_issuer_over_tls() -> None:
     """The no-issuer world's cases: Manzanita runs no OAuth server (§3.2)."""
 
@@ -120,7 +141,7 @@ async def test_python_agent_python_company_with_operator_signatures_over_tls(nam
 
 
 def test_every_runner_case_belongs_to_one_world() -> None:
-    worlds = (None, DPOP_WORLD, NO_ISSUER_WORLD, *OPERATOR_WORLDS)
+    worlds = (None, DPOP_WORLD, PUSHED_WORLD, NO_ISSUER_WORLD, *OPERATOR_WORLDS)
     selected = [case.id for world in worlds for case in select_cases(world=world)]
     assert sorted(selected) == sorted(CASES)
 

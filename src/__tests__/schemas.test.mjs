@@ -57,7 +57,11 @@ test("the schemas refuse what they should", () => {
 
 test("each positive discovery case is valid by the upstream schema", () => {
   const cases = read("fixtures/conformance/protocol.json").cases.filter(
-    (item) => item.check === "discovery_document" && item.kind === "positive",
+    // The schemas are 1.0's: a 0.4 document is checked by the SDK alone.
+    (item) =>
+      item.check === "discovery_document" &&
+      item.kind === "positive" &&
+      !String(item.input.protocol_version ?? "").startsWith("0."),
   );
   assert.ok(cases.length > 0);
   for (const item of cases) assert.deepEqual(errors("poppy", item.input), [], item.id);

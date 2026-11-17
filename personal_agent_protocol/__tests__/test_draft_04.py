@@ -135,6 +135,7 @@ def test_the_reference_company_offers_direct_sign_in() -> None:
         name="Bank",
         domain="bank.example",
         scopes=("accounts:read",),
+        agent_description="Anything about your account",
         scope_descriptions={"accounts:read": "See your accounts"},
         operations=False,
         device=False,

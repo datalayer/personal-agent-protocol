@@ -65,6 +65,7 @@ TYPESCRIPT_AGENT_GAPS: dict[str, str] = {}
 TYPESCRIPT_WORLDS: tuple[str | None, ...] = (
     None,
     "dpop-binding",
+    "pushed-requests",
     "no-issuer",
     "operator-signatures",
     "operator-signatures-required",

@@ -32,7 +32,8 @@
     "protocols": [
       {
         "type": "poppy",
-        "endpoint": "https://api.example.com/poppy/conversations"
+        "endpoint": "https://api.example.com/poppy/conversations",
+        "description": "Anything about your orders, returns, account, and our products"
       }
     ]
   },

@@ -205,6 +205,7 @@ class Docs:
             name=name,
             domain=domain,
             scopes=SCOPES,
+            agent_description="Anything about your account",
             scope_descriptions={scope: f"The {scope} scope" for scope in SCOPES},
             write_scopes=("orders:write",),
             mediated_fields=(("email", "Email", False), ("password", "Password", True)),
@@ -1049,7 +1050,15 @@ def test_the_json_example_is_valid(key: str) -> None:
                 "protocol_version": "0.4",
                 "organization": {"name": "Example", "domain": "example.com"},
                 "auth": {"issuer": "https://example.com", "scopes": {"a:read": "Read a"}},
-                "agent": {"protocols": [{"type": "poppy", "endpoint": "https://example.com/c"}]},
+                "agent": {
+                    "protocols": [
+                        {
+                            "type": "poppy",
+                            "endpoint": "https://example.com/c",
+                            "description": "Anything",
+                        }
+                    ]
+                },
                 **value,
             }
         )

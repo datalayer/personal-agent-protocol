@@ -20,6 +20,8 @@ import {
   parseOAuthServerMetadata,
   parseProtectedResourceMetadata,
   protectedResourceMetadataUrl,
+  splitDomain,
+  urlDomain,
   type DiscoveredCompany,
   type DiscoveryDocument,
   type SkillEntry,
@@ -56,19 +58,37 @@ export interface DiscoveryOptions {
   readonly fresh?: boolean;
   /**
    * The protocol versions this Personal Agent implements (§3.4): `SUPPORTED_PROTOCOL_VERSIONS`,
-   * the 1.0 draft, by default. Name `PROTOCOL_PROFILE` among them to use Companies that serve
-   * only 0.4 as published, such as `["0.4", "1.0"]`; the newest compatible version a Company
-   * serves is chosen.
+   * 1.0, by default. Name `PROTOCOL_PROFILE` among them to use Companies that serve only 0.4 as
+   * published, such as `["0.4", "1.0"]`; the newest compatible version a Company serves is
+   * chosen.
    */
   readonly protocolVersions?: Iterable<string>;
+  /**
+   * Use a Company on a port other than 443, such as `shop.example:8443` for testing: from 1.0
+   * its `organization.domain` includes the port (§3.1). Off by default: a Personal Agent uses
+   * such a Company only when configured to on purpose; otherwise `port_not_allowed`.
+   */
+  readonly allowPorts?: boolean;
 }
 
-function normalizeDomain(domain: string): string {
-  const value = domain.replace(/\.$/, "").toLowerCase();
+function normalizeDomain(domain: string, allowPorts: boolean): string {
+  const value = domain.toLowerCase();
   if (!value || value.includes("://") || value.includes("/")) {
     throw new DiscoveryError("invalid_domain", "Discovery requires a DNS domain name");
   }
-  return value;
+  let split: readonly [string, number | undefined];
+  try {
+    split = splitDomain(value);
+  } catch (cause) {
+    throw new DiscoveryError("invalid_domain", "Discovery requires a DNS domain name", { cause });
+  }
+  const [rawHost, port] = split;
+  if (port !== undefined && !allowPorts) {
+    throw new DiscoveryError("port_not_allowed", "A domain with a port is used only with allowPorts (§3.1)");
+  }
+  const host = rawHost.replace(/\.$/, "");
+  if (!host) throw new DiscoveryError("invalid_domain", "Discovery requires a DNS domain name");
+  return port === undefined ? host : `${host}:${port}`;
 }
 
 /**
@@ -286,7 +306,7 @@ function readOptions(options: DiscoveryOptions): { reactor: ReactorPlatformView;
  * (§3.4). `fresh` reads `poppy.json` again, not a cached copy.
  */
 async function discover(domain: string, options: DiscoveryOptions): Promise<DiscoveredCompany> {
-  const requestedDomain = normalizeDomain(domain);
+  const requestedDomain = normalizeDomain(domain, options.allowPorts === true);
   const { read } = readOptions(options);
   const poppyUrl = new URL(`https://${requestedDomain}/.well-known/poppy.json`);
   if (options.fresh) await read.cache.delete(`pap.metadata:${poppyUrl.toString()}`);
@@ -312,7 +332,14 @@ async function discover(domain: string, options: DiscoveryOptions): Promise<Disc
   let document = parseDiscoveryDocument(raw, implemented);
   // The document speaks for the host that served it, after redirects, compared
   // ignoring case and nothing else (§3, §3.1).
-  const servedBy = discovery.finalUrl.hostname.toLowerCase().replace(/\.$/, "");
+  const servedBy = urlDomain(discovery.finalUrl.toString()) ?? "";
+  if (splitDomain(servedBy)[1] !== undefined && options.allowPorts !== true) {
+    // A Company on another port is used only when configured on purpose (§3.1).
+    throw new DiscoveryError(
+      "port_not_allowed",
+      "The company is served on a port other than 443: allowPorts uses it",
+    );
+  }
   if (document.organization.domain !== servedBy) {
     throw new DiscoveryError(
       "organization_domain_mismatch",

@@ -97,7 +97,9 @@ test("a company that speaks UCP lists it and serves its profile on its domain", 
   assert.deepEqual(ucpIdentityLinkingScopes(profile), ["orders:read"]);
   for (const scope of ucpIdentityLinkingScopes(profile)) assert.ok(w.company.oauthMetadata.scopes_supported.includes(scope));
   assert.ok(w.shop.oauthMetadata().token_endpoint_auth_methods_supported.includes("private_key_jwt"));
-  assert.deepEqual(ucpScopes(profile, ["orders:read"]), []);
+  // From 1.0 a sign-in names every scope it still needs (spec 4.7); 0.4 asked only for the missing.
+  assert.deepEqual(ucpScopes(profile, ["orders:read"]), ["orders:read"]);
+  assert.deepEqual(ucpScopes(profile, ["orders:read"], { protocolVersion: "0.4" }), []);
   const plain = await world(new CompanyConfig({ ...CONFIG_OPTIONS, ucp: false }));
   assert.ok(!speaksUcp(plain.company.document));
   await assert.rejects(fetchUcpProfile(plain.company, { fetch: plain.fetch }), (error) => error.code === "ucp_not_offered");

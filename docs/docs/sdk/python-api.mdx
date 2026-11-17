@@ -31,6 +31,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`ApprovalSurface`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. The host's own approval surface: the user, not a model, answers.
 - [`ApprovedUrl`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. A URL the safety policy approved, and the addresses it approved for its host.
 - [`Author`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Who wrote a message (§7.4): `agent` or `human`, and for a Company message, who.
+- [`AUTHOR_TYPES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Constant. Public `AUTHOR_TYPES` constant.
 - [`AUTHORIZATION_CODE_GRANT`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Constant. Public `AUTHORIZATION_CODE_GRANT` constant.
 - [`AUTHORIZATION_STATE_STORES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `AUTHORIZATION_STATE_STORES` constant.
 - [`AuthorizationError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. An authorization flow failed without exposing callback secrets.
@@ -55,6 +56,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`build_direct_sign_in_request`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Function. Build a user-browser authorization URL with random state and S256 PKCE (§4.2).
 - [`build_pap_reactor`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Function. Build a PAP Reactor host with plugins and return any HTTP client it owns.
 - [`CACHES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `CACHES` constant.
+- [`clears_context`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Function. Whether a message sets a `context` field to `null` to clear it (§8.4): 1.0's, so a
 - [`ClientMetadata`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Public `ClientMetadata` class.
 - [`Clock`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Supply timezone-aware wall-clock time to expiring protocol state.
 - [`CLOCKS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `CLOCKS` constant.
@@ -90,6 +92,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`DiscoveryClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/discovery.py) — Class. Discover and authenticate a company's PAP declaration.
 - [`DiscoveryDocument`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Public `DiscoveryDocument` class.
 - [`DiscoveryError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. Discovery could not be completed safely.
+- [`domain_host`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Function. The host of `organization.domain`, without the port it names (§3.1).
 - [`DPOP_PROVERS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `DPOP_PROVERS` constant.
 - [`DpopKey`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Class. One DPoP key: `thumbprint` is what the Company binds a token to (RFC 9449 §6).
 - [`DpopKeyCustody`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Class. Where DPoP keys live: one per User ID, made on first use.
@@ -98,6 +101,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`DRAFT_PROTOCOL_REVISION`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/profile.py) — Constant. Public `DRAFT_PROTOCOL_REVISION` constant.
 - [`DRAFT_PROTOCOL_VERSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/profile.py) — Constant. Public `DRAFT_PROTOCOL_VERSION` constant.
 - [`Ed25519OperatorKey`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Class. An operator's Ed25519 key in this process's memory.
+- [`effective_context`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Function. The context the Personal Agent's messages share, in order (§8.4): fields a message
 - [`ExcludedTask`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. A task the company chose not to offer through the protocol (§8.1).
 - [`FeedbackClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/feedback.py) — Class. Send feedback reports in a Session, signed in or out.
 - [`FeedbackDescriptor`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. Where personal agents report a task the protocol can't do at this company (§9.3):
@@ -120,16 +124,22 @@ Unknown or internal symbols are deliberately excluded.
 - [`JsonWebKeySet`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. A non-empty set of public keys suitable for PAP assertion verification.
 - [`jwk_thumbprint`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Function. A public JWK's RFC 7638 SHA-256 thumbprint: a Session JWT's `kid` (§5.2).
 - [`JWT_CLIENT_ASSERTION`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/sessions.py) — Constant. Public `JWT_CLIENT_ASSERTION` constant.
+- [`known_author_type`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Function. An `author.type` this SDK doesn't recognize reads as `agent` (§8.4): a message is a
+- [`known_conversation_error`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/conversations.py) — Function. `code` when this version defines it, else `default`: an error a later version or an
+- [`KNOWN_CONVERSATION_ERRORS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/conversations.py) — Constant. Public `KNOWN_CONVERSATION_ERRORS` constant.
+- [`known_role`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Function. A `role` this SDK doesn't recognize reads as `company` (§8.4): content from the
 - [`Link`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. A web page a Company message refers to (Links 3): its HTTPS `url`, and its `title`
 - [`LinksContent`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. The Links extension's content of a Company message, `extensions.links` (Links 3).
 - [`MEDIATED_EXTENSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/mediated.py) — Constant. Public `MEDIATED_EXTENSION` constant.
 - [`MEDIATED_GRANT`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/mediated.py) — Constant. Public `MEDIATED_GRANT` constant.
+- [`MEDIATED_RETIREMENT_DATE`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/mediated.py) — Constant. Public `MEDIATED_RETIREMENT_DATE` constant.
 - [`mediated_sign_in`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/mediated.py) — Function. What the company's Mediated Sign-In asks for, or `None` when it offers none.
 - [`MEDIATED_VERSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/mediated.py) — Constant. Public `MEDIATED_VERSION` constant.
 - [`MediatedSignIn`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. `extensions["mediated-sign-in"]`, version 1: the credentials to collect, its scopes.
 - [`MediatedSignInClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/mediated.py) — Class. Sign in with the user's credentials at the issuer's token endpoint, once.
 - [`MediatedSignInResult`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/mediated.py) — Class. Where a Mediated Sign-In stands, without any credential.
 - [`Message`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. A message sent by either side, or returned in a conversation event (§8.4).
+- [`MESSAGE_ROLES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Constant. Public `MESSAGE_ROLES` constant.
 - [`MetadataFetch`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. The bounds of one public metadata fetch: size, total time, approved addresses.
 - [`new_approval_reference`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operations.py) — Function. A `reference` for one approval (Operations 6): `apr_` and 16 random bytes, so it is
 - [`new_dpop_key`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/crypto.py) — Function. A new P-256 key, used for nothing but DPoP proofs (§5.2).
@@ -178,6 +188,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`PersonalAgentProtocolError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. Base error whose string representation never includes response bodies.
 - [`pin_connections`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Function. Make `client`'s socket transports dial approved addresses during metadata fetches.
 - [`PinnedNetworkBackend`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Dial the address the URL safety policy approved, never the host name again.
+- [`PROMPT_CONSENT`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Constant. Public `PROMPT_CONSENT` constant.
 - [`ProofError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/errors.py) — Class. A signed assertion or proof-of-possession value is invalid.
 - [`PROTECTED_INPUTS`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `PROTECTED_INPUTS` constant.
 - [`ProtectedInput`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Class. Collect protected values from the user outside model context (PAP §4.7).
@@ -225,6 +236,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`SKILL_INDEX_SCHEMA`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Constant. Public `SKILL_INDEX_SCHEMA` constant.
 - [`SkillEntry`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Class. A skill a Company publishes for Personal Agents acting for the User there (§9.4).
 - [`speaks_ucp`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Function. Whether the Company lists the UCP extension at this version (UCP extension 2).
+- [`split_domain`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Function. `organization.domain` as its host and its port, `None` for 443 (§3.1).
 - [`SqlitePairwiseUserIdStore`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/pairwise.py) — Class. Atomically persist random pairwise IDs in a local SQLite database.
 - [`stale_resource_metadata`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/accounts.py) — Function. Whether a service refused a token not issued for it (§4.5).
 - [`StreamItem`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/conversations.py) — Constant. Public `StreamItem` constant.
@@ -255,12 +267,13 @@ Unknown or internal symbols are deliberately excluded.
 - [`UCP_PROFILE_PATH`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Constant. Public `UCP_PROFILE_PATH` constant.
 - [`ucp_profile_url`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Function. `https://{organization.domain}/.well-known/ucp`: on the validated domain, so the
 - [`UCP_PROFILE_VERSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Constant. Public `UCP_PROFILE_VERSION` constant.
-- [`ucp_scopes`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Function. The identity linking scopes not in `held`: for `insufficient_scope`, UCP asks only
+- [`ucp_scopes`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Function. The scopes a sign-in requests after a UCP `insufficient_scope` (UCP extension 4).
 - [`UCP_SHOPPING`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Constant. Public `UCP_SHOPPING` constant.
 - [`UCP_VERSION`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Constant. Public `UCP_VERSION` constant.
 - [`UcpClient`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Class. Send UCP REST requests through this extension (UCP extension 4).
 - [`UcpError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Class. A UCP profile or request refused: its code, and `details` such as the scopes to get.
 - [`UcpProfile`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/ucp.py) — Class. A Company's UCP profile, as far as this extension reads it (UCP extension 3).
+- [`url_domain`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/models.py) — Function. The domain an HTTPS URL is on, as `organization.domain` names it (§3.1): its host,
 - [`URL_SAFETY_POLICIES`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/reactor.py) — Constant. Public `URL_SAFETY_POLICIES` constant.
 - [`USER_STEP_ATTRIBUTE`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser_control.py) — Constant. Public `USER_STEP_ATTRIBUTE` constant.
 - [`user_step_kind`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser_control.py) — Function. What a `data-poppy-user-step` value asks, or `None` without one (Browser Control 4).

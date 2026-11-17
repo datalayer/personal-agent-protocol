@@ -83,7 +83,7 @@ async def _session(world: World, *versions: str) -> PapSession:
 def test_the_draft_is_the_default_and_the_published_version_is_available() -> None:
     assert (PROTOCOL_PROFILE, DRAFT_PROTOCOL_VERSION) == ("0.4", "1.0")
     assert DEFAULT_PROTOCOL_VERSION == DRAFT_PROTOCOL_VERSION
-    assert DRAFT_PROTOCOL_REVISION == "2026-11-11"
+    assert DRAFT_PROTOCOL_REVISION == "2026-11-14"
     assert SUPPORTED_PROTOCOL_VERSIONS == {"1.0"}
     assert AVAILABLE_PROTOCOL_VERSIONS == {"0.4", "1.0"}
     assert implemented_protocol_versions() == {"1.0"}

@@ -23,9 +23,11 @@ from typing import Any
 import httpx
 from pydantic import Field, ValidationError
 
+from .accounts import scopes_to_request
 from .errors import PersonalAgentProtocolError, SessionError
 from .json import loads_strict
-from .models import DiscoveredCompany, DiscoveryDocument, ProtocolModel
+from .models import DiscoveredCompany, DiscoveryDocument, ProtocolModel, parse_version
+from .profile import DEFAULT_PROTOCOL_VERSION
 from .reactor import send_bounded
 from .refusals import challenge_parameters
 from .sessions import AccessToken, PapSession
@@ -251,11 +253,26 @@ class UcpClient:
         )
 
 
-def ucp_scopes(profile: UcpProfile, held: Sequence[str] = ()) -> tuple[str, ...]:
-    """The identity linking scopes not in `held`: for `insufficient_scope`, UCP asks only
-    for the missing ones, by incremental authorization (UCP extension 4)."""
+def ucp_scopes(
+    profile: UcpProfile,
+    held: Sequence[str] = (),
+    *,
+    needed: Sequence[str] = (),
+    protocol_version: str = DEFAULT_PROTOCOL_VERSION,
+) -> tuple[str, ...]:
+    """The scopes a sign-in requests after a UCP `insufficient_scope` (UCP extension 4).
 
-    return tuple(scope for scope in profile.identity_linking_scopes if scope not in held)
+    From 1.0, every scope the Personal Agent still needs, as spec 4.7 describes: the
+    ones `held` that it wants to keep, then those the challenge names (`needed`, the
+    profile's identity linking scopes when it names none), once each; the Company grants
+    only what the request names. At 0.4, UCP's incremental authorization: only the
+    identity linking scopes not `held`, and the Company keeps the earlier ones.
+    """
+
+    wanted = tuple(needed) or tuple(profile.identity_linking_scopes)
+    if parse_version(protocol_version)[0] >= 1:
+        return scopes_to_request(held, wanted)
+    return tuple(scope for scope in wanted if scope not in held)
 
 
 __all__ = [

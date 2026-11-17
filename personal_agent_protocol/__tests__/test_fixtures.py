@@ -59,12 +59,14 @@ from personal_agent_protocol.extensions import (
 from personal_agent_protocol.json import loads_strict
 from personal_agent_protocol.models import (
     Author,
+    ConversationEvent,
     ConversationEventPage,
     DiscoveryDocument,
     ExtensionDescriptor,
     Message,
     Operation,
     ProtectedResourceMetadata,
+    effective_context,
 )
 from personal_agent_protocol.operator_signatures import (
     operator_key_from,
@@ -217,6 +219,16 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
         for context in given["invalid"]:
             with pytest.raises(ValueError):
                 Message(id="msg_ctx", author=Author(type="agent"), context=context)
+    elif case.check == "message_tolerance":
+        messages = [Message.model_validate(value) for value in given]
+        assert [message.role for message in messages] == expect["roles"]
+        assert [message.author.type for message in messages] == expect["author_types"]
+    elif case.check == "authorization_event":
+        event = ConversationEvent.model_validate(given)
+        assert list(event.sign_in_scopes) == expect["sign_in_scopes"]
+    elif case.check == "effective_context":
+        messages = [Message(author=Author(type="agent"), context=value) for value in given]
+        assert effective_context(messages) == expect["context"]
     elif case.check == "operation":
         if not expect["valid"]:
             with pytest.raises(ValueError):
@@ -231,6 +243,7 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
             http_client=http,
             address_resolver=_public,
             timeout=float(given.get("timeout_seconds", 5.0)),
+            allow_ports=bool(given.get("allow_ports", False)),
         )
         try:
             if "error" in expect:

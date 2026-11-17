@@ -5,9 +5,9 @@ title: Open topics and SDK gaps
 
 # Open topics and SDK gaps
 
-PAP version 0.4 is intentionally incomplete. Its
-[upstream open-topics page](https://personalagentprotocol.org/docs/path-to-1#open-topics)
-currently leaves three areas unspecified:
+PAP version 1.0, published on 2026-11-14, is intentionally incomplete, as 0.4 was. Its
+[upstream open topics](https://personalagentprotocol.org/docs/introduction#open-topics)
+currently leave three areas unspecified:
 
 - **Payments:** how a personal agent pays through PAP or composes PAP with an
   existing payment protocol.
@@ -20,12 +20,33 @@ These are protocol omissions, not SDK backlog items. The Python and TypeScript
 packages do not invent core wire fields, security semantics, or conformance
 claims for them. An experiment must use an explicitly negotiated extension,
 prefer a domain-qualified extension name, and document that it is outside PAP
-version 0.4. Applications must continue to work when the other party ignores an
-unknown extension.
+versions 1.0 and 0.4. Applications must continue to work when the other party ignores
+an unknown extension.
+
+## An operation in flight at sign-out
+
+Neither the specification nor the guides say what happens to an operation the
+Company is already performing when the User signs out (or disconnects the agent).
+The question is open upstream, in
+[personal-agent-protocol#84](https://github.com/personal-agent-protocol/personal-agent-protocol/issues/84),
+and this repository doesn't invent an answer. What the reference companies do
+today, in both languages:
+
+- Sign-out takes effect at once for what comes after it: every refresh token and
+  access token of the sign-in stops working, so a new request is refused before it
+  acts, and a refresh is `invalid_grant`.
+- An operation whose performing had already started when the User signed out
+  finishes, once, and its response reports the outcome (performed or failed) to
+  the request that started it, as for any other operation. Nothing is rolled back.
+
+An independent study observed exactly this on the Python SDK 0.35.0 (see
+[Independent testing](./independent-testing)). Treat it as the SDK's current
+behavior, not a protocol guarantee: a later upstream version may define it, and
+the reference companies will follow.
 
 ## SDK implementation gaps
 
-An SDK gap is different: version 0.4 or Operations version 3 already defines the
+An SDK gap is different: version 1.0 or 0.4, or Operations version 3, already defines the
 behavior, and this repository doesn't implement it yet or leaves it to the host.
 Current examples include:
 

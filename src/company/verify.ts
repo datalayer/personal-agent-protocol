@@ -6,6 +6,8 @@
 
 /** Verify a personal agent's client assertions, Session JWTs and DPoP proofs (§4.1, §4.5, §5.3). */
 
+import { Buffer } from "node:buffer";
+
 import {
   compactVerify,
   decodeJwt,
@@ -36,8 +38,33 @@ import type { ClientMetadata, JsonWebKeySet } from "../models.js";
 import { SecretValue } from "../secret.js";
 import type { ReplayCache } from "./points.js";
 
-/** Companies accept client assertions and delegations signed with these (§4.1, §5.2). */
+/**
+ * Companies accept client assertions and delegations signed with these (§4.1, §5.2): both are
+ * required from 1.0.
+ */
 const ALGORITHMS = new Set(["ES256", "PS384"]);
+/**
+ * The RSA key sizes accepted for `PS384`, in bits (guides, *Signing and verifying JWTs*): 2048 to
+ * 4096. A smaller key is weak, a larger one costly to verify.
+ */
+export const RSA_KEY_BITS = [2048, 4096] as const;
+
+/**
+ * Whether a verifying key's size is accepted, read from the JWK before it is imported: an RSA key
+ * of 2048 to 4096 bits (`RSA_KEY_BITS`); an EC key's curve is `ES256`'s.
+ */
+function keySizeAccepted(jwk: Readonly<Record<string, unknown>>): boolean {
+  if (jwk.kty !== "RSA") return true;
+  const modulus = typeof jwk.n === "string" ? jwk.n : "";
+  if (!/^[A-Za-z0-9_-]+$/.test(modulus)) return false;
+  const bytes = Buffer.from(modulus, "base64url");
+  let start = 0;
+  while (start < bytes.length && bytes[start] === 0) start += 1;
+  if (start === bytes.length) return false;
+  const bits = (bytes.length - start - 1) * 8 + (32 - Math.clz32(bytes[start] as number));
+  const [low, high] = RSA_KEY_BITS;
+  return low <= bits && bits <= high;
+}
 /**
  * An assertion lives at most this long: `exp` at most five minutes after `iat` (§4.1).
  * The SDKs' own assertions live 60 seconds.
@@ -137,6 +164,7 @@ async function decode(
   for (const key of keys.keys) {
     if (kid !== undefined && key.kid !== undefined && key.kid !== kid) continue;
     if (key.alg !== undefined && key.alg !== algorithm) continue;
+    if (!keySizeAccepted(key)) continue;
     const publicKey = await importJWK({ ...key } as JWK, algorithm);
     try {
       const { payload } = await jwtVerify(compact, publicKey, {
@@ -298,6 +326,7 @@ export async function verifyDelegation(
   }
   let claims: Record<string, unknown>;
   try {
+    if (!keySizeAccepted(key)) throw new RangeError("an RSA key is 2048 to 4096 bits");
     claims = await verifiedClaims(compact, { ...key } as JWK, algorithm);
   } catch (cause) {
     throw refused("The delegation's signature is invalid", cause);

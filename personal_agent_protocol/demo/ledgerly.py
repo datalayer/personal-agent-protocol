@@ -94,6 +94,7 @@ CONFIG = CompanyConfig(
     name="Ledgerly",
     domain=DOMAIN,
     scopes=("books:read", "payments:write"),
+    agent_description="Your books: invoices, bills, and payments",
     write_scopes=("payments:write",),
     scope_descriptions={
         "books:read": "See your books: invoices, bills and payments",

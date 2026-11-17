@@ -1279,7 +1279,7 @@ const CONSENT_PAGE = "https://datalayer.ai/pap/consent?slug=orders-helper&reques
 
 test("hosted page templates are checked", async () => {
   const { CompanyConfig } = await import("../../lib/server.js");
-  const base = { name: "Shop", domain: "shop.example", scopes: ["orders:read"], operations: false };
+  const base = { name: "Shop", domain: "shop.example", scopes: ["orders:read"], agentDescription: "Anything about your orders", operations: false };
   assert.throws(() => new CompanyConfig({ ...base, consentPage: "https://datalayer.ai/pap/consent" }), /consentPage/);
   assert.throws(() => new CompanyConfig({ ...base, devicePage: "http://pap.shop.example/device" }), /HTTPS/);
   // A device page off the company's domains is a link personal agents refuse (§4.6).
@@ -1327,7 +1327,9 @@ test("authorize redirects to the hosted consent page, which reads the request ba
   // What the page starts with and says before the person goes on (§10.8).
   assert.equal(summary.heading, "Atlas wants to connect to your Manzanita Outfitters account");
   assert.equal(summary.caution, "Only continue if you asked Atlas to do this just now.");
-  assert.deepEqual(Object.keys(summary).sort(), ["caution", "client_domain", "client_name", "expires_at", "heading", "request_id", "scopes"]);
+  assert.deepEqual(Object.keys(summary).sort(), ["caution", "client_domain", "client_name", "expires_at", "heading", "prompt", "request_id", "scopes"]);
+  // The agent asked for the consent page whatever the account granted before (spec 4.2).
+  assert.equal(summary.prompt, "consent");
   const callbackUrl = await w.shop.approveAuthorization(requestId, { accountId: "acct_ada" });
   const result = await client.complete({ callbackUrl });
   assert.ok(result.token);

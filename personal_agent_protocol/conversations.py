@@ -19,7 +19,14 @@ from reactor import PluginPlatform  # type: ignore[import-untyped]
 
 from .errors import ConversationError, ProtocolValidationError
 from .json import loads_strict
-from .models import ConversationEvent, ConversationEventPage, Message, ProtocolModel
+from .models import (
+    ConversationEvent,
+    ConversationEventPage,
+    Message,
+    ProtocolModel,
+    clears_context,
+    parse_version,
+)
 from .reactor import RANDOM_SOURCES, RandomSource, first_contribution
 from .refusals import refusal_code, refusal_details
 from .sessions import AccessToken, PapSession
@@ -121,7 +128,7 @@ class ConversationClient:
 
         body: dict[str, object] = {"id": self._request_id(request_id, message)}
         if message is not None:
-            body["message"] = self._outgoing_message(message)
+            body["message"] = self._outgoing_message(message, session)
         if parent_conversation_id is not None:
             self._identifier(parent_conversation_id, "parent conversation ID")
             body["parent_conversation_id"] = parent_conversation_id
@@ -175,7 +182,7 @@ class ConversationClient:
             url,
             {
                 "id": self._request_id(request_id, message),
-                "message": self._outgoing_message(message),
+                "message": self._outgoing_message(message, session),
             },
             expected_status=202,
             session=session,
@@ -471,10 +478,13 @@ class ConversationClient:
                         httpx.Response(200, content=await response.aread())
                     )
                     code = payload.get("error") if isinstance(payload, dict) else None
+                    sent = code if isinstance(code, str) else ""
+                    known = known_conversation_error(sent)
                     raise ConversationError(
-                        code if isinstance(code, str) else "conversation_request_failed",
+                        known,
                         "conversation stream was rejected",
                         status_code=response.status_code,
+                        details={"error": sent} if sent and sent != known else None,
                     )
                 if content_type != "text/event-stream":
                     raise ConversationError(
@@ -491,6 +501,9 @@ class ConversationClient:
                             raise ConversationError(
                                 "invalid_response", "working event was malformed"
                             ) from exc
+                        continue
+                    if name not in _STREAM_EVENT_NAMES:
+                        # A name a later version or an extension adds (§8.6): skipped.
                         continue
                     if name == "text-delta":
                         try:
@@ -592,8 +605,11 @@ class ConversationClient:
             started_in = payload.get("protocol_version")
             if isinstance(started_in, str) and re.fullmatch(r"[0-9]+\.[0-9]+", started_in):
                 details["protocol_version"] = started_in
+        known = known_conversation_error(code)
+        if known != code:
+            details["error"] = code
         return ConversationError(
-            code if isinstance(code, str) else "conversation_request_failed",
+            known,
             "conversation request was rejected",
             status_code=response.status_code,
             details=details or None,
@@ -659,11 +675,21 @@ class ConversationClient:
             ) from exc
 
     @staticmethod
-    def _outgoing_message(message: Message) -> dict[str, object]:
-        """The message as sent: no `id` (the request's is top-level) and no `role` (§8.4)."""
+    def _outgoing_message(message: Message, session: PapSession) -> dict[str, object]:
+        """The message as sent: no `id` (the request's is top-level) and no `role` (§8.4).
+
+        A `context` field set to `null` clears it from 1.0 (§8.4): a Session at 0.4 doesn't
+        send one, since each side sends only what the other's version defines (§3.4).
+        """
 
         if message.role is not None:
             raise ProtocolValidationError("invalid_message", "outgoing messages cannot set role")
+        if clears_context(message) and parse_version(session.protocol_version)[0] < 1:
+            raise ProtocolValidationError(
+                "context_clear_unsupported",
+                "clearing a context field with null is version 1.0's: this Session is at "
+                f"{session.protocol_version}",
+            )
         return message.model_dump(mode="json", exclude_none=True, exclude={"id"})
 
     @staticmethod
@@ -687,6 +713,47 @@ class ConversationClient:
                 raise ProtocolValidationError("invalid_wait", "wait must be a non-negative integer")
             query["wait"] = str(wait)
         return urlunsplit((*parsed[:3], urlencode(query), ""))
+
+
+#: The SSE event names this version defines (§8.6): `message`, the default, for recorded
+#: events, `working` and `text-delta`. A Personal Agent skips any other.
+_STREAM_EVENT_NAMES = frozenset({"message", "working", "text-delta"})
+#: The conversation error codes this version defines (§7, §8.13, §5.6, §3.3): a code
+#: outside them is handled by the response's HTTP status, as an error with no code is.
+KNOWN_CONVERSATION_ERRORS = frozenset(
+    {
+        "conversation_not_found",
+        "conversation_closed",
+        "direct_conversation_open",
+        "request_id_conflict",
+        "invalid_cursor",
+        "cursor_expired",
+        "invalid_request",
+        "extension_required",
+        "version_mismatch",
+        "version_unsupported",
+        "invalid_session",
+        "session_ended",
+        "invalid_token",
+        "insufficient_scope",
+        "invalid_dpop_proof",
+        "use_dpop_nonce",
+        "rate_limited",
+        "temporarily_unavailable",
+        # The Operations extension's (Operations 6), for a Session that declares it.
+        "approval_declined",
+        "action_failed",
+    }
+)
+
+
+def known_conversation_error(code: str, default: str = "conversation_request_failed") -> str:
+    """`code` when this version defines it, else `default`: an error a later version or an
+    extension adds is handled by the response's HTTP status (§8.13, RFC 9110 §15), as
+    an error with no code is. The `ConversationError` keeps the status, and the code as
+    sent in `details["error"]`."""
+
+    return code if code in KNOWN_CONVERSATION_ERRORS else default
 
 
 async def _sse_frames(

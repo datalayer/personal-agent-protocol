@@ -99,6 +99,35 @@ The company's page does its part: it names the personal agent that wants to
 connect and tells the person to continue only if they just asked it to (see the
 [company guide](/guides/company/)).
 
+## Consent every time (§4.2, §10.8)
+
+Every user of a personal agent shares its `client_id`, so a company that skipped
+its consent page because the account had granted every scope before would let a
+forwarded link get tokens with no page at all. Since 1.0 a Direct Sign-In request
+carries `prompt=consent` (`PROMPT_CONSENT`): the company shows its page whatever
+the account granted. `begin` adds it; pass `same_device_redirect=True`
+(`sameDeviceRedirect`) only when you receive the redirect on the device that
+opened the URL, where a forwarded link fails anyway.
+
+## Pushed Authorization Requests (§4.2, RFC 9126)
+
+When the issuer's metadata lists `pushed_authorization_request_endpoint`, pass it
+to `begin` with `require_pushed_authorization_requests`, both read from the
+`OAuthServerMetadata` (TypeScript `pushedAuthorizationRequestEndpoint`,
+`requirePushedAuthorizationRequests`). The request is then pushed with a client assertion, and a DPoP proof when tokens
+are bound, so the code is bound to the key, and the browser opens the
+authorization endpoint with only `client_id` and `request_uri`. A company that
+requires it takes nothing else; the protocol asks agents to push whenever it is
+offered. A `request_uri` expires quickly, so a link the user opens later, such as
+on their phone, goes to a page of your own: pass
+`link_page="https://agent.example/sign-in/{link}"` (`linkPage`) and the browser
+handoff gets that page; when it is opened, it calls `open_link(link)`
+(`openLink`), which pushes the request then, and redirects to the URL it returns.
+
+A sign-in names no `resource`: it covers every service the company offers, those
+it adds later too, and each token request names one (§4.5, see
+[Refresh tokens](/guides/account-tokens/)).
+
 ## TypeScript
 
 ```typescript

@@ -22,7 +22,8 @@ through the agent's host, so this client narrows what the host can do with it:
 Errors are OAuth errors from the token endpoint, raised as `AuthorizationError`:
 `invalid_grant`, `expired_token`, `access_denied`, `invalid_scope`, and a rate
 limit (`rate_limited`, HTTP 429 with `Retry-After`). Mediated Sign-In is
-transitional: prefer Direct or Device Sign-In when the company offers them.
+transitional: prefer Direct or Device Sign-In when the company offers them. The
+protocol plans to retire it on March 17, 2027 (`MEDIATED_RETIREMENT_DATE`).
 """
 
 from __future__ import annotations
@@ -70,6 +71,9 @@ from .sessions import (
 from .telemetry import sign_in_result, signed_in_as, traced
 
 MEDIATED_VERSION = "1"
+#: The day the protocol plans to retire the Mediated Sign-In extension (Mediated Sign-In
+#: 1, from 1.0; guides, *Mediated sign-in*): after it, Direct and Device Sign-In remain.
+MEDIATED_RETIREMENT_DATE = "2027-03-17"
 
 _SIGN_IN_ID = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
 

@@ -9,9 +9,11 @@ import type { ReactorPlatformView } from "@datalayer/reactor";
 import { ConversationError, ProtocolValidationError } from "./errors.js";
 import { parseJsonStrict } from "./json.js";
 import {
+  clearsContext,
   parseConversationEvent,
   parseConversationEventPage,
   parseMessage,
+  parseVersion,
   type ConversationEvent,
   type ConversationEventPage,
   type ConversationResponder,
@@ -219,7 +221,7 @@ export class ConversationClient {
     options: StartConversationOptions,
   ): Promise<ConversationResponse> {
     const body: Record<string, unknown> = { id: this.#requestId(options.requestId, message) };
-    if (message !== undefined) body.message = this.#outgoing(message);
+    if (message !== undefined) body.message = this.#outgoing(message, options.session);
     if (options.parentConversationId !== undefined) {
       assertIdentifier(options.parentConversationId, "parent conversation ID");
       body.parent_conversation_id = options.parentConversationId;
@@ -289,7 +291,7 @@ export class ConversationClient {
         : message;
     return this.#send(
       `${endpoint.replace(/\/$/, "")}/${conversationId}/messages`,
-      { id: this.#requestId(options.requestId, message), message: this.#outgoing(written) },
+      { id: this.#requestId(options.requestId, message), message: this.#outgoing(written, options.session) },
       202,
       options,
     );
@@ -595,6 +597,10 @@ export class ConversationClient {
         throw new ConversationError("sse_unsupported", "the company does not stream this conversation");
       }
       for await (const frame of sseFrames(response.body, this.#maxResponseBytes)) {
+        if (frame.event !== undefined && !STREAM_EVENT_NAMES.has(frame.event)) {
+          // A name a later version or an extension adds (§8.6): skipped.
+          continue;
+        }
         if (frame.event === "working") {
           // No recorded event: `working` as the company sends it (§8.6).
           yield parseWorking(frame.data);
@@ -669,13 +675,24 @@ export class ConversationClient {
     return parsed;
   }
 
-  /** The message as sent: no `id` (the request's is top-level) and no `role` (§8.4). */
-  #outgoing(message: Message): Message {
+  /**
+   * The message as sent: no `id` (the request's is top-level) and no `role` (§8.4).
+   *
+   * A `context` field set to `null` clears it from 1.0 (§8.4): a Session at 0.4 doesn't send one,
+   * since each side sends only what the other's version defines (§3.4).
+   */
+  #outgoing(message: Message, session: PapSession): Message {
     const parsed = parseMessage(message);
     if (parsed.role !== undefined) {
       throw new ProtocolValidationError(
         "invalid_message",
         "outgoing messages cannot set role",
+      );
+    }
+    if (clearsContext(parsed) && parseVersion(session.protocolVersion)[0] < 1) {
+      throw new ProtocolValidationError(
+        "context_clear_unsupported",
+        `clearing a context field with null is version 1.0's: this Session is at ${session.protocolVersion}`,
       );
     }
     const { id: _id, ...rest } = parsed;
@@ -781,7 +798,8 @@ export class ConversationClient {
     }
     if (response.status !== expectedStatus) {
       // In the JSON body, or a token error in WWW-Authenticate (§3.3, §7).
-      const error = refusalCode(response, payload, "conversation_request_failed");
+      const sent = refusalCode(response, payload, "conversation_request_failed");
+      const error = knownConversationError(sent);
       const openId =
         error === "direct_conversation_open" &&
         typeof (payload as Record<string, unknown>).conversation_id === "string" &&
@@ -799,6 +817,8 @@ export class ConversationClient {
         ...(error === "version_mismatch" && typeof startedIn === "string" && /^[0-9]+\.[0-9]+$/.test(startedIn)
           ? { protocol_version: startedIn }
           : {}),
+        // A code this version doesn't define, as sent: handled by the HTTP status (§8.13).
+        ...(sent === error ? {} : { error: sent }),
       };
       throw new ConversationError(
         error,
@@ -811,6 +831,49 @@ export class ConversationClient {
     }
     return payload;
   }
+}
+
+/**
+ * The SSE event names this version defines (§8.6): `message`, the default, for recorded events,
+ * `working` and `text-delta`. A Personal Agent skips any other.
+ */
+const STREAM_EVENT_NAMES: ReadonlySet<string> = new Set(["message", "working", "text-delta"]);
+
+/**
+ * The conversation error codes this version defines (§7, §8.13, §5.6, §3.3): a code outside them
+ * is handled by the response's HTTP status, as an error with no code is.
+ */
+export const KNOWN_CONVERSATION_ERRORS: ReadonlySet<string> = new Set([
+  "conversation_not_found",
+  "conversation_closed",
+  "direct_conversation_open",
+  "request_id_conflict",
+  "invalid_cursor",
+  "cursor_expired",
+  "invalid_request",
+  "extension_required",
+  "version_mismatch",
+  "version_unsupported",
+  "invalid_session",
+  "session_ended",
+  "invalid_token",
+  "insufficient_scope",
+  "invalid_dpop_proof",
+  "use_dpop_nonce",
+  "rate_limited",
+  "temporarily_unavailable",
+  // The Operations extension's (Operations 6), for a Session that declares it.
+  "approval_declined",
+  "action_failed",
+]);
+
+/**
+ * `code` when this version defines it, else `fallback`: an error a later version or an extension
+ * adds is handled by the response's HTTP status (§8.13, RFC 9110 §15), as an error with no code
+ * is. The `ConversationError` keeps the status, and the code as sent in `details.error`.
+ */
+export function knownConversationError(code: string, fallback = "conversation_request_failed"): string {
+  return KNOWN_CONVERSATION_ERRORS.has(code) ? code : fallback;
 }
 
 function parseConversationResponse(value: unknown): ConversationResponse {

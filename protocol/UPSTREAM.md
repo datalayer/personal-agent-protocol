@@ -3,10 +3,10 @@
 - Protocol: Personal Agent Protocol (Poppy)
 - Profile implemented: 0.4 as published
 - Upstream page revision: 2026-11-10
-- Draft implemented, the default since SDK 0.36: 1.0 as of 2026-11-11 (c71f515; nothing after it through ad20217)
-- Draft specification: https://personalagentprotocol.org/docs/spec
-- Upstream source: commit 4803900 of https://github.com/personal-agent-protocol/personal-agent-protocol (the frozen text as of ed47408, which only dropped the word "draft" from it)
-- Last reviewed by this repository: 2026-11-12 (through ad20217)
+- Version 1.0 implemented, the default since SDK 0.36: 1.0 as published, frozen on 2026-11-14 (commit 8c02b42), since SDK 0.37
+- Version 1.0 specification: https://personalagentprotocol.org/docs/1.0/spec
+- Upstream source: commit 8c02b42 of https://github.com/personal-agent-protocol/personal-agent-protocol for 1.0; commit 4803900 for 0.4 (the frozen text as of ed47408, which only dropped the word "draft" from it)
+- Last reviewed by this repository: 2026-11-17 (through 6764732)
 - Specification: https://personalagentprotocol.org/docs/0.4/spec
 - Guides: https://personalagentprotocol.org/docs/0.4/guides
 - Operations extension: version 3
@@ -40,6 +40,30 @@ be. Not implemented in 0.33, and added in 0.34 (nothing else changes in it):
 operations on websites (the `Poppy-Operation` header and the extension's
 `endpoint`, Operations 4 and 6) and the Browser Control extension, version 1.
 Upstream had no commit after ad20217 when 0.34 was built.
+
+Upstream published and froze 1.0 on 2026-11-14 (8c02b42, "Publish and freeze
+1.0"), at /docs/1.0/spec. SDK 0.37 implements 1.0 as published: every change the
+upstream changelog lists for 1.0 after c71f515, in both SDKs and both reference
+companies, each in the CHANGELOG and the 0.36 → 0.37 migration page. A
+conversation protocol's `description`, required; Pushed Authorization Requests
+(the agent pushes whenever the issuer lists the endpoint, and a company may offer
+or require it); minor versions (each side sends only what the other's version
+defines); PS384 required for client assertions and delegations, RSA keys of 2048
+to 4096 bits; `prompt=consent`, and the consent page for scopes granted before; the
+same DPoP key at refresh (a company may bind refresh tokens to it); UCP sign-ins
+that request every scope still needed, the company granting only those; ports in
+`organization.domain`, used only when the agent is configured to; client
+assertions of at most five minutes; one sign-in for every resource, `invalid_target`
+for a service a company leaves out; `context` cleared with `null`; unknown roles,
+author types, stream event names and error codes; `working` meaning only that the
+company is still replying; unknown `authorization` errors; and the Mediated
+Sign-In retirement date, March 17, 2027. The commits after 8c02b42 through
+6764732 (85b41ff, 6561853, 6764732) restructure the site and change no normative
+text: content/versions/1.0 and kit/company are unchanged. 0.4 as published is
+unchanged: where the 1.0 text differs, the SDK applies it at 1.0 only, by the
+version the Session or document uses. What happens to an operation in flight at
+sign-out is open upstream (issue #84); the docs' open-topics page says what the
+reference companies do today.
 
 Draft 1.0 opened upstream on 2026-11-11 (272cab0, "Start the 1.0 draft") at
 /docs/spec: 0.4 plus fixes for problems implementers find, which can include
@@ -129,12 +153,12 @@ from an unattended documentation fetch. Draft 0.1 stays readable, frozen, at
 https://personalagentprotocol.org/docs/0.1/spec; draft 0.2 is frozen at
 https://personalagentprotocol.org/docs/0.2/spec, and 0.3 at
 https://personalagentprotocol.org/docs/0.3/spec. This repository implements
-0.4 as published only and uses no earlier document.
+1.0 and 0.4 as published only and uses no earlier document.
 
 ## Vendored JSON Schemas
 
 `protocol/schemas/` holds JSON Schemas copied unchanged from the upstream
-company kit (`kit/company/schemas/`) at commit ed47408 (0.4 as published), under the upstream
+company kit (`kit/company/schemas/`) at commit 8c02b42 (1.0 as published), under the upstream
 repository's license (Apache License 2.0). The tests check the shared
 fixtures and the reference company's documents against them
 (`personal_agent_protocol/__tests__/test_schemas.py`). They are replaced

@@ -8,6 +8,7 @@ import type { ReactorPlatformView } from "@datalayer/reactor";
 
 import { AuthorizationError } from "./errors.js";
 import { parseJsonStrict } from "./json.js";
+import { domainHost } from "./models.js";
 import {
   AuthorizationStateStores,
   Clocks,
@@ -68,7 +69,8 @@ export function verificationHostAllowed(
   options: { readonly issuer: string; readonly domain: string },
 ): boolean {
   const host = hostOf(url);
-  const allowed = [hostOf(options.issuer), options.domain.toLowerCase().replace(/\.+$/, "")];
+  // The host of `organization.domain`, without the port it names from 1.0 (§3.1).
+  const allowed = [hostOf(options.issuer), domainHost(options.domain)];
   return host !== "" && allowed.some((name) => name !== "" && within(host, name));
 }
 

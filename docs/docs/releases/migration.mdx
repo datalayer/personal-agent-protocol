@@ -10,6 +10,31 @@ section names the release that introduced the change; the
 [changelog](https://github.com/datalayer/personal-agent-protocol/blob/main/CHANGELOG.md)
 has the full list.
 
+## 0.36 → 0.37
+
+0.37.0 implements 1.0 as published (upstream `8c02b42`, frozen on 2026-11-14), the default
+version, in both SDKs and both reference companies. It breaks the API: a company must say
+what its agent helps with, a 1.0 document without that is refused, and a Direct Sign-In
+request now carries `prompt=consent`. 0.4 as published is unchanged: where 1.0 differs, the
+SDK applies 1.0's rule only at 1.0.
+
+| Change | What to do |
+| --- | --- |
+| Conversation protocol descriptions, required (spec 3.1, 8.1) | A company gives `CompanyConfig(agent_description="...")` (`agentDescription`), a required, non-blank string saying what its Company Agent can help with ("anything" is fine); a 1.0 `poppy.json` puts it in `agent.protocols[].description`, a 0.4 document leaves it out. `DiscoveryDocument` (`parseDiscoveryDocument`) refuses a 1.0 document whose `agent.protocols` entry has no `description` (`invalid_discovery_document` at discovery); `AgentProtocol.description` reads it. A hand-written 1.0 `poppy.json` adds it to every entry |
+| Pushed Authorization Requests (spec 3.2, 4.2, 4.8; RFC 9126) | Pass the issuer's `pushed_authorization_request_endpoint` and `require_pushed_authorization_requests` (new on `OAuthServerMetadata`) to `DirectSignInClient.begin(...)` (`pushedAuthorizationRequestEndpoint`, `requirePushedAuthorizationRequests`): the request is pushed with a client assertion, and a DPoP proof when tokens are bound, and the browser opens the authorization endpoint with `client_id` and `request_uri` only. For a link the User opens later, give `link_page="https://your.agent/sign-in/{link}"` (`linkPage`): the browser handoff gets your page, which calls `open_link(link)` (`openLink`) when opened and redirects to the URL it returns. A company offers or requires PAR with `CompanyConfig(pushed_authorization_requests="offered" \| "required")` (`pushedAuthorizationRequests`, default `"off"`); the `pap` CLI and the conformance runner push whenever it's listed |
+| `prompt=consent` (spec 4.2, 10.8) | Nothing: Direct Sign-In requests carry `prompt=consent` (`PROMPT_CONSENT`). Only when you receive the redirect on the device that opened the URL, pass `same_device_redirect=True` (`sameDeviceRedirect`) to leave it out. A company's hosted consent page lists every scope and shows even when the account granted them before: `authorization_request(request_id, account_id=...)` and `device_request(user_code, account_id=...)` (`{ accountId }`) now return `prompt` and, with the account, each scope's `granted_before`, which the page may mark |
+| Same DPoP key at refresh (spec 4.4, 4.5, 10.7) | Nothing for an agent on the SDK's DPoP keys (one key per User ID, kept across refreshes); a host with its own key store must not rotate a User ID's DPoP key at refresh. A company may bind refresh tokens to the key with `CompanyConfig(bind_refresh_tokens=True)` (`bindRefreshTokens`, needs `dpop_binding`): a refresh with another key is `invalid_grant` |
+| UCP scope requests (UCP 4, 11) | `ucp_scopes(profile, held, needed=..., protocol_version=...)` (`ucpScopes(profile, held, { needed, protocolVersion })`) returns every scope still needed at 1.0 (`held`, then those the challenge names); at 0.4 it still returns the missing ones only. The reference companies grant only the scopes a sign-in names |
+| Ports in `organization.domain` (spec 3.1, 3.2) | Nothing by default: a domain with a port, or a document on a port other than 443, is refused (`port_not_allowed`). To test against a company on another port, `DiscoveryClient(allow_ports=True)` (`discoverCompany(domain, { allowPorts: true })`). A company serves `CompanyConfig(domain="shop.example:8443")` at 1.0 only. New helpers: `split_domain`, `domain_host`, `url_domain` (`splitDomain`, `domainHost`, `urlDomain`) |
+| One sign-in for every resource (spec 4.5, 4.7, 4.8, 7) | Nothing: sign-in names no `resource`, and each refresh names one, as before. A company may leave a service out with a client policy's `allows_resource(client_id, resource)` (`allowsResource`): `invalid_target`, after which `ServiceTokens` uses that service signed out |
+| PS384 and RSA key sizes (spec 4.1, 5.2, 10.7) | Nothing: the reference companies accept `PS384` and `ES256`; RSA keys outside 2048 to 4096 bits (`RSA_KEY_BITS`) are now refused for client assertions and delegations |
+| Clearing context (spec 8.4) | Set a `context` field to `None` (`null`) to clear it, in a 1.0 Session only: a 0.4 Session refuses to send it (`context_clear_unsupported`). `effective_context(messages)` (`effectiveContext`) gives the shared context; a company's `Turn.context` is it |
+| Room to extend conversations (spec 8.4, 8.6, 8.13) | Unknown `role` reads `company` and unknown `author.type` reads `agent` (`known_role`, `known_author_type`); unknown SSE event names are skipped; an unknown conversation `error` becomes `conversation_request_failed` with the original in `details["error"]` and the HTTP status kept (`KNOWN_CONVERSATION_ERRORS`, `known_conversation_error`). Code that matched an error code outside the spec now sees `conversation_request_failed`. The company drops `author.id`, `name` and `image` from the agent's messages |
+| Unknown sign-in errors (spec 8.11) | `ConversationEvent.error` is any string; sign in again for `event.sign_in_scopes` (`signInScopes(event)`) whatever it says |
+| `working` (spec 8.7) | Nothing: the reference companies set `working` only while replying; a long task is said in a message |
+| Mediated Sign-In retirement | `MEDIATED_RETIREMENT_DATE` (`2027-03-17`): plan Direct or Device Sign-In for every company |
+| Conformance | New cases (descriptions, ports, PAR, refresh binding, unknown roles and errors, cleared context) and a `pushed-requests` world (PAR required, refresh tokens bound); the suite runs at 1.0 and 0.4 in all four pairings |
+
 ## 0.35 → 0.36
 
 0.36.0 makes the 1.0 draft the default: both SDKs and both reference companies announce

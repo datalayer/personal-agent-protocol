@@ -32,7 +32,7 @@ from html.parser import HTMLParser
 from typing import Literal
 
 from .errors import PersonalAgentProtocolError
-from .models import DiscoveryDocument
+from .models import DiscoveryDocument, domain_host
 from .sessions import PapSession
 
 BROWSER_CONTROL_EXTENSION = "browser-control"
@@ -266,7 +266,7 @@ def on_company_host(host: str, organization_domain: str) -> bool:
     """Whether `host` is `organization.domain` or one of its subdomains: the only pages
     that get `navigator.poppy` (Browser Control 6)."""
 
-    host, domain = host.lower().rstrip("."), organization_domain.lower().rstrip(".")
+    host, domain = host.lower().rstrip("."), domain_host(organization_domain)
     return host == domain or host.endswith(f".{domain}")
 
 

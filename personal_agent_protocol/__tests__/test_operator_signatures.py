@@ -221,6 +221,7 @@ def test_a_company_takes_off_optional_or_required() -> None:
             domain="shop.example",
             name="Shop",
             scopes=("orders:read",),
+            agent_description="Anything about your account",
             operator_signatures=cast(Any, "sometimes"),
         )
 

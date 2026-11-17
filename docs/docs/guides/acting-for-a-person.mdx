@@ -75,6 +75,8 @@ config = CompanyConfig(
     name="Example Store",
     domain="store.example",
     scopes=("orders:read", "orders:cancel"),
+    # What the Company Agent can help with: agent.protocols[].description (spec 8.1).
+    agent_description="Your orders: tracking, changes, and cancellations",
     # What a Session must hold to approve an operation.
     write_scopes=("orders:cancel",),
     scope_descriptions={
@@ -149,6 +151,8 @@ const config = new CompanyConfig({
   name: 'Example Store',
   domain: 'store.example',
   scopes: ['orders:read', 'orders:cancel'],
+  // What the Company Agent can help with: agent.protocols[].description (spec 8.1).
+  agentDescription: 'Your orders: tracking, changes, and cancellations',
   // What a Session must hold to approve an operation.
   writeScopes: ['orders:cancel'],
   scopeDescriptions: {

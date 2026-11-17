@@ -45,8 +45,11 @@ import {
   browserSignInUnscoped,
   formatExtensionsHeader,
   parseExtensionsHeader,
+  effectiveContext,
+  parseConversationEvent,
   parseConversationEventPage,
   parseDiscoveryDocument,
+  signInScopes,
   parseJsonStrict,
   parseMessage,
   parseOperation,
@@ -183,6 +186,21 @@ const CHECKS = {
     for (const context of given.invalid) assert.throws(() => parseMessage({ id: "msg_ctx", author: { type: "agent" }, context }));
   },
 
+  message_tolerance(given, expect) {
+    const messages = given.map(parseMessage);
+    assert.deepEqual(messages.map((message) => message.role), expect.roles);
+    assert.deepEqual(messages.map((message) => message.author.type), expect.author_types);
+  },
+
+  authorization_event(given, expect) {
+    assert.deepEqual([...signInScopes(parseConversationEvent(given))], expect.sign_in_scopes);
+  },
+
+  effective_context(given, expect) {
+    const messages = given.map((context) => parseMessage({ author: { type: "agent" }, context }));
+    assert.deepEqual(effectiveContext(messages), expect.context);
+  },
+
   operation(given, expect) {
     if (expect.valid === false) {
       assert.throws(() => parseOperation(given));
@@ -193,7 +211,11 @@ const CHECKS = {
   },
 
   async discovery(given, expect) {
-    const options = { fetch: mockNetwork(given.responses), ...(given.timeout_seconds ? { timeoutMs: given.timeout_seconds * 1000 } : {}) };
+    const options = {
+      fetch: mockNetwork(given.responses),
+      ...(given.timeout_seconds ? { timeoutMs: given.timeout_seconds * 1000 } : {}),
+      ...(given.allow_ports ? { allowPorts: true } : {}),
+    };
     if ("error" in expect) {
       await assert.rejects(discoverCompany(given.domain, options), rejectsWith(expect.error));
       return;

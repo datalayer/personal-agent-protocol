@@ -10,10 +10,10 @@
 
 Python and TypeScript SDKs for the
 [Personal Agent Protocol](https://personalagentprotocol.org): both implement
+[version 1.0](https://personalagentprotocol.org/docs/1.0/spec) as published
+(2026-11-14), the default, and
 [version 0.4](https://personalagentprotocol.org/docs/0.4/spec) (2026-11-10), as
-published, and its Operations extension v3, and the
-[1.0 draft](https://personalagentprotocol.org/docs/spec), the default since 0.36
-(0.4 is used when named in `protocol_versions`). See
+published, used when named in `protocol_versions`, with the Operations extension v3. See
 [Compatibility](https://personal-agent-protocol.datalayer.tech/releases/compatibility/),
 [Migration](https://personal-agent-protocol.datalayer.tech/releases/migration/),
 the [conformance report](https://personal-agent-protocol.datalayer.tech/protocol/conformance-report/),
@@ -201,7 +201,7 @@ Duplicate JSON members are rejected at Python and TypeScript trust boundaries.
 
 ## What is not implemented yet
 
-Every flow of version 0.4 and Operations version 3 is implemented in both SDKs and
+Every flow of versions 1.0 and 0.4 and Operations version 3 is implemented in both SDKs and
 both reference companies: discovery, Sessions, Direct, Device and Mediated
 Sign-In, refresh tokens, DPoP, OpenAPI and MCP, conversations with SSE, handoff and
 close, browser sessions, feedback, and Operations. What remains:

@@ -18,7 +18,9 @@ export {
 } from "./errors.js";
 export {
   ConversationClient,
+  KNOWN_CONVERSATION_ERRORS,
   generateRequestId,
+  knownConversationError,
   type ConversationClientOptions,
   type ConversationEventOptions,
   type ConversationReceipt,
@@ -131,6 +133,7 @@ export {
 export {
   CROSS_DEVICE_LIFETIME_SECONDS,
   DirectSignInClient,
+  PROMPT_CONSENT,
   buildDirectSignInRequest,
   validateDirectSignInCallback,
   type DirectSignInBeginOptions,
@@ -379,6 +382,16 @@ export {
   scopeDescriptions,
   knownResponder,
   knownHandoff,
+  AUTHOR_TYPES,
+  MESSAGE_ROLES,
+  knownAuthorType,
+  knownRole,
+  signInScopes,
+  effectiveContext,
+  clearsContext,
+  splitDomain,
+  domainHost,
+  urlDomain,
   conversationState,
   parseConversationState,
   type ConversationHandoff,
@@ -480,6 +493,7 @@ export {
 } from "./accounts.js";
 export {
   MEDIATED_EXTENSION,
+  MEDIATED_RETIREMENT_DATE,
   MEDIATED_VERSION,
   MediatedSignInClient,
   mediatedSignIn,

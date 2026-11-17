@@ -632,6 +632,9 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 tenant_id=record.tenant_id,
                 dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
                 pairwise_user_id=record.pairwise_user_id,
+                # Pushed whenever the issuer takes PAR (§4.2, RFC 9126).
+                pushed_authorization_request_endpoint=metadata.pushed_authorization_request_endpoint,
+                require_pushed_authorization_requests=metadata.require_pushed_authorization_requests,
             )
             callback = runtime.input.read("Callback URL", secret=True)
             result = await client.complete(callback.get_secret_value())

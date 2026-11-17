@@ -420,6 +420,8 @@ export interface ServiceTokensOptions {
 export class ServiceTokens {
   readonly #options: ServiceTokensOptions;
   readonly #tokens = new Map<string | undefined, AccessToken>();
+  /** Services the Company answered `invalid_target` for (§4.5): used signed out. */
+  readonly #leftOut = new Set<string>();
 
   constructor(options: ServiceTokensOptions) {
     this.#options = options;
@@ -444,11 +446,21 @@ export class ServiceTokens {
     if (options.fresh === true) this.#tokens.delete(resource);
     const known = this.#tokens.get(resource);
     if (known !== undefined) return known;
+    if (resource !== undefined && this.#leftOut.has(resource)) return undefined;
     const narrowed = scopes === undefined ? {} : { scopes };
-    const result =
-      metadata !== undefined && this.#isMcp(metadata.resource)
-        ? await refresh.tokenForMcp(reference, { context, server: metadata, ...narrowed })
-        : await refresh.refresh(reference, { context, ...narrowed, resource });
+    let result: RefreshResult;
+    try {
+      result =
+        metadata !== undefined && this.#isMcp(metadata.resource)
+          ? await refresh.tokenForMcp(reference, { context, server: metadata, ...narrowed })
+          : await refresh.refresh(reference, { context, ...narrowed, resource });
+    } catch (error) {
+      if (!(error instanceof AuthorizationError) || error.code !== "invalid_target" || resource === undefined) throw error;
+      // The Company leaves this service out for this agent (§4.5): it is used signed out, and
+      // not asked again until `forget`.
+      this.#leftOut.add(resource);
+      return undefined;
+    }
     if (result.status !== "signed_in" || result.token === undefined) {
       this.#tokens.clear();
       return undefined;
@@ -464,5 +476,6 @@ export class ServiceTokens {
   /** Drop every access token held: signed out, or a new sign-in replaces them. */
   forget(): void {
     this.#tokens.clear();
+    this.#leftOut.clear();
   }
 }

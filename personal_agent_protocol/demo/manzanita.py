@@ -132,6 +132,7 @@ CONFIG = CompanyConfig(
     name="Manzanita Outfitters",
     domain=DOMAIN,
     scopes=("orders:read", "orders:write"),
+    agent_description="Anything about your orders, returns, and our outdoor gear",
     write_scopes=("orders:write",),
     mediated_fields=(("email", "Email", False), ("password", "Password", True)),
     links=True,

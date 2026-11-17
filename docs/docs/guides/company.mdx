@@ -115,7 +115,7 @@ document is served at `/poppy/{version}.json`, with that `protocol_version` and 
 `supported_versions`. A request whose `Poppy-Version` is missing or names no served
 version is refused with `version_unsupported` (HTTP 400, JSON body) where the
 Session header is verified, and is never handled under another version. The
-reference company speaks the 1.0 draft (`DEFAULT_PROTOCOL_VERSION`) by default;
+reference company speaks 1.0 (`DEFAULT_PROTOCOL_VERSION`) by default;
 another entry lets a personal agent's choice be exercised and is answered the same way.
 
 0.4 as published (`PROTOCOL_PROFILE`) is opt-in on this side too: a company that adds
@@ -184,6 +184,8 @@ config = CompanyConfig(
     name="Manzanita Outfitters",
     domain="manzanita.example",
     scopes=("orders:read", "orders:write"),
+    # What the Company Agent can help with, in plain language (spec 3.1, 8.1).
+    agent_description="Anything about your orders, returns, and our outdoor gear",
     write_scopes=("orders:write",),
     mediated_fields=(("email", "Email", False), ("password", "Password", True)),
     # Every scope described, in words a user and a model understand (`auth.scopes`).
@@ -538,6 +540,40 @@ TypeScript) when:
 A hosted consent page (`consent_page`) gets no binding: it protects its own
 form, and `consent_decision` refuses every POST for its requests.
 
+Every user of a personal agent shares its `client_id`, so the page lists every
+scope the sign-in would grant and is shown for every request, `prompt=consent`
+or not, and for every Device Sign-In, even when the account granted every scope
+before (§4.2, §4.3, §10.8). A hosted page reads the request with
+`authorization_request(request_id, account_id=...)` or
+`device_request(user_code, account_id=...)` (`{ accountId }`): given the account
+signed in on the page, each scope says `granted_before`, which the page may mark
+as already granted, never hide. The request's `prompt` is there too.
+
+### Pushed Authorization Requests and bound refresh tokens
+
+`pushed_authorization_requests="offered"` (`pushedAuthorizationRequests`) lists
+`pushed_authorization_request_endpoint` (`/oauth/par`) in the issuer's metadata,
+and `"required"` also sets `require_pushed_authorization_requests`: the
+authorization endpoint then takes only a `request_uri` the agent pushed with its
+client assertion (RFC 9126, §4.2). A push with a DPoP proof binds the code to its
+key. `bind_refresh_tokens=True` (`bindRefreshTokens`, with `dpop_binding`) binds
+each refresh token, and those rotated from it, to the DPoP key of the request that
+issued it: a copied refresh token is useless with another key (§4.4). Both are off
+by default. A client policy may leave a service out for an agent with
+`allows_resource(client_id, resource)` (`allowsResource`): its token requests are
+`invalid_target` (§4.5).
+
+### Describing the agent and the scopes
+
+`agent_description` (`agentDescription`) is required: what the Company Agent can
+help with, in plain language, published as `agent.protocols[].description` at
+1.0 (§3.1, §8.1). It may say the agent can help with anything. Each scope's
+description (`scope_descriptions`) is most useful when it says what the scope
+unlocks, which tasks need it, and whether a task can be done without it, such as
+"See your orders, returns, and bookings. Needed to track an order or find one to
+change", or "Personalized search results. Not needed to search the catalog"
+(§4.7; upstream guides, *Describing scopes*).
+
 `test_guide_security.py` and `guide-security.test.mjs` test each case.
 
 ### Hosted sign-in pages
@@ -550,6 +586,7 @@ config = CompanyConfig(
     name="Orders helper",
     domain="orders.example",
     scopes=("orders:read",),
+    agent_description="Your orders",
     scope_descriptions={"orders:read": "See your orders"},
     operations=False,
     device_page="https://pap.orders.example/device?slug=orders-helper",
@@ -586,6 +623,7 @@ config = CompanyConfig(
     name="Orders helper",
     domain="orders-helper.apps.datalayer.ai",
     scopes=("orders:read",),
+    agent_description="Your orders",
     scope_descriptions={"orders:read": "See your orders"},
     operations=False,
     aliases=("orders.example.com",),

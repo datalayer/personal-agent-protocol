@@ -16,7 +16,7 @@ export type UnknownFields = Readonly<Record<string, unknown>>;
  */
 export const SUPPORTED_PROTOCOL_VERSIONS: ReadonlySet<string> = new Set([DEFAULT_PROTOCOL_VERSION]);
 /**
- * Every protocol version this SDK implements: 0.4 as published and the 1.0 draft. A Personal
+ * Every protocol version this SDK implements: 0.4 and 1.0, both as published. A Personal
  * Agent (`discoverCompany(domain, { protocolVersions })`) or a Company
  * (`CompanyConfigOptions.protocolVersions`) uses 0.4 only when it names it.
  */
@@ -270,10 +270,20 @@ export interface AuthCapabilities extends UnknownFields {
   readonly scope_hints: Readonly<Record<string, ScopeHint>>;
 }
 
-/** A conversation protocol the Company Agent speaks (§3.1, §8); read `access` with `accountAccess`. */
+/**
+ * A conversation protocol the Company Agent speaks (§3.1, §8.1); read `access` with
+ * `accountAccess`.
+ *
+ * `description` says, in plain language, what the agent at `endpoint` can help with, so the
+ * Personal Agent can decide whether a conversation serves the task at hand and choose between
+ * the entries and the Company's APIs. Required from 1.0: `parseDiscoveryDocument` refuses a 1.0
+ * document whose entry has none; 0.4 doesn't define it. `access` is kept as written, whatever it
+ * says.
+ */
 export interface AgentProtocol extends UnknownFields {
   readonly type: string;
   readonly endpoint: string;
+  readonly description?: string;
   readonly access?: string;
 }
 
@@ -422,7 +432,12 @@ export interface OAuthServerMetadata extends UnknownFields {
   readonly protected_resources: readonly string[];
   readonly authorization_endpoint?: string;
   readonly device_authorization_endpoint?: string;
+  /**
+   * Where Direct Sign-In's request is pushed (RFC 9126, §3.2, §4.2): a Personal Agent SHOULD
+   * push whenever it is listed, and MUST when `require_pushed_authorization_requests`.
+   */
   readonly pushed_authorization_request_endpoint?: string;
+  readonly require_pushed_authorization_requests: boolean;
   readonly scopes_supported?: readonly string[];
   readonly dpop_signing_alg_values_supported?: readonly string[];
 }
@@ -440,15 +455,16 @@ export function offersDevice(metadata: OAuthServerMetadata): boolean {
 /**
  * Whether `protected_resources` names `https://{domain}` (§3.2).
  *
- * Exactly, except that the host compares ignoring case: an entry with a path, a port or
- * a trailing slash does not match.
+ * Exactly, except that the host compares ignoring case: an entry with a path or a trailing
+ * slash does not match, nor one whose port isn't the domain's. From 1.0 a domain includes its
+ * port when that isn't 443, and so does its entry (§3.1, §3.2).
  */
 export function listsResource(metadata: OAuthServerMetadata, domain: string): boolean {
   const wanted = domain.toLowerCase().replace(/\.$/, "");
   return metadata.protected_resources.some((entry) => {
     if (!entry.startsWith("https://")) return false;
     const host = entry.slice("https://".length);
-    return Boolean(host) && !/[/?#:@]/.test(host) && host.toLowerCase() === wanted;
+    return Boolean(host) && !/[/?#@]/.test(host) && host.toLowerCase() === wanted;
   });
 }
 
@@ -726,9 +742,11 @@ export function knownHandoff(value: unknown, label = "handoff"): ConversationHan
 /**
  * Where a conversation stands, in four fields each independent of the others (§8.7).
  *
- * `working` is true while the Company has work in progress: a request it accepted but hasn't
- * acted on, a reply being written, or work it started on its own; a Personal Agent that wants
- * the whole reply reads until it is false. `handoff` is `pending` while the Company looks for
+ * `working` is true only while the Company is still replying: a request it accepted but hasn't
+ * acted on, or a reply being written (§8.7, from 1.0). Work it finishes later, such as a refund
+ * that takes days, isn't `working`: the Company says so in a message, and adds another when it's
+ * done. A Personal Agent that wants the whole reply reads until it is false. `handoff` is
+ * `pending` while the Company looks for
  * a person (§8.9). `responder` is who handles the Company side. `closed` means the conversation
  * takes no more messages (§8.12). A new conversation starts with `handoff` `none`, `responder`
  * `agent` and `closed` false.
@@ -772,10 +790,48 @@ export interface ConversationEvent extends UnknownFields {
   readonly handoff?: ConversationHandoff;
   readonly responder?: ConversationResponder;
   readonly closed?: boolean;
-  readonly error?: "insufficient_scope";
+  /**
+   * An `authorization` event's error (§8.11): `insufficient_scope`, or a value a later version
+   * adds. Whatever it says, the Personal Agent signs in again for `scope` (`signInScopes`).
+   */
+  readonly error?: string;
   readonly scope?: string;
   readonly reason?: string;
   readonly conversation_id?: string;
+}
+
+/**
+ * For an `authorization` event, the scopes to sign in again for (§5.4, §8.11): those in `scope`,
+ * once each, whatever `error` says, a value this SDK doesn't recognize included. Empty for any
+ * other event.
+ */
+export function signInScopes(event: ConversationEvent): readonly string[] {
+  if (event.type !== "authorization" || !event.scope) return [];
+  return [...new Set(event.scope.split(" ").filter(Boolean))];
+}
+
+/**
+ * The context the Personal Agent's messages share, in order (§8.4): fields a message leaves out
+ * keep their previous values, and a field set to `null` is cleared, as if it had never been
+ * shared (from 1.0).
+ */
+export function effectiveContext(messages: Iterable<Pick<Message, "context">>): Record<string, unknown> {
+  const shared: Record<string, unknown> = {};
+  for (const message of messages) {
+    for (const [name, value] of Object.entries(message.context ?? {})) {
+      if (value === null) delete shared[name];
+      else shared[name] = value;
+    }
+  }
+  return shared;
+}
+
+/**
+ * Whether a message sets a `context` field to `null` to clear it (§8.4): 1.0's, so a Personal
+ * Agent sends it only in a Session at 1.0 or later (§3.4).
+ */
+export function clearsContext(message: Pick<Message, "context">): boolean {
+  return Object.values(message.context ?? {}).some((value) => value === null);
 }
 
 /**
@@ -1138,15 +1194,67 @@ function httpsUrl(value: unknown, label: string): string {
 }
 
 function domain(value: unknown, label: string): string {
-  const result = string(value, label).replace(/\.$/, "").toLowerCase();
+  const normalized = string(value, label).toLowerCase();
+  let split: readonly [string, number | undefined];
+  try {
+    split = splitDomain(normalized);
+  } catch (cause) {
+    throw new ProtocolValidationError("invalid_domain", `${label} must be a DNS domain`, { cause });
+  }
+  const host = split[0].replace(/\.$/, "");
   if (
     !/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(
-      result,
+      host,
     )
   ) {
-    throw new ProtocolValidationError("invalid_domain", `${label} must be a DNS domain`);
+    throw new ProtocolValidationError(
+      "invalid_domain",
+      `${label} must be a DNS domain, with its port when that isn't 443`,
+    );
   }
-  return result;
+  return split[1] === undefined ? host : `${host}:${split[1]}`;
+}
+
+/**
+ * `organization.domain` as its host and its port, `undefined` for 443 (§3.1).
+ *
+ * From 1.0 a domain includes its port when that isn't 443, such as `shop.example:8443`;
+ * `RangeError` for a port that isn't a number from 1 to 65535, or `:443`, which a domain never
+ * names.
+ */
+export function splitDomain(domain: string): readonly [host: string, port: number | undefined] {
+  const colon = domain.lastIndexOf(":");
+  if (colon < 0) return [domain, undefined];
+  const host = domain.slice(0, colon);
+  const port = domain.slice(colon + 1);
+  if (!/^[1-9][0-9]*$/.test(port) || Number(port) > 65535) {
+    throw new RangeError("a domain's port is a number from 1 to 65535");
+  }
+  if (Number(port) === 443) throw new RangeError("a domain names its port only when that isn't 443");
+  return [host, Number(port)];
+}
+
+/** The host of `organization.domain`, without the port it names (§3.1). */
+export function domainHost(domain: string): string {
+  return splitDomain(domain)[0].replace(/\.+$/, "").toLowerCase();
+}
+
+/**
+ * The domain an HTTPS URL is on, as `organization.domain` names it (§3.1): its host, lowercase,
+ * with its port when that isn't 443. `undefined` for another scheme, user information or an
+ * invalid URL.
+ */
+export function urlDomain(url: string): string | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return undefined;
+  }
+  if (parsed.protocol !== "https:" || !parsed.hostname || parsed.username || parsed.password) return undefined;
+  const host = parsed.hostname.toLowerCase().replace(/\.+$/, "");
+  // WHATWG URL drops the scheme's default port: `port` is empty for 443.
+  return parsed.port === "" || parsed.port === "443" ? host : `${host}:${parsed.port}`;
 }
 
 function scopes(value: unknown, label: string): ScopeOption {
@@ -1205,6 +1313,13 @@ export function parseDiscoveryDocument(
       ? {}
       : { logo_uri: httpsUrl(organizationSource.logo_uri, "organization.logo_uri") }),
   } as Organization;
+  if (parseVersion(version)[0] < 1 && splitDomain(organization.domain)[1] !== undefined) {
+    // A port in organization.domain is 1.0's (§3.1); 0.4 names a host only.
+    throw new ProtocolValidationError(
+      "invalid_domain",
+      "organization.domain names a port only from version 1.0",
+    );
+  }
 
   let auth: AuthCapabilities | undefined;
   if (source.auth !== undefined) {
@@ -1260,10 +1375,22 @@ export function parseDiscoveryDocument(
       if (protocol.access !== undefined && typeof protocol.access !== "string") {
         throw new ProtocolValidationError("invalid_type", `agent.protocols[${index}].access must be a string`);
       }
+      const description =
+        protocol.description === undefined || protocol.description === null
+          ? undefined
+          : string(protocol.description, `agent.protocols[${index}].description`);
+      if (description === undefined && parseVersion(version)[0] >= 1) {
+        // Every conversation protocol says what its agent helps with (§3.1, §8.1).
+        throw new ProtocolValidationError(
+          "invalid_agent",
+          `agent.protocols[${index}] needs a description from version 1.0`,
+        );
+      }
       return {
         ...protocol,
         type: string(protocol.type, `agent.protocols[${index}].type`),
         endpoint: httpsUrl(protocol.endpoint, `agent.protocols[${index}].endpoint`),
+        ...(description === undefined ? {} : { description }),
       } as AgentProtocol;
     });
     if (protocols.length === 0) {
@@ -1424,6 +1551,10 @@ export function parseOAuthServerMetadata(value: unknown): OAuthServerMetadata {
     const item = source[name];
     return item === undefined || item === null ? {} : { [name]: httpsUrl(item, name) };
   };
+  const requirePushed =
+    source.require_pushed_authorization_requests === undefined || source.require_pushed_authorization_requests === null
+      ? false
+      : boolean(source.require_pushed_authorization_requests, "require_pushed_authorization_requests");
   const metadata = {
     ...source,
     // Compared with `auth.issuer` character for character (§3.2): never normalized.
@@ -1433,6 +1564,7 @@ export function parseOAuthServerMetadata(value: unknown): OAuthServerMetadata {
     ...endpoint("authorization_endpoint"),
     ...endpoint("device_authorization_endpoint"),
     ...endpoint("pushed_authorization_request_endpoint"),
+    require_pushed_authorization_requests: requirePushed,
     grant_types_supported: grants,
     protected_resources: resources,
     ...(scopesSupported === undefined ? {} : { scopes_supported: scopesSupported }),
@@ -1448,6 +1580,13 @@ export function parseOAuthServerMetadata(value: unknown): OAuthServerMetadata {
     throw new ProtocolValidationError(
       "invalid_oauth_metadata",
       "the device grant needs device_authorization_endpoint",
+    );
+  }
+  if (metadata.require_pushed_authorization_requests && metadata.pushed_authorization_request_endpoint === undefined) {
+    // A Company that requires PAR lists where to push (RFC 9126 §5).
+    throw new ProtocolValidationError(
+      "invalid_oauth_metadata",
+      "require_pushed_authorization_requests needs pushed_authorization_request_endpoint",
     );
   }
   return metadata;
@@ -1710,22 +1849,46 @@ function ianaZone(value: unknown): boolean {
   }
 }
 
-/** The facts §7.4 defines use its field names and formats; others pass through. */
+/**
+ * The facts §7.4 defines use its field names and formats; others pass through. A field set to
+ * `null` clears it (§8.4, from 1.0): see `effectiveContext`.
+ */
 function messageContext(
   context: Readonly<Record<string, unknown>> | undefined,
 ): Readonly<Record<string, unknown>> | undefined {
   if (context === undefined) return context;
   const { locale, time_zone: zone, user_available: available } = context;
-  if (locale !== undefined && (typeof locale !== "string" || !LOCALE.test(locale))) {
+  if (locale !== undefined && locale !== null && (typeof locale !== "string" || !LOCALE.test(locale))) {
     throw new ProtocolValidationError("invalid_message", "context.locale must be a language tag such as en-US");
   }
-  if (zone !== undefined && !ianaZone(zone)) {
+  if (zone !== undefined && zone !== null && !ianaZone(zone)) {
     throw new ProtocolValidationError("invalid_message", "context.time_zone must be an IANA time zone name");
   }
-  if (available !== undefined && typeof available !== "boolean") {
+  if (available !== undefined && available !== null && typeof available !== "boolean") {
     throw new ProtocolValidationError("invalid_message", "context.user_available must be true or false");
   }
   return context;
+}
+
+/** The `author.type` values this version defines (§8.4). */
+export const AUTHOR_TYPES = ["agent", "human"] as const;
+/** The message roles this version defines (§8.4). */
+export const MESSAGE_ROLES = ["user", "company"] as const;
+
+/**
+ * An `author.type` this SDK doesn't recognize reads as `agent` (§8.4): a message is a person's
+ * own words only when it says so. A value that isn't a string is returned as it is.
+ */
+export function knownAuthorType(value: unknown): unknown {
+  return typeof value !== "string" || (AUTHOR_TYPES as readonly string[]).includes(value) ? value : "agent";
+}
+
+/**
+ * A `role` this SDK doesn't recognize reads as `company` (§8.4): content from the Company, never
+ * the User's (§10.1). A value that isn't a string is returned as it is.
+ */
+export function knownRole(value: unknown): unknown {
+  return typeof value !== "string" || (MESSAGE_ROLES as readonly string[]).includes(value) ? value : "company";
 }
 
 /** Who wrote a message (§7.4): `type`, and the Company's optional `id`, `name`, `image`. */
@@ -1733,7 +1896,7 @@ export function parseAuthor(value: unknown): Author {
   const source = nullsAbsent(value, "message.author", ["id", "name", "image"]);
   return {
     ...source,
-    type: oneOf(source.type, ["agent", "human"] as const, "message.author.type"),
+    type: oneOf(knownAuthorType(source.type), AUTHOR_TYPES, "message.author.type"),
     ...(source.id === undefined ? {} : { id: identifier(source.id, "message.author.id") }),
     ...(source.name === undefined ? {} : { name: string(source.name, "message.author.name") }),
     ...(source.image === undefined
@@ -1756,7 +1919,7 @@ export function parseMessage(value: unknown): Message {
     );
   }
   const author = parseAuthor(source.author);
-  const role = source.role === undefined ? undefined : oneOf(source.role, ["user", "company"] as const, "message.role");
+  const role = source.role === undefined ? undefined : oneOf(knownRole(source.role), MESSAGE_ROLES, "message.role");
   const asOfRequest = source.as_of_request === undefined ? undefined : identifier(source.as_of_request, "message.as_of_request");
   const asOfCursor = source.as_of_cursor === undefined ? undefined : identifier(source.as_of_cursor, "message.as_of_cursor");
   // Only messages written by an AI say what they took into account (§8.4): a person types
@@ -1813,15 +1976,7 @@ export function parseConversationEvent(value: unknown): ConversationEvent {
           responder: knownResponder(source.responder, "conversation event.responder"),
         }),
     ...(source.closed === undefined ? {} : { closed: boolean(source.closed, "conversation event.closed") }),
-    ...(source.error === undefined
-      ? {}
-      : {
-          error: oneOf(
-            source.error,
-            ["insufficient_scope"] as const,
-            "conversation event.error",
-          ),
-        }),
+    ...(source.error === undefined ? {} : { error: string(source.error, "conversation event.error") }),
     ...(source.scope === undefined ? {} : { scope: string(source.scope, "conversation event.scope") }),
     ...(source.reason === undefined
       ? {}
@@ -1844,7 +1999,7 @@ export function parseConversationEvent(value: unknown): ConversationEvent {
   ) {
     throw new ProtocolValidationError("invalid_event", "a state event requires handoff, responder and closed");
   }
-  // Always both: the error, and the scopes the request needs (§7.11).
+  // Always both: the error, whatever it says, and the scopes the request needs (§8.11).
   if (type === "authorization" && (parsed.error === undefined || !parsed.scope)) {
     throw new ProtocolValidationError(
       "invalid_event",

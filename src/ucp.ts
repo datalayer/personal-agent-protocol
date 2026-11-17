@@ -15,7 +15,9 @@
 import { PersonalAgentProtocolError, SessionError, TransportError } from "./errors.js";
 import { parseJsonStrict } from "./json.js";
 import { readLimited } from "./limits.js";
-import { companyExtension, type DiscoveredCompany, type DiscoveryDocument } from "./models.js";
+import { scopesToRequest } from "./accounts.js";
+import { companyExtension, parseVersion, type DiscoveredCompany, type DiscoveryDocument } from "./models.js";
+import { DEFAULT_PROTOCOL_VERSION } from "./profile.js";
 import { challengeParameters, refuseRedirect } from "./refusals.js";
 import type { AccessToken, PapSession } from "./sessions.js";
 import { sessionError, type SessionFetchClient } from "./transport.js";
@@ -126,9 +128,23 @@ export function ucpIdentityLinkingScopes(profile: UcpProfile): readonly string[]
   return scopes;
 }
 
-/** The identity linking scopes not in `held`: UCP asks only for the missing ones (UCP extension 4). */
-export function ucpScopes(profile: UcpProfile, held: readonly string[] = []): readonly string[] {
-  return ucpIdentityLinkingScopes(profile).filter((scope) => !held.includes(scope));
+/**
+ * The scopes a sign-in requests after a UCP `insufficient_scope` (UCP extension 4).
+ *
+ * From 1.0, every scope the Personal Agent still needs, as spec 4.7 describes: the ones `held`
+ * that it wants to keep, then those the challenge names (`needed`, the profile's identity
+ * linking scopes when it names none), once each; the Company grants only what the request names.
+ * At 0.4, UCP's incremental authorization: only the identity linking scopes not `held`, and the
+ * Company keeps the earlier ones.
+ */
+export function ucpScopes(
+  profile: UcpProfile,
+  held: readonly string[] = [],
+  options: { readonly needed?: readonly string[]; readonly protocolVersion?: string } = {},
+): readonly string[] {
+  const wanted = options.needed?.length ? [...options.needed] : [...ucpIdentityLinkingScopes(profile)];
+  if (parseVersion(options.protocolVersion ?? DEFAULT_PROTOCOL_VERSION)[0] >= 1) return scopesToRequest(held, wanted);
+  return wanted.filter((scope) => !held.includes(scope));
 }
 
 /** Whether the Company lists the UCP extension at this version (UCP extension 2). */

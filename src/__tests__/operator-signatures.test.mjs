@@ -170,7 +170,7 @@ test("a signer refuses a Signature-Agent it cannot write", async () => {
 
 test("a company takes off, optional or required", () => {
   assert.throws(
-    () => new CompanyConfig({ domain: "shop.example", name: "Shop", scopes: ["orders:read"], operatorSignatures: "sometimes" }),
+    () => new CompanyConfig({ domain: "shop.example", name: "Shop", scopes: ["orders:read"], agentDescription: "Anything about your account", operatorSignatures: "sometimes" }),
     /operatorSignatures/,
   );
 });

@@ -50,7 +50,7 @@ from urllib.parse import urljoin, urlsplit
 import httpx
 
 from .errors import TransportError
-from .models import DiscoveredCompany, DiscoveryDocument
+from .models import DiscoveredCompany, DiscoveryDocument, url_domain
 from .reactor import (
     URL_SAFETY_POLICIES,
     ApprovedUrl,
@@ -82,20 +82,10 @@ class FetchedPage:
 
 def page_carries_session(url: str, domain: str) -> bool:
     """Whether a page fetch carries the Session header (§5.2): an HTTPS URL whose host is
-    exactly `organization.domain`, compared ignoring case, on the default port."""
+    exactly `organization.domain`, compared ignoring case, on its port: 443, or from 1.0
+    the one the domain names (§3.1)."""
 
-    parsed = urlsplit(url)
-    try:
-        port = parsed.port
-    except ValueError:
-        return False
-    return (
-        parsed.scheme == "https"
-        and (parsed.hostname or "").lower() == domain.lower().rstrip(".")
-        and port in {None, 443}
-        and not parsed.username
-        and not parsed.password
-    )
+    return url_domain(url) == domain.lower().rstrip(".")
 
 
 def _document_key(url: str) -> str | None:

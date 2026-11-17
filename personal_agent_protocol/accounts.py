@@ -38,6 +38,7 @@ import httpx
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
 from .auth import _https_url, _scopes
+from .crypto import DPOP_ALGORITHM
 from .errors import AuthorizationError, PersonalAgentProtocolError, ProtocolValidationError
 from .json import loads_strict
 from .models import DiscoveredCompany, ProtectedResourceMetadata, ProtocolModel
@@ -216,13 +217,22 @@ class RefreshTokenClient:
         """An access token for one MCP server: `resource` is its `url` from poppy.json (§7).
 
         `server` is its protected resource metadata, as `fetch_mcp_server_metadata` returns
-        it. MCP's baseline is Bearer: a proof goes only when `server` lists ES256, whatever
-        the issuer lists, so a server that doesn't gets a Bearer token.
+        it. The proof is the refresh token's: whenever the issuer lists ES256 the refresh
+        proves with its DPoP key (§4.4), and the company gives a server that takes only
+        Bearer a Bearer token (§4.5). With an issuer that lists none, MCP's baseline is
+        Bearer: a proof goes only when `server` lists ES256.
         """
 
+        # The refresh proves with the refresh token's own DPoP key whenever the issuer binds
+        # tokens (§4.4): a company may bind refresh tokens to it whatever token type is asked
+        # for, and gives a Bearer-only server Bearer tokens all the same (§4.5). Only when the
+        # issuer lists no algorithm does the server's metadata decide.
+        issuer_proves = DPOP_ALGORITHM in (context.dpop_signing_algs or ())
         return await self.refresh(
             reference,
-            context=replace(context, dpop_signing_algs=server.dpop_signing_alg_values_supported),
+            context=context
+            if issuer_proves
+            else replace(context, dpop_signing_algs=server.dpop_signing_alg_values_supported),
             scopes=scopes,
             resource=server.resource,
         )

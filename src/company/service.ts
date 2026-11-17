@@ -2731,6 +2731,18 @@ export class CompanyService {
    * with `bindRefreshTokens` (§4.4), recorded with its grant. `scope` follows RFC 6749: left out
    * when it grants exactly the scopes requested.
    */
+  /**
+   * Whether the service at `resource` takes DPoP tokens: the MCP server when its protected
+   * resource metadata lists ES256 (§7), any other service of this company.
+   */
+  #takesDpop(resource: string): boolean {
+    if (this.#mcp() !== undefined && resource === this.config.mcpUrl) {
+      const listed = this.protectedResourceMetadata().dpop_signing_alg_values_supported;
+      return Array.isArray(listed) && listed.includes(DPOP_ALGORITHM);
+    }
+    return true;
+  }
+
   async #issue(options: {
     readonly clientId: string;
     readonly accountId: string;
@@ -2741,7 +2753,10 @@ export class CompanyService {
     readonly requested: readonly string[];
     readonly jkt: string | undefined;
   }): Promise<CompanyResponse> {
-    const { clientId, accountId, scopes, family, resource, refreshToken, requested, jkt } = options;
+    const { clientId, accountId, scopes, family, resource, refreshToken, requested } = options;
+    // A server that takes only Bearer gets a Bearer token, even after a proof that a bound
+    // refresh token needed (§4.4, §4.5).
+    const jkt = resource !== undefined && !this.#takesDpop(resource) ? undefined : options.jkt;
     const accessToken = this.#id("at");
     const key = digest(accessToken);
     const expiresAt = this.#later(this.config.accessTokenLifetimeSeconds);

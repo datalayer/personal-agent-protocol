@@ -5821,6 +5821,7 @@ guide:
   - personal_agent_protocol.company.service:CompanyService.protected_resource_metadata
   - personal_agent_protocol.company.service:CompanyService._token_binding
   - personal_agent_protocol.company.service:CompanyConfig.mcp_token_schemes
+  - personal_agent_protocol.company.service:CompanyService._takes_dpop
   tests:
   - personal_agent_protocol/__tests__/test_fixtures.py::test_local_fixture_case
   - personal_agent_protocol/__tests__/test_conformance.py::test_python_agent_python_company_binding_with_dpop_over_tls

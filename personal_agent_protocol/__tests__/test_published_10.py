@@ -60,6 +60,7 @@ from personal_agent_protocol.demo.kit import ScriptedBrowser, personal_agent_rea
 from personal_agent_protocol.demo.manzanita import CONFIG, manzanita
 from personal_agent_protocol.device import verification_host_allowed
 from personal_agent_protocol.errors import DiscoveryError, SessionError
+from personal_agent_protocol.mcp import fetch_mcp_server_metadata
 from personal_agent_protocol.models import (
     Author,
     ConversationEvent,
@@ -69,7 +70,7 @@ from personal_agent_protocol.models import (
     Organization,
     split_domain,
 )
-from personal_agent_protocol.reactor import first_contribution
+from personal_agent_protocol.reactor import AUTHORIZATION_STATE_STORES, first_contribution
 from personal_agent_protocol.sessions import build_client_assertion_claims
 from personal_agent_protocol.transport import SessionHttpClient
 
@@ -892,3 +893,105 @@ def test_an_unknown_authorization_error_signs_in_again_for_its_scopes() -> None:
 def test_mediated_sign_in_is_retired_on_17_march_2027() -> None:
     assert MEDIATED_RETIREMENT_DATE == "2027-03-17"
     assert CompanyRequest is not None
+
+
+# 0.37.1 -----------------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_bound_refresh_gets_a_bearer_token_for_a_bearer_only_mcp_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The refresh proves with the refresh token's key whatever token it asks for (§4.4), and
+    a server that takes only Bearer gets Bearer (§4.5): the sign-in is kept."""
+
+    world = _binding(monkeypatch, dpop_binding="required", bind_refresh_tokens=True)
+    ctx = world.context()
+    signed = await _signed_in(ctx)
+    plain = world.service.protected_resource_metadata()
+    plain.pop("dpop_signing_alg_values_supported")
+    monkeypatch.setattr(world.service, "protected_resource_metadata", lambda: plain)
+    metadata = await ctx.metadata()
+    server = await fetch_mcp_server_metadata(
+        ctx.http, world.service.config.mcp_url, issuer=metadata.issuer
+    )
+    assert server.dpop_signing_alg_values_supported is None
+    context = await ctx.account_context(signed.session.sub)
+    result = await ctx.agent.accounts.token_for_mcp(
+        signed.reference, context=context, server=server
+    )
+    assert result.status == "signed_in" and result.token is not None
+    assert result.token.token_type == "Bearer"
+    # The refresh token was kept: the next refresh, by the same key, works.
+    assert (await ctx.agent.accounts.refresh(signed.reference, context=context)).status == (
+        "signed_in"
+    )
+
+
+@pytest.mark.asyncio
+async def test_opening_a_link_never_takes_the_callback_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world, browser = _recording_world(replace(CONFIG, pushed_authorization_requests="required"))
+    await world.signed_out_session()
+    metadata = world.company.oauth_metadata
+    assert metadata is not None
+    client = DirectSignInClient(reactor=world.reactor, http_client=world.http)
+    await client.begin(
+        **_direct_arguments(
+            world,
+            pushed_authorization_request_endpoint=metadata.pushed_authorization_request_endpoint,
+            require_pushed_authorization_requests=True,
+            link_page="https://atlas.example/sign-in/{link}",
+        )
+    )
+    link = browser.urls[-1].rsplit("/", 1)[1]
+    store = first_contribution(world.reactor, AUTHORIZATION_STATE_STORES, "state store")
+    taken: list[str] = []
+    take = store.take
+
+    async def recording(reference: str) -> object:
+        taken.append(reference)
+        return await take(reference)
+
+    monkeypatch.setattr(store, "take", recording)
+    await browser.open(await client.open_link(link))
+    assert taken and all(not reference.startswith("direct:") for reference in taken)
+    # Opened twice, then completed: complete() alone consumes the state, once.
+    await client.open_link(link)
+    callback = await world.shop.approve_authorization(browser.request_id, account_id="acct_ada")  # type: ignore[arg-type]
+    assert (await client.complete(callback)).token is not None
+    with pytest.raises(AuthorizationError):
+        await client.open_link(link)
+
+
+def test_a_context_field_named_proto_is_a_field() -> None:
+    messages = [Message(author=Author(type="agent"), context={"__proto__": {"x": 1}})]
+    assert effective_context(messages) == {"__proto__": {"x": 1}}
+
+
+@pytest.mark.asyncio
+async def test_an_empty_event_name_is_the_default_message_event() -> None:
+    state = {
+        "id": "evt_1",
+        "type": "state",
+        "created_at": "2026-11-17T09:00:00Z",
+        "handoff": "none",
+        "responder": "agent",
+        "closed": True,
+    }
+    lines = f"event:\nid: evt_1\ndata: {json.dumps(state)}\n\n"
+
+    async def company(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=lines.encode()
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(company)) as http:
+        reactor, _ = build_pap_reactor(http_client=http)
+        reactor.register_plugin(PluginManifest(name="stream-test", version="1"), Plugin())
+        client = ConversationClient(transport=SessionHttpClient(reactor=reactor, http_client=http))
+        session = conversation_session()
+        items = [item async for item in client.stream(f"{SHOP}/poppy", "cnv_1", session=session)]
+        reactor.stop()
+    assert [type(item).__name__ for item in items] == ["ConversationEvent"]

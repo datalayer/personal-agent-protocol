@@ -141,7 +141,7 @@
       "requirements": [
         "GUIDE-mcp-01"
       ],
-      "description": "A token for an MCP server carries a proof only when that server's protected resource metadata lists ES256: the issuer's list doesn't decide it, and the same refresh for any other token follows the issuer's.",
+      "description": "A token for an MCP server is asked for with the refresh token's proof whenever the issuer lists ES256 (§4.4: a company may bind refresh tokens to that key), and the company returns the type the server takes, Bearer for one whose metadata lists no ES256; with an issuer that lists none, a proof goes only when the server's protected resource metadata lists ES256.",
       "check": "dpop_mcp_token",
       "input": [
         {
@@ -187,10 +187,10 @@
           "proof": true
         },
         {
-          "proof": false
+          "proof": true
         },
         {
-          "proof": false
+          "proof": true
         },
         {
           "proof": true
@@ -526,7 +526,7 @@
         "GUIDE-mcp-01"
       ],
       "world": "dpop-binding",
-      "description": "At an issuer that lists DPoP, a server whose metadata doesn't gets a Bearer token and no proof, and accepts it."
+      "description": "The issuer lists ES256: the refresh for the MCP server's token proves with the refresh token's DPoP key (§4.4), and the company returns the type the server takes, Bearer for a server whose metadata lists no DPoP algorithm (§4.5, §7); the agent uses the token as its token_type names."
     },
     {
       "id": "dpop.refresh-bound-to-its-key",

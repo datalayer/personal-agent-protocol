@@ -30,6 +30,7 @@
 
 import type { ReactorPlatformView } from "@datalayer/reactor";
 
+import { DPOP_ALGORITHM } from "./crypto.js";
 import { AuthorizationError, ProtocolValidationError, type PersonalAgentProtocolError } from "./errors.js";
 import { parseJsonStrict } from "./json.js";
 import { serviceMetadata, serviceResource, type DiscoveryOptions } from "./discovery.js";
@@ -236,18 +237,25 @@ export class RefreshTokenClient {
   /**
    * An access token for one MCP server: `resource` is its `url` from poppy.json (§7).
    *
-   * `server` is its protected resource metadata, as `fetchMcpServerMetadata` returns it. MCP's
-   * baseline is Bearer: a proof goes only when `server` lists ES256, whatever the issuer lists,
-   * so a server that doesn't gets a Bearer token.
+   * `server` is its protected resource metadata, as `fetchMcpServerMetadata` returns it. The
+   * proof is the refresh token's: whenever the issuer lists ES256 the refresh proves with its
+   * DPoP key (§4.4), and the company gives a server that takes only Bearer a Bearer token
+   * (§4.5). With an issuer that lists none, MCP's baseline is Bearer: a proof goes only when
+   * `server` lists ES256.
    */
   tokenForMcp(
     reference: string,
     options: Omit<RefreshOptions, "resource"> & { readonly server: ProtectedResourceMetadata },
   ): Promise<RefreshResult> {
     const { server, context, ...rest } = options;
+    // The refresh proves with the refresh token's own DPoP key whenever the issuer binds tokens
+    // (§4.4): a company may bind refresh tokens to it whatever token type is asked for, and
+    // gives a Bearer-only server Bearer tokens all the same (§4.5). Only when the issuer lists
+    // no algorithm does the server's metadata decide.
+    const issuerProves = context.dpopSigningAlgs?.includes(DPOP_ALGORITHM) ?? false;
     return this.refresh(reference, {
       ...rest,
-      context: { ...context, dpopSigningAlgs: server.dpop_signing_alg_values_supported },
+      context: issuerProves ? context : { ...context, dpopSigningAlgs: server.dpop_signing_alg_values_supported },
       resource: server.resource,
     });
   }

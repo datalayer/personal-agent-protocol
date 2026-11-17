@@ -21,6 +21,7 @@ import test from "node:test";
 import { exportJWK, generateKeyPair } from "jose";
 
 import {
+  AuthorizationStateStores,
   AuthorizationError,
   ConversationClient,
   ConversationError,
@@ -40,6 +41,7 @@ import {
   delegationClaims,
   discoverCompany,
   effectiveContext,
+  fetchMcpServerMetadata,
   firstContribution,
   knownConversationError,
   pageCarriesSession,
@@ -138,7 +140,9 @@ async function binding(config) {
       clock.advance(seconds);
     },
   };
-  return new Context({ baseUrl: SHOP, identity: atlas, fetch, scenario, clock, driver });
+  const ctx = new Context({ baseUrl: SHOP, identity: atlas, fetch, scenario, clock, driver });
+  ctx.service = service;
+  return ctx;
 }
 
 async function signedInUser(ctx) {
@@ -726,4 +730,76 @@ test("an unknown authorization error signs in again for its scopes", () => {
 
 test("Mediated Sign-In is retired on 17 March 2027", () => {
   assert.equal(MEDIATED_RETIREMENT_DATE, "2027-03-17");
+});
+
+// 0.37.1 -----------------------------------------------------------------------------------
+
+test("a bound refresh gets a Bearer token for a Bearer-only MCP server", async () => {
+  // The refresh proves with the refresh token's key whatever token it asks for (§4.4), and a
+  // server that takes only Bearer gets Bearer (§4.5): the sign-in is kept.
+  const ctx = await binding({ dpopBinding: "required", bindRefreshTokens: true });
+  const signed = await signedInUser(ctx);
+  const plain = { ...ctx.service.protectedResourceMetadata() };
+  delete plain.dpop_signing_alg_values_supported;
+  ctx.service.protectedResourceMetadata = () => plain;
+  const metadata = await ctx.metadata();
+  const server = await fetchMcpServerMetadata(ctx.service.config.mcpUrl, { issuer: metadata.issuer, fetch: ctx.fetch });
+  assert.equal(server.dpop_signing_alg_values_supported, undefined);
+  const context = await ctx.accountContext(signed.session.sub);
+  const result = await ctx.agent.accounts.tokenForMcp(signed.reference, { context, server });
+  assert.equal(result.status, "signed_in");
+  assert.equal(result.token.tokenType, "Bearer");
+  // The refresh token was kept: the next refresh, by the same key, works.
+  assert.equal((await ctx.agent.accounts.refresh(signed.reference, { context })).status, "signed_in");
+});
+
+test("opening a link never takes the callback state", async () => {
+  const { w, browser } = await recordingWorld({ pushedAuthorizationRequests: "required" });
+  const client = new DirectSignInClient({ reactor: w.reactor, fetch: w.fetch });
+  await client.begin(
+    directArguments(w, {
+      pushedAuthorizationRequestEndpoint: w.metadata.pushed_authorization_request_endpoint,
+      requirePushedAuthorizationRequests: true,
+      linkPage: "https://atlas.example/sign-in/{link}",
+    }),
+  );
+  const link = browser.urls.at(-1).split("/").at(-1);
+  const store = firstContribution(w.reactor, AuthorizationStateStores, "authorization state store");
+  const taken = [];
+  const take = store.take.bind(store);
+  store.take = async (reference) => {
+    taken.push(reference);
+    return take(reference);
+  };
+  await browser.open(await client.openLink(link));
+  assert.ok(taken.length > 0 && taken.every((reference) => !reference.startsWith("direct:")));
+  // Opened twice, then completed: complete() alone consumes the state, once.
+  await client.openLink(link);
+  const callbackUrl = await w.shop.approveAuthorization(browser.requestId, { accountId: "acct_ada" });
+  assert.ok((await client.complete({ callbackUrl })).token !== undefined);
+  await assert.rejects(client.openLink(link), AuthorizationError);
+});
+
+test("a context field named __proto__ is a field, never the prototype", () => {
+  const context = JSON.parse('{"__proto__": {"polluted": true}, "locale": "fr"}');
+  const shared = effectiveContext([{ context }]);
+  assert.deepEqual(Object.keys(shared).sort(), ["__proto__", "locale"]);
+  assert.deepEqual(shared.__proto__, { polluted: true });
+  assert.equal(shared.polluted, undefined);
+  assert.equal({}.polluted, undefined);
+});
+
+test("an empty event name is the default message event", async () => {
+  const w = await shopWorld();
+  const session = await w.start();
+  const state = { id: "evt_1", type: "state", created_at: "2026-11-17T09:00:00Z", handoff: "none", responder: "agent", closed: true };
+  const lines = `event:\nid: evt_1\ndata: ${JSON.stringify(state)}\n\n`;
+  const transport = mockTransport(w, async () => new Response(lines, { status: 200, headers: { "content-type": "text/event-stream" } }));
+  const conversations = new ConversationClient({ reactor: w.reactor, transport });
+  const items = [];
+  for await (const item of conversations.stream(`${SHOP}/poppy`, "cnv_1", { session })) items.push(item);
+  assert.deepEqual(
+    items.map((item) => item.kind ?? item.type),
+    ["state"],
+  );
 });

@@ -955,7 +955,8 @@ async function* sseFrames(
         if (size > maxEventBytes) {
           throw new ConversationError("response_too_large", "conversation event exceeded limit");
         }
-        if (field === "event") event = content;
+        // An empty name is the default `message` event (HTML SSE): never skipped as unknown.
+        if (field === "event") event = content || "message";
         else if (field === "data") data.push(content);
         else if (field === "id") id = content || undefined;
       }

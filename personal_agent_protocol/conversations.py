@@ -778,7 +778,8 @@ async def _sse_frames(
         if size > max_event_bytes:
             raise ConversationError("response_too_large", "conversation event exceeded limit")
         if field == "event":
-            name = value
+            # An empty name is the default `message` event (HTML SSE): never skipped as unknown.
+            name = value or "message"
         elif field == "data":
             data.append(value)
         elif field == "id":

@@ -6,6 +6,33 @@
 
 # Changelog
 
+## 0.37.1 (2026-11-17)
+
+Fixes from the review of 0.37.0, in both SDKs. No API change.
+
+- **A bound refresh token keeps its sign-in at a Bearer-only MCP server** (spec 4.4, 4.5, 7).
+  `token_for_mcp` (`tokenForMcp`) replaced the issuer's DPoP algorithms with the server's, so
+  for a server that takes only Bearer the refresh went without a proof; a company that binds
+  refresh tokens answered `invalid_grant` and the refresh token was deleted. The refresh now
+  proves with the refresh token's key whenever the issuer lists ES256, and the reference
+  companies give a server whose metadata lists no DPoP algorithm a Bearer token even after a
+  proof. The conformance case `dpop.mcp-server-decides-the-proof` checks the token type the
+  server takes.
+- **`open_link` no longer takes the callback state** (spec 4.2). The link has its own record, a
+  copy of the request, so a link reopened while the redirect is being completed can't make
+  `complete` fail; `complete` alone consumes the state, and drops the link with it.
+- **`effectiveContext`** (TypeScript) defines each field as an own property: a context field
+  named `__proto__` is a field, never the object's prototype. Python's dict had no such issue.
+- **An empty SSE `event:` name** is the default `message` event, never skipped as unknown
+  (spec 8.6).
+- **Conformance**: `dpop.pushed-authorization-request` requires an explicit OAuth refusal (an
+  error response, or a redirect with `error`) for a request that wasn't pushed; a redirect to a
+  login page no longer passes.
+- CI: the Examples job tests the released Agent Runtimes again (1.6.83 accepts 0.37):
+  `AGENT_RUNTIMES_REF` emptied.
+- Python 3.10: the RSA key-size check reads the modulus with an explicit byte order (fixed
+  before the 0.37.0 tag; the 3.10 CI job runs the PS384 tests).
+
 ## 0.37.0 (2026-11-17)
 
 Version 1.0 **as published** (upstream `8c02b42`, frozen 2026-11-14; reviewed through

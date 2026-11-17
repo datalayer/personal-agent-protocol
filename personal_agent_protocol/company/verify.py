@@ -165,7 +165,7 @@ def _key_size_accepted(jwk_value: dict[str, Any]) -> bool:
         return True
     modulus = str(jwk_value.get("n", ""))
     try:
-        bits = int.from_bytes(base64.urlsafe_b64decode(modulus + "=" * (-len(modulus) % 4)))
+        bits = int.from_bytes(base64.urlsafe_b64decode(modulus + "=" * (-len(modulus) % 4)), "big")
     except (ValueError, TypeError):
         return False
     low, high = RSA_KEY_BITS

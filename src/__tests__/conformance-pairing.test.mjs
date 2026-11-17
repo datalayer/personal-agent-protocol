@@ -115,7 +115,10 @@ test("the conformance cases at 0.4 as published: TypeScript agent ↔ TypeScript
   const failed = Object.fromEntries(report.cases.filter((item) => item.outcome === "failed").map((item) => [item.id, item.message]));
   assert.deepEqual(failed, {});
   assert.equal(report.profile, "0.4");
-  assert.deepEqual(report.summary, { passed: report.cases.length, failed: 0, skipped: 0 });
+  // What only 1.0 defines has nothing to check at 0.4.
+  const skipped = report.cases.filter((item) => item.outcome === "skipped").map((item) => item.id);
+  assert.deepEqual(skipped, ["protocol.agent-protocols-described"]);
+  assert.deepEqual(report.summary, { passed: report.cases.length - 1, failed: 0, skipped: 1 });
 });
 
 test("the DPoP cases: TypeScript agent ↔ TypeScript company over TLS, in the world that binds", async () => {
@@ -132,6 +135,23 @@ test("the DPoP cases: TypeScript agent ↔ TypeScript company over TLS, in the w
   assert.deepEqual(failed, {});
   assert.deepEqual(report.summary, { passed: cases.length, failed: 0, skipped: 0 });
   assert.deepEqual(new Set(report.cases.map((item) => item.kind)), new Set(["positive", "negative", "recovery"]));
+});
+
+test("the pushed-requests cases: TypeScript agent ↔ TypeScript company over TLS, PAR required", async () => {
+  // Manzanita requires Pushed Authorization Requests and binds refresh tokens to their DPoP key
+  // (§4.2, §4.4, RFC 9126).
+  const world = "pushed-requests";
+  const cases = companyCases(world);
+  assert.ok(cases.length >= 2);
+  const report = await runPairing({ config: worldConfig(world), cases });
+  const reports = process.env.PAP_CONFORMANCE_REPORTS;
+  if (reports) {
+    mkdirSync(reports, { recursive: true });
+    writeFileSync(join(reports, `typescript-agent-typescript-company.${world}.json`), `${JSON.stringify(report, null, 2)}\n`);
+  }
+  const failed = Object.fromEntries(report.cases.filter((item) => item.outcome === "failed").map((item) => [item.id, item.message]));
+  assert.deepEqual(failed, {});
+  assert.deepEqual(report.summary, { passed: cases.length, failed: 0, skipped: 0 });
 });
 
 for (const world of ["operator-signatures", "operator-signatures-required"]) {
@@ -171,7 +191,7 @@ test("every case belongs to one world", () => {
     JSON.parse(readFileSync(new URL(`../../protocol/fixtures/conformance/${suite}.json`, import.meta.url), "utf8"))
       .cases.filter((item) => item.check === undefined),
   );
-  const worlds = [undefined, "dpop-binding", "no-issuer", "operator-signatures", "operator-signatures-required"];
+  const worlds = [undefined, "dpop-binding", "pushed-requests", "no-issuer", "operator-signatures", "operator-signatures-required"];
   const selected = worlds.flatMap((world) => companyCases(world)).map((item) => item.id);
   assert.deepEqual(selected.sort(), fixtures.map((item) => item.id).sort());
 });

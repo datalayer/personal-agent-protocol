@@ -26,7 +26,7 @@
  */
 
 import { PersonalAgentProtocolError } from "./errors.js";
-import { companyExtension, type DiscoveryDocument } from "./models.js";
+import { companyExtension, domainHost, type DiscoveryDocument } from "./models.js";
 import type { PapSession } from "./sessions.js";
 
 export const BROWSER_CONTROL_EXTENSION = "browser-control";
@@ -284,7 +284,7 @@ export function pageMarks(html: string): PageMarks {
  */
 export function onCompanyHost(host: string, organizationDomain: string): boolean {
   const name = host.toLowerCase().replace(/\.$/, "");
-  const domain = organizationDomain.toLowerCase().replace(/\.$/, "");
+  const domain = domainHost(organizationDomain);
   return name === domain || name.endsWith(`.${domain}`);
 }
 

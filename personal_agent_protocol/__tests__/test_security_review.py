@@ -227,6 +227,7 @@ def test_finding_5_operations_without_a_write_scope_is_a_configuration_error() -
             name="Shop",
             domain="shop.example",
             scopes=("orders:read",),
+            agent_description="Anything about your account",
             scope_descriptions={"orders:read": "See orders"},
         )
     with pytest.raises(ValueError, match="among scopes"):
@@ -234,6 +235,7 @@ def test_finding_5_operations_without_a_write_scope_is_a_configuration_error() -
             name="Shop",
             domain="shop.example",
             scopes=("a:read",),
+            agent_description="Anything about your account",
             write_scopes=("a:write",),
             scope_descriptions={"a:read": "Read"},
         )
@@ -241,6 +243,7 @@ def test_finding_5_operations_without_a_write_scope_is_a_configuration_error() -
         name="Shop",
         domain="shop.example",
         scopes=("orders:read",),
+        agent_description="Anything about your account",
         scope_descriptions={"orders:read": "See orders"},
         operations=False,
     )

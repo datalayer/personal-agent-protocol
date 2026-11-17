@@ -388,6 +388,8 @@ class ServiceTokens:
     context: RefreshTokenContext
     scopes: tuple[str, ...] | None = None
     _tokens: dict[str | None, AccessToken] = field(default_factory=dict)
+    #: Services the Company answered `invalid_target` for (§4.5): used signed out.
+    _left_out: set[str] = field(default_factory=set)
 
     async def resource_for(self, service_url: str, *, fresh: bool = False) -> str | None:
         """The `resource` to request for `service_url`, or `None` for the default token."""
@@ -404,14 +406,24 @@ class ServiceTokens:
         known = self._tokens.get(resource)
         if known is not None:
             return known
-        if metadata is not None and self._is_mcp(metadata.resource):
-            result = await self.refresh.token_for_mcp(
-                self.reference, context=self.context, server=metadata, scopes=self.scopes
-            )
-        else:
-            result = await self.refresh.refresh(
-                self.reference, context=self.context, scopes=self.scopes, resource=resource
-            )
+        if resource in self._left_out:
+            return None
+        try:
+            if metadata is not None and self._is_mcp(metadata.resource):
+                result = await self.refresh.token_for_mcp(
+                    self.reference, context=self.context, server=metadata, scopes=self.scopes
+                )
+            else:
+                result = await self.refresh.refresh(
+                    self.reference, context=self.context, scopes=self.scopes, resource=resource
+                )
+        except AuthorizationError as exc:
+            if exc.code != "invalid_target" or resource is None:
+                raise
+            # The Company leaves this service out for this agent (§4.5): it is used signed
+            # out, and not asked again until `forget`.
+            self._left_out.add(resource)
+            return None
         if result.status != "signed_in" or result.token is None:
             self._tokens.clear()
             return None
@@ -425,6 +437,7 @@ class ServiceTokens:
         """Drop every access token held: signed out, or a new sign-in replaces them."""
 
         self._tokens.clear()
+        self._left_out.clear()
 
 
 __all__ = [

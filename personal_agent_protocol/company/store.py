@@ -45,6 +45,9 @@ CLIENT = "client"
 DEVICE = "device"
 USER_CODE = "user_code"
 AUTHORIZATION = "authorization"
+#: A Pushed Authorization Request by its `request_uri` (RFC 9126, §4.2): the parameters a
+#: personal agent pushed with its client assertion, used once, briefly.
+PUSHED_REQUEST = "pushed_request"
 CODE = "code"
 MEDIATED = "mediated"
 CONVERSATION = "conversation"
@@ -80,6 +83,7 @@ RECORD_KINDS = (
     DEVICE,
     USER_CODE,
     AUTHORIZATION,
+    PUSHED_REQUEST,
     CODE,
     MEDIATED,
     CONVERSATION,
@@ -372,6 +376,10 @@ class AccountGrant:
     #: sign-in from before the account's sign-ins all ended (a password reset)
     #: ends. Unknown (`None`) is taken for before any such moment.
     signed_in_at: datetime | None = None
+    #: With `bind_refresh_tokens`, the thumbprint of the DPoP key of the request that
+    #: issued it, carried by every token rotated from it: a refresh proves with that
+    #: key, or is `invalid_grant` (§4.4). `None`: not bound.
+    dpop_jkt: str | None = None
 
     def to_json(self) -> JsonObject:
         return {
@@ -382,6 +390,7 @@ class AccountGrant:
             "revoked": self.revoked,
             "family": self.family,
             "signed_in_at": _maybe_time(self.signed_in_at),
+            "dpop_jkt": self.dpop_jkt,
         }
 
     @classmethod
@@ -394,6 +403,7 @@ class AccountGrant:
             revoked=value["revoked"],
             family=value["family"],
             signed_in_at=_maybe_parse(value.get("signed_in_at")),
+            dpop_jkt=value.get("dpop_jkt"),
         )
 
 
@@ -507,20 +517,6 @@ class PendingDevice:
 
 
 @dataclass(frozen=True)
-class UserCode:
-    """The device sign-in a user code stands for (by device-code digest)."""
-
-    device: str
-
-    def to_json(self) -> JsonObject:
-        return {"device": self.device}
-
-    @classmethod
-    def from_json(cls, value: JsonObject) -> UserCode:
-        return cls(device=value["device"])
-
-
-@dataclass(frozen=True)
 class PendingAuthorization:
     """A Direct Sign-In request waiting on the user's decision on the company's page."""
 
@@ -537,6 +533,12 @@ class PendingAuthorization:
     #: The scopes the agent asked for, when `scopes` grants fewer (§4.7): the token
     #: response then says which were granted.
     requested: tuple[str, ...] | None = None
+    #: The request's `prompt` (OpenID Connect Core §3.1.2.1, §4.2): `consent` asks for the
+    #: consent page even when the account granted every scope before.
+    prompt: str | None = None
+    #: The thumbprint of the DPoP key that pushed the request (RFC 9449 §10.1): the code is
+    #: exchanged only with a proof by that key.
+    dpop_jkt: str | None = None
 
     def to_json(self) -> JsonObject:
         return {
@@ -549,6 +551,8 @@ class PendingAuthorization:
             "client_name": self.client_name,
             "browser_binding": self.browser_binding,
             "requested": None if self.requested is None else list(self.requested),
+            "prompt": self.prompt,
+            "dpop_jkt": self.dpop_jkt,
         }
 
     @classmethod
@@ -563,7 +567,52 @@ class PendingAuthorization:
             client_name=value["client_name"],
             browser_binding=value["browser_binding"],
             requested=None if value.get("requested") is None else tuple(value["requested"]),
+            prompt=value.get("prompt"),
+            dpop_jkt=value.get("dpop_jkt"),
         )
+
+
+@dataclass(frozen=True)
+class PushedAuthorization:
+    """A Pushed Authorization Request (RFC 9126, §4.2): the authorization request's
+    parameters, the agent whose client assertion pushed them, and the DPoP key that
+    proved the push, if any. Used once, by the authorization endpoint."""
+
+    client_id: str
+    parameters: dict[str, str]
+    expires_at: datetime
+    dpop_jkt: str | None = None
+
+    def to_json(self) -> JsonObject:
+        return {
+            "client_id": self.client_id,
+            "parameters": dict(self.parameters),
+            "expires_at": _time(self.expires_at),
+            "dpop_jkt": self.dpop_jkt,
+        }
+
+    @classmethod
+    def from_json(cls, value: JsonObject) -> PushedAuthorization:
+        return cls(
+            client_id=value["client_id"],
+            parameters=dict(value["parameters"]),
+            expires_at=_parse(value["expires_at"]),
+            dpop_jkt=value.get("dpop_jkt"),
+        )
+
+
+@dataclass(frozen=True)
+class UserCode:
+    """The device sign-in a user code stands for (by device-code digest)."""
+
+    device: str
+
+    def to_json(self) -> JsonObject:
+        return {"device": self.device}
+
+    @classmethod
+    def from_json(cls, value: JsonObject) -> UserCode:
+        return cls(device=value["device"])
 
 
 @dataclass(frozen=True)
@@ -577,6 +626,8 @@ class IssuedCode:
     account_id: str
     scopes: tuple[str, ...]
     expires_at: datetime
+    #: The DPoP key that pushed the request (RFC 9449 §10.1): the exchange proves with it.
+    dpop_jkt: str | None = None
 
     def to_json(self) -> JsonObject:
         return {
@@ -587,6 +638,7 @@ class IssuedCode:
             "account_id": self.account_id,
             "scopes": list(self.scopes),
             "expires_at": _time(self.expires_at),
+            "dpop_jkt": self.dpop_jkt,
         }
 
     @classmethod
@@ -599,6 +651,7 @@ class IssuedCode:
             account_id=value["account_id"],
             scopes=tuple(value["scopes"]),
             expires_at=_parse(value["expires_at"]),
+            dpop_jkt=value.get("dpop_jkt"),
         )
 
 
@@ -1133,6 +1186,7 @@ RECORD_TYPES: dict[str, Callable[[JsonObject], Any]] = {
     DEVICE: PendingDevice.from_json,
     USER_CODE: UserCode.from_json,
     AUTHORIZATION: PendingAuthorization.from_json,
+    PUSHED_REQUEST: PushedAuthorization.from_json,
     CODE: IssuedCode.from_json,
     MEDIATED: PendingMediated.from_json,
     CONVERSATION: StoredConversation.from_json,

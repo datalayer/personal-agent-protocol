@@ -27,7 +27,11 @@ SIGNED_OUT: dict[str, Any] = {
     "protocol_version": "1.0",
     "organization": {"name": "Example", "domain": "Example.COM"},
     "apis": [{"type": "openapi", "url": "https://example.com/o.json", "description": "Catalog"}],
-    "agent": {"protocols": [{"type": "poppy", "endpoint": "https://example.com/poppy"}]},
+    "agent": {
+        "protocols": [
+            {"type": "poppy", "endpoint": "https://example.com/poppy", "description": "Anything"}
+        ]
+    },
     "feedback": {"endpoint": "https://example.com/feedback"},
     "web": {"browser_session_endpoint": "https://example.com/join"},
 }
@@ -111,7 +115,12 @@ async def test_with_an_issuer_the_identifier_is_the_issuer() -> None:
         {
             "agent": {
                 "protocols": [
-                    {"type": "poppy", "endpoint": "https://example.com/p", "access": "signed_in"}
+                    {
+                        "type": "poppy",
+                        "endpoint": "https://example.com/p",
+                        "description": "Anything",
+                        "access": "signed_in",
+                    }
                 ]
             }
         },

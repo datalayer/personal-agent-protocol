@@ -57,11 +57,17 @@ import { byIssuer, signInResult, traced } from "./telemetry.js";
  * Errors are OAuth errors from the token endpoint, raised as `AuthorizationError`:
  * `invalid_grant`, `expired_token`, `access_denied`, `invalid_scope`, and a rate limit
  * (`rate_limited`, HTTP 429 with `Retry-After`). Mediated Sign-In is transitional: prefer
- * Direct or Device Sign-In when the company offers them.
+ * Direct or Device Sign-In when the company offers them. The protocol plans to retire it on
+ * March 17, 2027 (`MEDIATED_RETIREMENT_DATE`).
  */
 
 export { MEDIATED_EXTENSION };
 export const MEDIATED_VERSION = "1";
+/**
+ * The day the protocol plans to retire the Mediated Sign-In extension (Mediated Sign-In 1, from
+ * 1.0; guides, *Mediated sign-in*): after it, Direct and Device Sign-In remain.
+ */
+export const MEDIATED_RETIREMENT_DATE = "2027-03-17";
 
 const SIGN_IN_ID = /^[A-Za-z0-9_-]{1,256}$/;
 

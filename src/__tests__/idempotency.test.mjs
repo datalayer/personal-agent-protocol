@@ -104,7 +104,7 @@ async function scripted(answer) {
 test("every write carries a random UUID v4, and a read none", async () => {
   assert.match(newIdempotencyKey(), UUID_V4);
   assert.equal(
-    new CompanyConfig({ name: "x", domain: "x.example", scopes: ["a"], scopeDescriptions: { a: "A" }, operations: false }).idempotencyLifetimeSeconds,
+    new CompanyConfig({ name: "x", domain: "x.example", scopes: ["a"], agentDescription: "Anything about your account", scopeDescriptions: { a: "A" }, operations: false }).idempotencyLifetimeSeconds,
     FIXTURE.default_lifetime_seconds,
   );
   const s = await scripted(() => Response.json({ ok: true }));

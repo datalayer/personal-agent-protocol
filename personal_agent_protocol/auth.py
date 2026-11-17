@@ -21,7 +21,8 @@ import httpx
 from pydantic import SecretStr, field_validator
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
-from .errors import AuthorizationError
+from .errors import AuthorizationError, ProtocolValidationError
+from .json import loads_strict
 from .models import ProtocolModel, is_loopback_redirect
 from .reactor import (
     AUTHORIZATION_STATE_STORES,
@@ -33,7 +34,9 @@ from .reactor import (
     Clock,
     RandomSource,
     first_contribution,
+    send_bounded,
 )
+from .refusals import refusal_code, refuse_redirect, refused_without_body
 from .sessions import (
     SessionClient,
     SignInResult,
@@ -53,7 +56,24 @@ _AUTHORIZATION_PARAMETERS = {
     "state",
     "code_challenge",
     "code_challenge_method",
+    "prompt",
+    "request_uri",
 }
+#: The OpenID Connect `prompt` a Direct Sign-In request carries (OpenID Connect Core
+#: §3.1.2.1, §4.2): the Company shows its consent page even when the account granted
+#: every scope to the `client_id` before (§10.8).
+PROMPT_CONSENT = "consent"
+
+
+def _json(response: httpx.Response) -> object:
+    """A response's JSON body, or `None` when it has none that parses."""
+
+    if response.headers.get("content-type", "").split(";", 1)[0].strip() != "application/json":
+        return None
+    try:
+        return loads_strict(response.content)
+    except (ProtocolValidationError, UnicodeDecodeError, ValueError):
+        return None
 
 
 def _base64url(value: bytes) -> str:
@@ -88,7 +108,12 @@ def _scopes(values: Iterable[str]) -> tuple[str, ...]:
 
 
 class DirectSignInRequest(ProtocolModel):
-    """Authorization request state that redacts its URL and PKCE values."""
+    """Authorization request state that redacts its URL and PKCE values.
+
+    `authorization_url` carries every parameter; `parameters`, the same parameters form
+    encoded, is what a Pushed Authorization Request sends (RFC 9126, §4.2), after which
+    the browser opens `pushed_authorization_url` with only `client_id` and `request_uri`.
+    """
 
     authorization_url: SecretStr
     issuer: str
@@ -97,6 +122,27 @@ class DirectSignInRequest(ProtocolModel):
     scopes: tuple[str, ...]
     state: SecretStr
     code_verifier: SecretStr
+    authorization_endpoint: str | None = None
+    parameters: SecretStr | None = None
+
+    def pushed_authorization_url(self, request_uri: str) -> SecretStr:
+        """The authorization URL after a push (RFC 9126 §4): `client_id` and
+        `request_uri` only, on the authorization endpoint."""
+
+        if self.authorization_endpoint is None:
+            raise ValueError("this request has no authorization endpoint")
+        parsed = urlsplit(self.authorization_endpoint)
+        query = [
+            item
+            for item in parse_qsl(parsed.query, keep_blank_values=True)
+            if item[0] not in _AUTHORIZATION_PARAMETERS
+        ]
+        query.extend([("client_id", self.client_id), ("request_uri", request_uri)])
+        return SecretStr(
+            urlunsplit(
+                (parsed.scheme, parsed.netloc, parsed.path, urlencode(query, quote_via=quote), "")
+            )
+        )
 
     @field_validator("issuer", "client_id")
     @classmethod
@@ -118,11 +164,17 @@ def build_direct_sign_in_request(
     redirect_uri: str,
     scopes: Iterable[str],
     random_bytes: RandomBytes = secrets.token_bytes,
+    prompt_consent: bool = True,
 ) -> DirectSignInRequest:
     """Build a user-browser authorization URL with random state and S256 PKCE (§4.2).
 
     Plain OAuth: the sign-in names no Session, and any of the User's Sessions uses
-    the tokens it returns (§5.4).
+    the tokens it returns (§5.4). It names no `resource` either: one sign-in covers
+    every service the Company offers, and each token request names one (§4.5).
+
+    `prompt_consent` adds `prompt=consent` (§4.2, §10.8), which a request MUST carry
+    unless the Personal Agent receives the redirect only on the device that opened the
+    authorization URL; only then is it `False`.
     """
 
     endpoint = _https_url(authorization_endpoint, "authorization endpoint")
@@ -136,17 +188,18 @@ def build_direct_sign_in_request(
         for item in parse_qsl(parsed.query, keep_blank_values=True)
         if item[0] not in _AUTHORIZATION_PARAMETERS
     ]
-    query.extend(
-        [
-            ("response_type", "code"),
-            ("client_id", _https_url(client_id, "client ID")),
-            ("redirect_uri", _redirect_url(redirect_uri, "redirect URI")),
-            ("scope", " ".join(validated_scopes)),
-            ("state", state),
-            ("code_challenge", challenge),
-            ("code_challenge_method", "S256"),
-        ]
-    )
+    parameters = [
+        ("response_type", "code"),
+        ("client_id", _https_url(client_id, "client ID")),
+        ("redirect_uri", _redirect_url(redirect_uri, "redirect URI")),
+        ("scope", " ".join(validated_scopes)),
+        ("state", state),
+        ("code_challenge", challenge),
+        ("code_challenge_method", "S256"),
+    ]
+    if prompt_consent:
+        parameters.append(("prompt", PROMPT_CONSENT))
+    query.extend(parameters)
     authorization_url = urlunsplit(
         (parsed.scheme, parsed.netloc, parsed.path, urlencode(query, quote_via=quote), "")
     )
@@ -158,6 +211,8 @@ def build_direct_sign_in_request(
         scopes=validated_scopes,
         state=SecretStr(state),
         code_verifier=SecretStr(verifier),
+        authorization_endpoint=endpoint,
+        parameters=SecretStr(urlencode(parameters, quote_via=quote)),
     )
 
 
@@ -235,6 +290,16 @@ class _PendingDirectSignIn:
     expires_at: datetime
     dpop_signing_algs: Sequence[str] | None = None
     pairwise_user_id: str | None = None
+    #: Where the request is pushed (RFC 9126), when it is: each opening pushes it again.
+    pushed_authorization_request_endpoint: str | None = None
+
+
+def _link_reference(link: str) -> str:
+    try:
+        encoded = link.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise AuthorizationError("invalid_or_expired_state", "sign-in link is invalid") from exc
+    return "direct-link:" + hashlib.sha256(encoded).hexdigest()
 
 
 def _state_reference(state: str) -> str:
@@ -292,8 +357,27 @@ class DirectSignInClient:
         dpop_signing_algs: Sequence[str] | None = None,
         pairwise_user_id: str | None = None,
         cross_device: bool = False,
+        same_device_redirect: bool = False,
+        pushed_authorization_request_endpoint: str | None = None,
+        require_pushed_authorization_requests: bool = False,
+        link_page: str | None = None,
     ) -> DirectSignInStart:
         """Store one-use state, then open the authorization URL for the user (§4.2).
+
+        The request carries `prompt=consent`, so the Company shows its consent page even
+        for scopes the account granted before (§4.2, §10.8), unless `same_device_redirect`
+        says the host receives the redirect only on the device that opened the URL (a
+        loopback `redirect_uri`, or its own app signed in as the User who started).
+
+        `pushed_authorization_request_endpoint` and `require_pushed_authorization_requests`
+        are the issuer's (RFC 9126, §3.2): with an endpoint, the request is pushed there
+        with a client assertion, and a DPoP proof when tokens are bound, and the browser
+        opens the authorization endpoint with only `client_id` and `request_uri` (§4.2: a
+        SHOULD whenever it is listed, a MUST when required). A `request_uri` expires
+        quickly, so a link the User opens later SHOULD go to the agent's own page:
+        `link_page`, an HTTPS URL with `{link}`, is what the browser handoff then gets, and
+        that page calls `open_link(link)` when opened, which pushes the request and
+        returns the authorization URL to redirect to.
 
         `dpop_signing_algs` is the issuer's `dpop_signing_alg_values_supported`: the
         code exchange sends a DPoP proof when it includes ES256 (§4.5), by the DPoP key
@@ -318,6 +402,12 @@ class DirectSignInClient:
             )
         if not tenant_id or len(tenant_id) > 256:
             raise ValueError("tenant_id must contain between 1 and 256 characters")
+        if require_pushed_authorization_requests and pushed_authorization_request_endpoint is None:
+            raise ValueError("a Company that requires PAR lists where to push (RFC 9126 §5)")
+        if link_page is not None:
+            if "{link}" not in link_page:
+                raise ValueError("link_page is an HTTPS URL with {link}")
+            _https_url(link_page.replace("{link}", "x"), "link page")
         proves_with_dpop(dpop_signing_algs, pairwise_user_id)
         clock = cast(Clock, first_contribution(self.reactor, CLOCKS, "clock"))
         random_source = cast(
@@ -343,6 +433,7 @@ class DirectSignInClient:
             redirect_uri=redirect_uri,
             scopes=scopes,
             random_bytes=random_source.bytes,
+            prompt_consent=not same_device_redirect,
         )
         expires_at = clock.now() + timedelta(seconds=lifetime_seconds)
         reference = _state_reference(request.state.get_secret_value())
@@ -353,18 +444,131 @@ class DirectSignInClient:
             expires_at=expires_at,
             dpop_signing_algs=dpop_signing_algs,
             pairwise_user_id=pairwise_user_id,
+            pushed_authorization_request_endpoint=(
+                None
+                if pushed_authorization_request_endpoint is None
+                else _https_url(pushed_authorization_request_endpoint, "PAR endpoint")
+            ),
         )
         await store.put(reference, pending, expires_at=expires_at)
+        link: str | None = None
         try:
-            await browser.open(request.authorization_url)
+            if link_page is not None:
+                link = _base64url(_entropy(16, random_source.bytes))
+                await store.put(_link_reference(link), reference, expires_at=expires_at)
+                await browser.open(SecretStr(link_page.replace("{link}", link)))
+            else:
+                await browser.open(await self._authorization_url(pending))
         except Exception:
             await store.take(reference)
+            if link is not None:
+                await store.take(_link_reference(link))
             raise
         return DirectSignInStart(
             expires_at=expires_at,
             requested_scopes=request.scopes,
             cross_device=cross_device,
         )
+
+    async def open_link(self, link: str) -> SecretStr:
+        """The authorization URL for a sign-in link the User opened on the agent's own
+        page (`begin(link_page=...)`, §4.2): the request pushed now when the Company takes
+        PAR, so its short-lived `request_uri` is fresh, else the full URL. The page
+        redirects the browser there. A link may be opened again until the sign-in
+        completes or expires; `AuthorizationError` for an unknown or expired one."""
+
+        store = cast(
+            AuthorizationStateStore,
+            first_contribution(
+                self.reactor, AUTHORIZATION_STATE_STORES, "authorization state store"
+            ),
+        )
+        clock = cast(Clock, first_contribution(self.reactor, CLOCKS, "clock"))
+        link_reference = _link_reference(link)
+        reference = await store.take(link_reference)
+        pending = await store.take(reference) if isinstance(reference, str) else None
+        if not isinstance(pending, _PendingDirectSignIn) or clock.now() > pending.expires_at:
+            raise AuthorizationError(
+                "invalid_or_expired_state", "the sign-in link is unknown or has expired"
+            )
+        await store.put(cast(str, reference), pending, expires_at=pending.expires_at)
+        await store.put(link_reference, cast(str, reference), expires_at=pending.expires_at)
+        return await self._authorization_url(pending)
+
+    async def _authorization_url(self, pending: _PendingDirectSignIn) -> SecretStr:
+        """The URL the browser opens: after a push when the Company takes PAR (§4.2)."""
+
+        if pending.pushed_authorization_request_endpoint is None:
+            return pending.request.authorization_url
+        return pending.request.pushed_authorization_url(await self._push(pending))
+
+    async def _push(self, pending: _PendingDirectSignIn) -> str:
+        """Push the request (RFC 9126 §2): its parameters, a fresh client assertion, and a
+        DPoP proof when tokens are bound, so the code is bound to the key (RFC 9449
+        §10.1); a `use_dpop_nonce` refusal is retried once. The `request_uri`."""
+
+        request = pending.request
+        endpoint = cast(str, pending.pushed_authorization_request_endpoint)
+        proves = proves_with_dpop(pending.dpop_signing_algs, pending.pairwise_user_id)
+        nonce: str | None = None
+        while True:
+            form = dict(parse_qsl(cast(SecretStr, request.parameters).get_secret_value()))
+            form.update(
+                await self.sessions.client_authentication(
+                    client_id=request.client_id, issuer=request.issuer
+                )
+            )
+            headers = {"Accept": "application/json"}
+            if proves:
+                proof = await self.sessions._proof(
+                    endpoint,
+                    pending.tenant_id,
+                    request.issuer,
+                    cast(str, pending.pairwise_user_id),
+                    nonce,
+                )
+                headers["DPoP"] = proof.get_secret_value()
+            try:
+                response = await send_bounded(
+                    self.http,
+                    self.http.build_request("POST", endpoint, data=form, headers=headers),
+                    max_bytes=self.max_response_bytes,
+                )
+            except httpx.HTTPError as exc:
+                raise AuthorizationError("request_failed", "Pushed authorization failed") from exc
+            refuse_redirect(response, AuthorizationError)
+            payload = None if refused_without_body(response) else _json(response)
+            given = response.headers.get("dpop-nonce")
+            if (
+                proves
+                and nonce is None
+                and given is not None
+                and response.status_code == 400
+                and isinstance(payload, dict)
+                and payload.get("error") == "use_dpop_nonce"
+            ):
+                nonce = given
+                continue
+            break
+        if response.status_code not in {200, 201}:
+            raise AuthorizationError(
+                refusal_code(response, payload, "http_error"),
+                "The company refused the pushed authorization request",
+                status_code=response.status_code,
+            )
+        request_uri = payload.get("request_uri") if isinstance(payload, dict) else None
+        expires_in = payload.get("expires_in") if isinstance(payload, dict) else None
+        if (
+            not isinstance(request_uri, str)
+            or not request_uri
+            or not isinstance(expires_in, int)
+            or isinstance(expires_in, bool)
+            or expires_in <= 0
+        ):
+            raise AuthorizationError(
+                "invalid_par_response", "The pushed authorization response is malformed"
+            )
+        return request_uri
 
     @traced("pap.sign_in.direct.complete", before=sign_in_method("direct"), after=sign_in_result)
     async def complete(

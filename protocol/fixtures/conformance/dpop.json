@@ -6,6 +6,11 @@
     "dpop-binding": {
       "dpop_binding": "required",
       "dpop_nonces": true
+    },
+    "pushed-requests": {
+      "dpop_binding": "required",
+      "bind_refresh_tokens": true,
+      "pushed_authorization_requests": "required"
     }
   },
   "cases": [
@@ -422,7 +427,7 @@
       "requirements": [
         "PAP-4.5-01"
       ],
-      "description": "Refresh tokens aren't bound: after the DPoP key is lost a refresh gets a token for a new key, which works, and the old token is refused.",
+      "description": "This company binds access tokens, not refresh tokens: after the DPoP key is lost a refresh gets a token for a new key, which works, and the old token is refused. A company that binds refresh tokens too refuses that refresh (§4.4, dpop.refresh-bound-to-its-key).",
       "world": "dpop-binding"
     },
     {
@@ -522,6 +527,27 @@
       ],
       "world": "dpop-binding",
       "description": "At an issuer that lists DPoP, a server whose metadata doesn't gets a Bearer token and no proof, and accepts it."
+    },
+    {
+      "id": "dpop.refresh-bound-to-its-key",
+      "kind": "recovery",
+      "role": "both",
+      "requirements": [
+        "PAP10-4.4-01"
+      ],
+      "description": "The agent refreshes with the DPoP key it got the refresh token with, every time (§4.4): a company that binds refresh tokens accepts it, rotated tokens included, and refuses a refresh with another key (invalid_grant), so the agent is signed out and signs in again.",
+      "world": "pushed-requests"
+    },
+    {
+      "id": "dpop.pushed-authorization-request",
+      "kind": "positive",
+      "role": "both",
+      "requirements": [
+        "PAP10-4.2-02",
+        "PAP10-4.2-03"
+      ],
+      "description": "A company that requires Pushed Authorization Requests says so in its metadata (§3.2); the agent pushes the request with its client assertion and a DPoP proof and opens the authorization endpoint with client_id and request_uri only, and the sign-in completes; a request that wasn't pushed is refused (§4.2, RFC 9126).",
+      "world": "pushed-requests"
     }
   ]
 }

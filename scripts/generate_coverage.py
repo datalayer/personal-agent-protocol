@@ -5,7 +5,8 @@
 """Generate the protocol coverage reference from the requirement ledger.
 
 `protocol/requirements.yaml` has one entry per normative statement of PAP 0.4 as published
-and Operations version 3, and the Guides' recommendations apart. This script writes one
+and Operations version 3, with what 1.0 as published adds or changes marked `(1.0)`, and the
+Guides' recommendations apart. This script writes one
 page per area under `docs/docs/protocol/coverage/` — every entry with its upstream
 section, normative level, SDK symbols, test IDs and status — and the summary table
 between the markers of `docs/docs/protocol/coverage.mdx`.
@@ -212,7 +213,9 @@ def _section(entry: dict[str, Any]) -> str:
         "browser-control": "Browser Control §",
     }
     prefix = prefixes.get(entry["source"], "§")
-    return f"{prefix}{entry['section']}"
+    # A statement of one version only: 1.0 as published adds or changes it, or 0.4 alone has it.
+    version = f" ({entry['version']})" if entry.get("version") else ""
+    return f"{prefix}{entry['section']}{version}"
 
 
 def _status(entry: dict[str, Any]) -> str:

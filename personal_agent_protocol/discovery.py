@@ -27,6 +27,8 @@ from .models import (
     choose_protocol_version,
     implemented_protocol_versions,
     protected_resource_metadata_url,
+    split_domain,
+    url_domain,
 )
 from .reactor import (
     DISCOVERY_TRANSPORTS,
@@ -72,11 +74,17 @@ class DiscoveryClient:
         timeout: float = 5.0,
         cache_bounds: CacheBounds | None = None,
         protocol_versions: Iterable[str] | None = None,
+        allow_ports: bool = False,
     ) -> None:
         """`protocol_versions` are the protocol versions this Personal Agent implements
-        (§3.4): `SUPPORTED_PROTOCOL_VERSIONS`, the 1.0 draft, by default. Name
-        `PROTOCOL_PROFILE` among them to use Companies that serve only 0.4 as published,
-        such as `("0.4", "1.0")`; the newest compatible version a Company serves is chosen."""
+        (§3.4): `SUPPORTED_PROTOCOL_VERSIONS`, 1.0, by default. Name `PROTOCOL_PROFILE`
+        among them to use Companies that serve only 0.4 as published, such as
+        `("0.4", "1.0")`; the newest compatible version a Company serves is chosen.
+
+        `allow_ports` uses a Company on a port other than 443, such as
+        `shop.example:8443` for testing: from 1.0 its `organization.domain` includes the
+        port (§3.1). Off by default: a Personal Agent uses such a Company only when
+        configured to on purpose."""
 
         if timeout <= 0:
             raise ValueError("timeout must be positive")
@@ -96,6 +104,7 @@ class DiscoveryClient:
         self._timeout = timeout
         self._cache = MetadataCache(reactor, cache_bounds)
         self.protocol_versions = implemented_protocol_versions(protocol_versions)
+        self.allow_ports = allow_ports
 
     async def __aenter__(self) -> DiscoveryClient:
         return self
@@ -147,7 +156,13 @@ class DiscoveryClient:
 
         # The document speaks for the host that served it, after redirects, compared
         # ignoring case and nothing else (§3, §3.1).
-        served_by = (final_url.host or "").lower().rstrip(".")
+        served_by = url_domain(str(final_url)) or ""
+        if split_domain(served_by)[1] is not None and not self.allow_ports:
+            # A Company on another port is used only when configured on purpose (§3.1).
+            raise DiscoveryError(
+                "port_not_allowed",
+                "The company is served on a port other than 443: allow_ports uses it",
+            )
         if document.organization.domain != served_by:
             raise DiscoveryError(
                 "organization_domain_mismatch",
@@ -362,12 +377,20 @@ class DiscoveryClient:
             )
         return metadata
 
-    @staticmethod
-    def _normalize_domain(domain: str) -> str:
-        value = domain.rstrip(".").lower()
+    def _normalize_domain(self, domain: str) -> str:
+        value = domain.lower()
         if "://" in value or "/" in value or not value:
             raise DiscoveryError("invalid_domain", "Discovery requires a DNS domain name")
-        return value
+        try:
+            host, port = split_domain(value)
+        except ValueError as exc:
+            raise DiscoveryError("invalid_domain", "Discovery requires a DNS domain name") from exc
+        if port is not None and not self.allow_ports:
+            raise DiscoveryError(
+                "port_not_allowed", "A domain with a port is used only with allow_ports (§3.1)"
+            )
+        host = host.rstrip(".")
+        return host if port is None else f"{host}:{port}"
 
     async def _get_json(
         self, url: str, *, follow_redirects: bool = True

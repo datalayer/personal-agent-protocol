@@ -111,6 +111,11 @@ export interface Turn {
    * Conversation has no message yet (§8.10). `text` and `data` are then absent.
    */
   readonly opening?: boolean;
+  /**
+   * The context the personal agent's messages in this conversation share (§8.4): each field's
+   * latest value, and none for a field a message set to `null` (from 1.0).
+   */
+  readonly context: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -235,15 +240,30 @@ export interface ClientPolicy {
    * and the agent is served signed out. Without the method, every allowed agent may.
    */
   allowsSignIn?(clientId: string, grantType: string): Promise<boolean>;
+  /**
+   * A sign-in covers every resource the company offers personal agents (§4.5): with this method
+   * a policy may leave a service out, for every agent or by `clientId`, and a token request for
+   * it is `invalid_target`. `resource` is the service's (the MCP server's `url`, the conversation
+   * endpoint), never the default token's. Without the method, every agent gets a token for every
+   * service.
+   */
+  allowsResource?(clientId: string, resource: string): Promise<boolean>;
 }
 
-/** The default policy: any agent with valid identity is welcome, and may sign in. */
+/**
+ * The default policy: any agent with valid identity is welcome, may sign in, and gets tokens for
+ * every service.
+ */
 export class AllowEveryAgent implements ClientPolicy {
   async allows(_clientId: string): Promise<boolean> {
     return true;
   }
 
   async allowsSignIn(_clientId: string, _grantType: string): Promise<boolean> {
+    return true;
+  }
+
+  async allowsResource(_clientId: string, _resource: string): Promise<boolean> {
     return true;
   }
 }

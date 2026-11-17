@@ -119,26 +119,31 @@
           "protocols": [
             {
               "type": "poppy",
-              "endpoint": "https://example.com/poppy"
+              "endpoint": "https://example.com/poppy",
+              "description": "Anything about your orders, returns, account, and our products"
             },
             {
               "type": "poppy",
               "endpoint": "https://example.com/poppy",
+              "description": "Anything about your orders, returns, account, and our products",
               "access": "session"
             },
             {
               "type": "poppy",
               "endpoint": "https://example.com/poppy",
+              "description": "Anything about your orders, returns, account, and our products",
               "access": "signed_in"
             },
             {
               "type": "poppy",
               "endpoint": "https://example.com/poppy",
+              "description": "Anything about your orders, returns, account, and our products",
               "access": "members_only"
             },
             {
               "type": "a2a",
               "endpoint": "https://example.com/poppy",
+              "description": "Anything about your orders, returns, account, and our products",
               "access": "signed_in"
             }
           ]
@@ -221,7 +226,8 @@
           "protocols": [
             {
               "type": "poppy",
-              "endpoint": "https://api.example.com/poppy/conversations"
+              "endpoint": "https://api.example.com/poppy/conversations",
+              "description": "Anything about your orders, returns, account, and our products"
             }
           ]
         },
@@ -341,11 +347,13 @@
           "protocols": [
             {
               "type": "a2a",
-              "endpoint": "https://api.example.com/a2a"
+              "endpoint": "https://api.example.com/a2a",
+              "description": "Anything about your orders, returns, account, and our products"
             },
             {
               "type": "poppy",
-              "endpoint": "https://api.example.com/poppy/conversations"
+              "endpoint": "https://api.example.com/poppy/conversations",
+              "description": "Anything about your orders, returns, account, and our products"
             }
           ]
         }
@@ -1078,7 +1086,8 @@
                 "protocols": [
                   {
                     "type": "poppy",
-                    "endpoint": "https://api.example.com/poppy/conversations"
+                    "endpoint": "https://api.example.com/poppy/conversations",
+                    "description": "Anything about your orders, returns, account, and our products"
                   }
                 ]
               }
@@ -2145,7 +2154,8 @@
           "protocols": [
             {
               "type": "poppy",
-              "endpoint": "https://api.example.com/poppy/conversations"
+              "endpoint": "https://api.example.com/poppy/conversations",
+              "description": "Anything about your orders, returns, account, and our products"
             }
           ]
         }
@@ -2430,6 +2440,281 @@
         "UCP-4-04"
       ],
       "description": "A Company that lists the UCP extension serves its UCP profile at https://{organization.domain}/.well-known/ucp with no redirect; identity linking's scopes are in scopes_supported, and with sign-in it offers Direct Sign-In and private_key_jwt (UCP extension 2 to 4); skipped when it doesn't list the extension."
+    },
+    {
+      "id": "protocol.agent-protocol-description-required",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP10-8.1-01"
+      ],
+      "check": "discovery_document",
+      "description": "From 1.0 every agent.protocols entry has a description of what the agent there can help with (§3.1, §8.1): a 1.0 document whose entry has none is invalid.",
+      "input": {
+        "protocol_version": "1.0",
+        "organization": {
+          "name": "Example",
+          "domain": "example.com"
+        },
+        "agent": {
+          "protocols": [
+            {
+              "type": "poppy",
+              "endpoint": "https://example.com/poppy/conversations"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "valid": false
+      }
+    },
+    {
+      "id": "protocol.agent-protocol-description-not-in-04",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP10-3.4-02"
+      ],
+      "check": "discovery_document",
+      "description": "0.4 as published defines no description: a 0.4 document without one is used as before (§3.4).",
+      "input": {
+        "protocol_version": "0.4",
+        "organization": {
+          "name": "Example",
+          "domain": "example.com"
+        },
+        "agent": {
+          "protocols": [
+            {
+              "type": "poppy",
+              "endpoint": "https://example.com/poppy/conversations"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "valid": true,
+        "conversation_endpoint": "https://example.com/poppy/conversations"
+      }
+    },
+    {
+      "id": "protocol.agent-protocols-described",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP10-8.1-01",
+        "PAP10-3.4-01"
+      ],
+      "description": "At 1.0 every agent.protocols entry of poppy.json has a non-empty description (§3.1, §8.1); the company's 0.4 document, if any, has none, since 0.4 doesn't define it (§3.4). Nothing to check at 0.4."
+    },
+    {
+      "id": "protocol.organization-domain-port",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP10-3.1-01"
+      ],
+      "check": "discovery",
+      "description": "From 1.0 organization.domain includes its port when that isn't 443, and an agent configured to use a company on another port does (§3.1).",
+      "input": {
+        "domain": "shop.example:8443",
+        "allow_ports": true,
+        "responses": {
+          "https://shop.example:8443/.well-known/poppy.json": {
+            "status": 200,
+            "json": {
+              "protocol_version": "1.0",
+              "organization": {
+                "name": "Shop",
+                "domain": "shop.example:8443"
+              },
+              "web": {}
+            }
+          }
+        }
+      },
+      "expect": {
+        "organization_domain": "shop.example:8443"
+      }
+    },
+    {
+      "id": "protocol.organization-domain-port-not-allowed",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP10-3.1-01"
+      ],
+      "check": "discovery",
+      "description": "A company on another port is used only when the agent is configured to on purpose (§3.1).",
+      "input": {
+        "domain": "shop.example:8443",
+        "responses": {
+          "https://shop.example:8443/.well-known/poppy.json": {
+            "status": 200,
+            "json": {
+              "protocol_version": "1.0",
+              "organization": {
+                "name": "Shop",
+                "domain": "shop.example:8443"
+              },
+              "web": {}
+            }
+          }
+        }
+      },
+      "expect": {
+        "error": "port_not_allowed"
+      }
+    },
+    {
+      "id": "protocol.organization-domain-port-other-domain",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP10-3.1-01",
+        "PAP-3.1-02"
+      ],
+      "check": "discovery",
+      "description": "A document on shop.example:8443 speaks for shop.example:8443, not shop.example (§3.1).",
+      "input": {
+        "domain": "shop.example:8443",
+        "allow_ports": true,
+        "responses": {
+          "https://shop.example:8443/.well-known/poppy.json": {
+            "status": 200,
+            "json": {
+              "protocol_version": "1.0",
+              "organization": {
+                "name": "Shop",
+                "domain": "shop.example"
+              },
+              "web": {}
+            }
+          }
+        }
+      },
+      "expect": {
+        "error": "organization_domain_mismatch"
+      }
+    },
+    {
+      "id": "protocol.organization-domain-port-04",
+      "kind": "negative",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP10-3.4-02"
+      ],
+      "check": "discovery_document",
+      "description": "0.4 names a host only: a 0.4 document whose organization.domain has a port is invalid (§3.1, §3.4).",
+      "input": {
+        "protocol_version": "0.4",
+        "organization": {
+          "name": "Shop",
+          "domain": "shop.example:8443"
+        },
+        "web": {}
+      },
+      "expect": {
+        "valid": false
+      }
+    },
+    {
+      "id": "protocol.unknown-role-and-author-type",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-3.3-02",
+        "PAP-3.3-04"
+      ],
+      "check": "message_tolerance",
+      "description": "A role the agent doesn't recognize is content from the Company, and an author.type it doesn't recognize is agent (§8.4).",
+      "input": [
+        {
+          "author": {
+            "type": "organization"
+          },
+          "role": "system",
+          "text": "Hi"
+        },
+        {
+          "author": {
+            "type": "human"
+          },
+          "role": "user",
+          "text": "Me"
+        },
+        {
+          "author": {
+            "type": "agent"
+          },
+          "role": "company",
+          "text": "Us"
+        }
+      ],
+      "expect": {
+        "roles": [
+          "company",
+          "user",
+          "company"
+        ],
+        "author_types": [
+          "agent",
+          "human",
+          "agent"
+        ]
+      }
+    },
+    {
+      "id": "protocol.authorization-error-unknown",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP-8.11-01"
+      ],
+      "check": "authorization_event",
+      "description": "An authorization event with an error the agent doesn't recognize asks it to sign in again for the scopes in scope (§8.11).",
+      "input": {
+        "id": "evt_a1",
+        "type": "authorization",
+        "created_at": "2026-11-14T09:00:00Z",
+        "error": "stronger_sign_in",
+        "scope": "orders:read orders:write"
+      },
+      "expect": {
+        "sign_in_scopes": [
+          "orders:read",
+          "orders:write"
+        ]
+      }
+    },
+    {
+      "id": "protocol.context-cleared",
+      "kind": "positive",
+      "role": "both",
+      "requirements": [
+        "PAP-8.4-02"
+      ],
+      "check": "effective_context",
+      "description": "Context fields a message leaves out keep their values, and a field set to null is cleared, as if never shared (§8.4).",
+      "input": [
+        {
+          "locale": "fr",
+          "time_zone": "Europe/Paris"
+        },
+        {
+          "user_available": true
+        },
+        {
+          "locale": null
+        }
+      ],
+      "expect": {
+        "context": {
+          "time_zone": "Europe/Paris",
+          "user_available": true
+        }
+      }
     }
   ]
 }

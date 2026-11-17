@@ -7,9 +7,11 @@ title: Protocol status
 
 Target: [PAP version 0.4](https://personalagentprotocol.org/docs/0.4/spec) as published
 (upstream `4803900`, November 10, 2026), and the Operations extension version 3 (see [Compatibility](/releases/compatibility/)).
-The [1.0 draft](https://personalagentprotocol.org/docs/spec) as of upstream `c71f515` (November 11, 2026) is implemented
-in Python and TypeScript, and since 0.36.0 it is the default: both roles announce `1.0` unless asked for 0.4 (`protocol_versions`),
-and the advice of its spec 10.3 on lookalike domains (show the domain with the name) applies to every version.
+[Version 1.0](https://personalagentprotocol.org/docs/1.0/spec) as published (upstream `8c02b42`, November 14, 2026) is
+implemented in Python and TypeScript since 0.37.0, and since 0.36.0 1.0 is the default: both roles announce `1.0` unless asked
+for 0.4 (`protocol_versions`). Where 1.0 changes 0.4's rules (descriptions, ports, Pushed Authorization Requests, consent,
+refresh tokens bound to their DPoP key, unknown values), the SDK applies them at 1.0; the advice of its spec 10.3 on
+lookalike domains (show the domain with the name) applies to every version.
 
 | Area                                                                                    | Status                                                                                                                                                     |
 | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |

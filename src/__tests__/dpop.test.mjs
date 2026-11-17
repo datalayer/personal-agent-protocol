@@ -382,6 +382,7 @@ const baseConfig = {
   name: "Shop",
   domain: "shop.example",
   scopes: ["a:read"],
+  agentDescription: "Anything about your account",
   scopeDescriptions: { "a:read": "Read" },
   operations: false,
 };

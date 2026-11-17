@@ -89,6 +89,7 @@ def _reactor(entry: dict[str, Any]) -> PluginPlatform:
             name="Points",
             domain="points.example",
             scopes=("a:read",),
+            agent_description="Anything about your account",
             scope_descriptions={"a:read": "Read"},
             operations=False,
         )

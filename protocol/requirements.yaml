@@ -1,4 +1,4 @@
-# Personal Agent Protocol 0.4 as published (upstream 4803900, frozen text as of ed47408), Operations version 3, Mediated Sign-In and Browser Control version 1: the normative requirement ledger.
+# Personal Agent Protocol 0.4 as published (upstream 4803900, frozen text as of ed47408), Operations version 3, Mediated Sign-In and Browser Control version 1, and what 1.0 as published (upstream 8c02b42) changes: the normative requirement ledger.
 #
 # requirements: every MUST, MUST NOT, SHOULD, and SHOULD NOT of the specification
 # (source: spec, the default), the Operations extension (source: operations), the
@@ -12,13 +12,16 @@
 # run by test_fixtures.py (decided by the SDK) or by the conformance runner
 # (test_conformance.py, against the reference company over TLS).
 # status: implemented | partial | open | not-applicable, with a reason unless implemented.
+# version: '1.0' marks a statement 1.0 as published adds or changes (PAP10-*), and '0.4' one
+# that holds at 0.4 only; an entry without it holds at both versions.
 # test_requirements.py checks every test and case exists.
 
 protocol: personal-agent-protocol
 profile: '0.4'
 upstream_revision: '2026-11-10'
-reviewed: '2026-11-12'
+reviewed: '2026-11-17'
 sources:
+  spec-1.0: https://personalagentprotocol.org/docs/1.0/spec
   spec: https://personalagentprotocol.org/docs/0.4/spec
   operations: https://personalagentprotocol.org/docs/0.4/extensions/operations
   guide: https://personalagentprotocol.org/docs/0.4/guides
@@ -3746,6 +3749,7 @@ requirements:
   - personal_agent_protocol/__tests__/test_ucp.py::test_orders_need_identity_linking_through_this_protocols_sign_in
 - id: UCP-4-06
   source: ucp
+  version: '0.4'
   section: '4'
   level: MUST
   role: company
@@ -3754,8 +3758,9 @@ requirements:
   status: open
   implementation:
   - personal_agent_protocol.company.service:CompanyService._sign_in
-  reason: The reference companies grant the scopes a sign-in asks for; incremental authorization that keeps
-    earlier grants is not implemented, so a Personal Agent asks again for every scope it still needs.
+  reason: 0.4 only. 1.0 replaced it (UCP 4) - the Personal Agent requests every scope it still needs and
+    the Company grants only the scopes the request names, which the reference companies do at every version
+    (ucp_scopes); incremental authorization that keeps earlier grants is not implemented for 0.4.
 - id: UCP-8-01
   source: ucp
   section: '8'
@@ -3877,6 +3882,298 @@ requirements:
   - personal_agent_protocol.demo.manzanita:ManzanitaWebsite
   tests:
   - personal_agent_protocol/__tests__/test_browser_control.py::test_the_company_lists_browser_control_and_the_join_carries_the_declaration
+- id: PAP10-3.1-01
+  version: '1.0'
+  section: '3.1'
+  level: MUST
+  role: both
+  text: domain MUST be the host that serves the document, after any redirects, with its port when that isn't
+    443. Personal Agents use a Company on another port only when configured to on purpose, such as for testing
+    (section 3).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.models:split_domain
+  - personal_agent_protocol.models:DiscoveryDocument.validate_version_fields
+  - personal_agent_protocol.discovery:DiscoveryClient.discover
+  - personal_agent_protocol.company.service:CompanyConfig
+  tests:
+  - personal_agent_protocol/__tests__/test_published_10.py::test_a_domain_names_its_port_when_that_isnt_443_from_10_only
+  - personal_agent_protocol/__tests__/test_published_10.py::test_an_agent_uses_a_company_on_another_port_only_when_configured_to
+  conformance:
+  - protocol.organization-domain-port
+  - protocol.organization-domain-port-not-allowed
+  - protocol.organization-domain-port-other-domain
+- id: PAP10-3.4-01
+  version: '1.0'
+  section: '3.4'
+  level: MUST NOT
+  role: company
+  text: The Company MUST NOT send the Personal Agent a field, value, or event that only a minor version later
+    than the request's Poppy-Version defines.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService.discovery_document
+  tests:
+  - personal_agent_protocol/__tests__/test_published_10.py::test_the_reference_company_describes_its_agent_at_10_and_not_at_04
+  - personal_agent_protocol/__tests__/test_published_10.py::test_nothing_of_10_goes_into_a_04_exchange
+  conformance:
+  - protocol.agent-protocols-described
+- id: PAP10-3.4-02
+  version: '1.0'
+  section: '3.4'
+  level: MUST NOT
+  role: personal-agent
+  text: The Personal Agent MUST NOT send the Company one that only a version later than the chosen document's
+    protocol_version defines.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.conversations:ConversationClient._outgoing_message
+  - personal_agent_protocol.models:clears_context
+  - personal_agent_protocol.models:DiscoveryDocument.validate_version_fields
+  tests:
+  - personal_agent_protocol/__tests__/test_published_10.py::test_nothing_of_10_goes_into_a_04_exchange
+  - personal_agent_protocol/__tests__/test_published_10.py::test_a_10_document_needs_a_description_for_each_conversation_protocol
+  conformance:
+  - protocol.agent-protocol-description-not-in-04
+  - protocol.organization-domain-port-04
+- id: PAP10-4.1-01
+  version: '1.0'
+  section: '4.1'
+  level: MUST
+  role: personal-agent
+  text: Client assertions follow RFC 7523 §3. The Personal Agent MUST include iat and a unique, unguessable
+    jti, and MUST set exp at most 5 minutes after iat.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.sessions:build_client_assertion_claims
+  tests:
+  - personal_agent_protocol/__tests__/test_published_10.py::test_an_assertion_lasts_at_most_five_minutes_and_one_that_does_is_accepted
+- id: PAP10-4.1-02
+  version: '1.0'
+  section: '4.1'
+  level: MUST NOT
+  role: company
+  text: A Company MAY reject a client assertion that lasts longer than 5 minutes, and MUST NOT reject one for
+    lasting 5 minutes or less.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.verify:verify_assertion
+  tests:
+  - personal_agent_protocol/__tests__/test_published_10.py::test_an_assertion_lasts_at_most_five_minutes_and_one_that_does_is_accepted
+- id: PAP10-4.1-03
+  version: '1.0'
+  section: '4.1'
+  level: MUST
+  role: company
+  text: Companies MUST accept client assertions signed with ES256 and with PS384.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.verify:verify_assertion
+  - personal_agent_protocol.company.verify:RSA_KEY_BITS
+  tests:
+  - personal_agent_protocol/__tests__/test_published_10.py::test_companies_accept_ps384_assertions_and_delegations
+  - personal_agent_protocol/__tests__/test_published_10.py::test_an_rsa_key_outside_2048_to_4096_bits_is_refused
+  - personal_agent_protocol/__tests__/test_blind_signing.py::test_a_company_takes_an_agent_that_signs_everything_blindly
+- id: PAP10-4.2-01
+  version: '1.0'
+  section: '4.2'
+  level: MUST
+  role: personal-agent
+  text: Unless the Personal Agent receives the redirect only on the device that opened the authorization URL,
+    as below, the authorization request MUST include prompt=consent (OpenID Connect Core §3.1.2.1).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.auth:build_direct_sign_in_request
+  - personal_agent_protocol.auth:DirectSignInClient.begin
+  - personal_agent_protocol.auth:PROMPT_CONSENT
+  tests:
+  - personal_agent_protocol/__tests__/test_published_10.py::test_a_direct_sign_in_asks_for_consent_unless_the_redirect_stays_on_the_device
+  - personal_agent_protocol/__tests__/test_hosted_pages.py::test_authorize_redirects_to_the_hosted_consent_page_which_reads_the_request
+- id: PAP10-4.2-04
+  version: '1.0'
+  section: '4.2'
+  level: SHOULD
+  role: company
+  text: The Company SHOULD support prompt=consent, whether or not it supports OpenID Connect, and show its
+    consent page for a request that includes it, even when the account already granted every requested scope
+    to the client_id (10.8).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._authorize
+  - personal_agent_protocol.company.service:CompanyService.authorization_request
+  tests:
+  - personal_agent_protocol/__tests__/test_published_10.py::test_the_consent_page_lists_every_scope_and_marks_the_earlier_ones
+  - personal_agent_protocol/__tests__/test_hosted_pages.py::test_authorize_redirects_to_the_hosted_consent_page_which_reads_the_request
+- id: PAP10-4.2-02
+  version: '1.0'
+  section: '4.2'
+  level: MUST
+  role: personal-agent
+  text: A Company MAY require Pushed Authorization Requests (PAR, RFC 9126) by setting require_pushed_authorization_requests
+    to true in its issuer's metadata (3.2). The Personal Agent then MUST send the authorization request's parameters
+    to the pushed_authorization_request_endpoint with its client assertion, and open the authorization_endpoint
+    with only client_id and the request_uri it gets back.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.auth:DirectSignInClient.begin
+  - personal_agent_protocol.auth:DirectSignInClient._push
+  - personal_agent_protocol.auth:DirectSignInRequest.pushed_authorization_url
+  - personal_agent_protocol.models:OAuthServerMetadata
+  - personal_agent_protocol.company.service:CompanyService._pushed_request
+  - personal_agent_protocol.company.service:CompanyConfig
+  tests:
+  - personal_agent_protocol/__tests__/test_published_10.py::test_a_company_offers_or_requires_par_and_the_agent_pushes
+  - personal_agent_protocol/__tests__/test_published_10.py::test_a_company_that_requires_par_takes_nothing_else
+  - personal_agent_protocol/__tests__/test_published_10.py::test_a_push_with_a_dpop_proof_binds_the_code_to_its_key
+  conformance:
+  - dpop.pushed-authorization-request
+- id: PAP10-4.2-03
+  version: '1.0'
+  section: '4.2'
+  level: SHOULD
+  role: personal-agent
+  text: A Personal Agent SHOULD use PAR whenever the metadata lists the endpoint.
+  status: partial
+  reason: DirectSignInClient pushes whenever the host passes the issuer's pushed_authorization_request_endpoint,
+    as the pap CLI and the conformance runner do; a host that calls it without the endpoint doesn't push.
+  implementation:
+  - personal_agent_protocol.auth:DirectSignInClient.begin
+  - personal_agent_protocol.conformance:ConformanceContext.sign_in
+  tests:
+  - personal_agent_protocol/__tests__/test_published_10.py::test_a_company_offers_or_requires_par_and_the_agent_pushes
+  conformance:
+  - dpop.pushed-authorization-request
+- id: PAP10-4.2-05
+  version: '1.0'
+  section: '4.2'
+  level: SHOULD
+  role: personal-agent
+  text: When the Personal Agent sends the User a link to open later, such as on their phone, it SHOULD link
+    to a page of its own that pushes the request when the User opens it and then redirects to the authorization_endpoint.
+  status: partial
+  reason: begin(link_page=...) hands the browser the agent's own page and open_link pushes when it is opened;
+    serving that page and redirecting is the host's.
+  implementation:
+  - personal_agent_protocol.auth:DirectSignInClient.open_link
+  tests:
+  - personal_agent_protocol/__tests__/test_published_10.py::test_a_link_opened_later_goes_to_the_agents_page_which_pushes_then
+- id: PAP10-4.3-01
+  version: '1.0'
+  section: '4.3'
+  level: SHOULD
+  role: company
+  text: The Company SHOULD show its consent page for every request, even when the account already granted every
+    requested scope to the client_id (10.8).
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService.device_request
+  - personal_agent_protocol.company.service:CompanyService.approve_device
+  tests:
+  - personal_agent_protocol/__tests__/test_published_10.py::test_every_device_sign_in_shows_its_page_with_the_earlier_scopes_marked
+- id: PAP10-4.4-01
+  version: '1.0'
+  section: '4.4'
+  level: MUST
+  role: personal-agent
+  text: A Personal Agent that sends a DPoP proof when it gets a refresh token (4.5) MUST send a proof from
+    the same key with every refresh of that refresh token, and of the refresh tokens that replace it.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.crypto:InMemoryDpopKeys
+  - personal_agent_protocol.crypto:JoseDpopProver
+  - personal_agent_protocol.accounts:RefreshTokenClient.refresh
+  - personal_agent_protocol.company.service:CompanyConfig
+  tests:
+  - personal_agent_protocol/__tests__/test_published_10.py::test_a_bound_refresh_token_refreshes_only_with_its_key
+  - personal_agent_protocol/__tests__/test_published_10.py::test_without_binding_a_refresh_with_a_new_key_still_works
+  conformance:
+  - dpop.refresh-bound-to-its-key
+- id: PAP10-4.5-01
+  version: '1.0'
+  section: '4.5'
+  level: MUST
+  role: company
+  text: After a sign-in without resource, the Company MUST issue a token for any resource it offers Personal
+    Agents, at refresh too.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._refresh_grant
+  - personal_agent_protocol.company.service:CompanyService._resource
+  - personal_agent_protocol.company.service:CompanyService._resource_allowed
+  - personal_agent_protocol.accounts:ServiceTokens.token_for
+  tests:
+  - personal_agent_protocol/__tests__/test_published_10.py::test_a_service_left_out_is_invalid_target_and_used_signed_out
+- id: PAP10-4.5-02
+  version: '1.0'
+  section: '4.5'
+  level: SHOULD NOT
+  role: personal-agent
+  text: 'The Personal Agent SHOULD NOT include resource in the request that starts sign-in: if it does, the
+    Company MAY limit the grant to the resources it names, as RFC 8707 §2.2 allows.'
+  status: implemented
+  implementation:
+  - personal_agent_protocol.auth:build_direct_sign_in_request
+  - personal_agent_protocol.device:DeviceSignInClient.begin
+  tests:
+  - personal_agent_protocol/__tests__/test_published_10.py::test_a_direct_sign_in_asks_for_consent_unless_the_redirect_stays_on_the_device
+- id: PAP10-5.2-01
+  version: '1.0'
+  section: '5.2'
+  level: MUST
+  role: company
+  text: alg is ES256 or PS384. Companies MUST accept delegations signed with ES256 and with PS384.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.verify:verify_delegation
+  tests:
+  - personal_agent_protocol/__tests__/test_published_10.py::test_companies_accept_ps384_assertions_and_delegations
+- id: PAP10-8.1-01
+  version: '1.0'
+  section: '8.1'
+  level: MUST
+  role: company
+  text: An entry's description says, in plain language, what the agent at that endpoint can help with. The
+    Company MUST include a description in every entry, and MAY say the agent can help with anything.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyConfig
+  - personal_agent_protocol.company.service:CompanyService.discovery_document
+  - personal_agent_protocol.models:AgentProtocol
+  - personal_agent_protocol.models:DiscoveryDocument.validate_version_fields
+  tests:
+  - personal_agent_protocol/__tests__/test_published_10.py::test_a_10_document_needs_a_description_for_each_conversation_protocol
+  - personal_agent_protocol/__tests__/test_published_10.py::test_the_reference_company_describes_its_agent_at_10_and_not_at_04
+  conformance:
+  - protocol.agent-protocol-description-required
+  - protocol.agent-protocols-described
+- id: PAP10-8.6-01
+  version: '1.0'
+  section: '8.6'
+  level: MUST
+  role: personal-agent
+  text: Personal Agents MUST skip stream events with an SSE event name they don't recognize, so later versions
+    and extensions can add them.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.conversations:ConversationClient.stream
+  tests:
+  - personal_agent_protocol/__tests__/test_published_10.py::test_a_stream_skips_event_names_it_doesnt_know
+- id: PAP10-10.8-01
+  version: '1.0'
+  section: '10.8'
+  level: MUST
+  role: company
+  text: In Direct and Device Sign-In, the Company's consent page MUST list every scope it will grant, except
+    a poppy:browser-sign-in it MAY grant without asking (section 6). It MAY mark the ones the User already
+    granted.
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService._authorize
+  - personal_agent_protocol.company.service:CompanyService.authorization_request
+  - personal_agent_protocol.company.service:CompanyService.device_request
+  tests:
+  - personal_agent_protocol/__tests__/test_published_10.py::test_the_consent_page_lists_every_scope_and_marks_the_earlier_ones
+  - personal_agent_protocol/__tests__/test_published_10.py::test_every_device_sign_in_shows_its_page_with_the_earlier_scopes_marked
 guide:
 - id: GUIDE-secrets-01
   source: guide

@@ -45,7 +45,7 @@ const pointOf = (entry) => (entry.role === "company" ? server : portable)[entry.
 
 function reactorFor(entry, plugins = []) {
   if (entry.role === "company") {
-    const config = new server.CompanyConfig({ name: "Points", domain: "points.example", scopes: ["a:read"], scopeDescriptions: { "a:read": "Read" }, operations: false });
+    const config = new server.CompanyConfig({ name: "Points", domain: "points.example", scopes: ["a:read"], agentDescription: "Anything about your account", scopeDescriptions: { "a:read": "Read" }, operations: false });
     return server.buildCompany(config, { plugins }).reactor;
   }
   return portable.buildPapReactor({}, plugins);

@@ -19,7 +19,7 @@ from reactor import PluginPlatform  # type: ignore[import-untyped]
 from .auth import _https_url, _scopes
 from .errors import AuthorizationError, ProtocolValidationError
 from .json import loads_strict
-from .models import Organization, ProtocolModel
+from .models import Organization, ProtocolModel, domain_host
 from .reactor import (
     AUTHORIZATION_STATE_STORES,
     CLOCKS,
@@ -82,7 +82,8 @@ def verification_host_allowed(url: str, *, issuer: str, domain: str) -> bool:
     """
 
     host = _host(url)
-    allowed = [_host(issuer), domain.lower().rstrip(".")]
+    # The host of `organization.domain`, without the port it names from 1.0 (§3.1).
+    allowed = [_host(issuer), domain_host(domain)]
     return bool(host) and any(name and _within(host, name) for name in allowed)
 
 

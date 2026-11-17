@@ -41,7 +41,7 @@ from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Protocol, cast, runtime_checkable
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit
 from xml.etree import ElementTree
 
 import httpx
@@ -57,7 +57,7 @@ from .accounts import (
     stale_resource_metadata,
 )
 from .apis import ApiClient, ApiError, conversation_endpoint, openapi_url
-from .auth import DirectSignInClient
+from .auth import DirectSignInClient, build_direct_sign_in_request
 from .browser import BrowserSessionClient
 from .conversations import ConversationClient, TextDelta
 from .crypto import (
@@ -93,6 +93,7 @@ from .models import (
     TasksResponse,
     implemented_protocol_versions,
     operations_content,
+    parse_version,
 )
 from .operations import (
     APPROVAL_HEADER,
@@ -607,6 +608,9 @@ class ConformanceContext:
             tenant_id=self.tenant_id,
             dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
             pairwise_user_id=session.sub,
+            # Pushed whenever the issuer takes PAR, as 1.0 asks (§4.2, RFC 9126).
+            pushed_authorization_request_endpoint=metadata.pushed_authorization_request_endpoint,
+            require_pushed_authorization_requests=metadata.require_pushed_authorization_requests,
         )
         callback = await self.driver.approve_authorization(
             actor.user_browser.urls[-1],
@@ -2814,6 +2818,27 @@ async def _version_unserved(ctx: ConformanceContext, _: FixtureCase) -> None:
     expect_refusal(response, 400, "version_unsupported", "an unserved Poppy-Version")
 
 
+@case("protocol.agent-protocols-described")
+async def _agent_protocols_described(ctx: ConformanceContext, _: FixtureCase) -> None:
+    """At 1.0 each conversation protocol says what its agent helps with (§3.1, §8.1)."""
+
+    company = await ctx.company()
+    if parse_version(company.document.protocol_version)[0] < 1:
+        raise SkipCase("0.4 defines no description")
+    raw = (await ctx.send("GET", company.discovery_url)).json()
+    entries = (raw.get("agent") or {}).get("protocols") or []
+    if not entries:
+        raise SkipCase("the company lists no conversation protocol")
+    for entry in entries:
+        description = entry.get("description")
+        check(isinstance(description, str) and description, "every entry has a description")
+    for version, url in (raw.get("supported_versions") or {}).items():
+        if parse_version(version)[0] < 1:
+            document = (await ctx.send("GET", url)).json()
+            for entry in (document.get("agent") or {}).get("protocols") or []:
+                check("description" not in entry, f"{version}: nothing 1.0 adds (§3.4)")
+
+
 @case("protocol.supported-versions-published")
 async def _supported_versions_published(ctx: ConformanceContext, _: FixtureCase) -> None:
     """Each version `poppy.json` lists is served as §3.4 says; nothing to check when none is."""
@@ -3680,6 +3705,61 @@ async def _dpop_key_lost(ctx: ConformanceContext, _: FixtureCase) -> None:
     _proof_refused(stale, "the token of the lost key")
 
 
+@case("dpop.refresh-bound-to-its-key")
+async def _dpop_refresh_bound(ctx: ConformanceContext, _: FixtureCase) -> None:
+    """The agent refreshes with the key it signed in with (§4.4); a company that binds
+    refresh tokens refuses another key, rotated tokens included."""
+
+    signed, url = await _bound(ctx)
+    context = await ctx.account_context(signed.session.sub)
+    for turn in ("first", "second"):
+        refreshed = await ctx.agent.accounts.refresh(signed.reference, context=context)
+        check(refreshed.status == "signed_in", f"the {turn} refresh with the same key works")
+    token = cast(AccessToken, refreshed.token)
+    answer = await ctx.agent.transport.request("GET", url, session=signed.session, token=token)
+    check(answer.status_code == 200, f"its token works, got {answer.status_code}")
+    metadata = await ctx.metadata()
+    await _prover(ctx).keys.forget(
+        tenant_id=ctx.tenant_id, issuer=metadata.issuer, sub=signed.session.sub
+    )
+    lost = await ctx.agent.accounts.refresh(signed.reference, context=context)
+    check(lost.status == "signed_out", "a refresh with another key is invalid_grant")
+    again = await ctx.sign_in(signed.session.sub, signed.session)
+    check(again.token.token_type == "DPoP", "and the agent signs in again")  # noqa: S105
+
+
+@case("dpop.pushed-authorization-request")
+async def _dpop_pushed(ctx: ConformanceContext, _: FixtureCase) -> None:
+    """Pushed Authorization Requests, required (§3.2, §4.2, RFC 9126)."""
+
+    metadata = await ctx.metadata()
+    if metadata.pushed_authorization_request_endpoint is None:
+        raise SkipCase("the company takes no Pushed Authorization Requests")
+    check(metadata.offers_direct, "PAR is for Direct Sign-In")
+    if not metadata.require_pushed_authorization_requests:
+        raise SkipCase("the company offers PAR without requiring it")
+    if "direct_sign_in" not in ctx.driver.capabilities:
+        raise SkipCase("the driver can't play the user on the company's consent page")
+    await _signed_in_user(ctx)  # pushed, as the SDK does when it's offered
+    opened = urlsplit(ctx.agent.user_browser.urls[-1])
+    names = {name for name, _ in parse_qsl(opened.query)}
+    check(names == {"client_id", "request_uri"}, f"only client_id and request_uri, got {names}")
+    request = build_direct_sign_in_request(
+        authorization_endpoint=cast(str, metadata.authorization_endpoint),
+        issuer=metadata.issuer,
+        client_id=ctx.agent.identity.client_id,
+        redirect_uri=str(ctx.agent.identity.metadata["redirect_uris"][0]),
+        scopes=ctx.scenario.scopes,
+    )
+    unpushed = await ctx.send("GET", request.authorization_url.get_secret_value())
+    location = unpushed.headers.get("location", "")
+    check(
+        unpushed.status_code >= 400 or "code=" not in location,
+        f"a request that wasn't pushed is refused, got {unpushed.status_code}",
+    )
+    check("request_id" not in unpushed.text, "no consent page for it")
+
+
 @case("dpop.conversation-and-stream")
 async def _dpop_conversation(ctx: ConformanceContext, _: FixtureCase) -> None:
     signed, _url = await _bound(ctx)
@@ -3995,7 +4075,16 @@ async def _no_fallback_issuer(ctx: ConformanceContext, fixture: FixtureCase) -> 
 async def _sign_in_without_issuer(ctx: ConformanceContext, fixture: FixtureCase) -> None:
     served = (await ctx.company()).document.model_dump(mode="json", exclude_none=True)
     endpoint = await ctx.conversations_endpoint()
-    agent = {"protocols": [{"type": "poppy", "endpoint": endpoint, "access": "signed_in"}]}
+    agent = {
+        "protocols": [
+            {
+                "type": "poppy",
+                "endpoint": endpoint,
+                "description": "Anything about your account",
+                "access": "signed_in",
+            }
+        ]
+    }
     inner = ctx.http._transport
     for offers in (
         {"auth": {"issuer": ctx.base_url}},

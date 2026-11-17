@@ -113,8 +113,10 @@ and the company sends nothing there that it cannot share with the agent.
 ## Where a conversation stands (§8.7)
 
 Every read and every receipt reports the conversation's state in four fields,
-each independent of the others: `working` (the company has work in progress: a
-request it accepted but hasn't acted on, a reply being written), `handoff`
+each independent of the others: `working` (the company is still replying: a
+request it accepted but hasn't acted on, or a reply being written; since 1.0 not
+work it finishes later, such as a refund that takes days, which it says in a
+message and follows with another when done), `handoff`
 (`pending` while it looks for a person), `responder` (`agent` or `human`), and
 `closed`. A successful `POST` only means the company accepted the request, so
 `working` is `true` from that moment; `ConversationClient.read_until_done`

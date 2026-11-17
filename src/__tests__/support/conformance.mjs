@@ -67,6 +67,7 @@ import {
   TokenStores,
   TransportError,
   approvalHeader,
+  buildDirectSignInRequest,
   buildPapReactor,
   challengeParameters,
   companyIdentifier,
@@ -80,6 +81,7 @@ import {
   tasksEndpoint,
   parseTasksResponse,
   parseApprovalDeclined,
+  parseVersion,
   usableSkills,
   operationShown,
   newApprovalReference,
@@ -489,6 +491,9 @@ export class Context {
       tenantId: this.tenantId,
       dpopSigningAlgs: metadata.dpop_signing_alg_values_supported,
       pairwiseUserId: session.sub,
+      // Pushed whenever the issuer takes PAR, as 1.0 asks (§4.2, RFC 9126).
+      pushedAuthorizationRequestEndpoint: metadata.pushed_authorization_request_endpoint,
+      requirePushedAuthorizationRequests: metadata.require_pushed_authorization_requests,
     });
     const callbackUrl = await this.driver.approveAuthorization(actor.userBrowser.urls.at(-1), {
       account: account ?? this.driver.accounts[0],
@@ -2042,6 +2047,26 @@ caseFor("protocol.version-unserved")(async (ctx) => {
   await expectRefusal(response, 400, "version_unsupported", "an unserved Poppy-Version");
 });
 
+caseFor("protocol.agent-protocols-described")(async (ctx) => {
+  // At 1.0 each conversation protocol says what its agent helps with (§3.1, §8.1).
+  const company = await ctx.company();
+  if (parseVersion(company.document.protocol_version)[0] < 1) throw new SkipCase("0.4 defines no description");
+  const raw = await (await ctx.send("GET", company.discoveryUrl)).json();
+  const entries = raw.agent?.protocols ?? [];
+  if (!entries.length) throw new SkipCase("the company lists no conversation protocol");
+  for (const entry of entries) {
+    check(typeof entry.description === "string" && entry.description.length > 0, "every entry has a description");
+  }
+  for (const [version, url] of Object.entries(raw.supported_versions ?? {})) {
+    if (parseVersion(version)[0] < 1) {
+      const document = await (await ctx.send("GET", url)).json();
+      for (const entry of document.agent?.protocols ?? []) {
+        check(!("description" in entry), `${version}: nothing 1.0 adds (§3.4)`);
+      }
+    }
+  }
+});
+
 caseFor("protocol.supported-versions-published")(async (ctx) => {
   const company = await ctx.company();
   const preferred = await (await ctx.send("GET", company.discoveryUrl)).json();
@@ -2669,6 +2694,60 @@ caseFor("dpop.refresh-after-the-key-is-lost")(async (ctx) => {
   await proofRefused(stale, "the token of the lost key");
 });
 
+caseFor("dpop.refresh-bound-to-its-key")(async (ctx) => {
+  // The agent refreshes with the key it signed in with (§4.4); a company that binds refresh
+  // tokens refuses another key, rotated tokens included.
+  const [signed, url] = await boundUser(ctx);
+  const context = await ctx.accountContext(signed.session.sub);
+  let refreshed;
+  for (const turn of ["first", "second"]) {
+    refreshed = await ctx.agent.accounts.refresh(signed.reference, { context });
+    check(refreshed.status === "signed_in", `the ${turn} refresh with the same key works`);
+  }
+  const answer = await ctx.agent.transport.request("GET", url, { session: signed.session, token: refreshed.token });
+  check(answer.status === 200, `its token works, got ${answer.status}`);
+  const metadata = await ctx.metadata();
+  await prover(ctx).keys.forget({ tenantId: ctx.tenantId, issuer: metadata.issuer, sub: signed.session.sub });
+  const lost = await ctx.agent.accounts.refresh(signed.reference, { context });
+  check(lost.status === "signed_out", "a refresh with another key is invalid_grant");
+  const again = await ctx.signIn(signed.session.sub, signed.session);
+  check(again.token.tokenType === "DPoP", "and the agent signs in again");
+});
+
+caseFor("dpop.pushed-authorization-request")(async (ctx) => {
+  // Pushed Authorization Requests, required (§3.2, §4.2, RFC 9126).
+  const metadata = await ctx.metadata();
+  if (metadata.pushed_authorization_request_endpoint === undefined) {
+    throw new SkipCase("the company takes no Pushed Authorization Requests");
+  }
+  check(offersDirect(metadata), "PAR is for Direct Sign-In");
+  if (!metadata.require_pushed_authorization_requests) throw new SkipCase("the company offers PAR without requiring it");
+  if (!ctx.driver.capabilities.has("direct_sign_in")) {
+    throw new SkipCase("the driver can't play the user on the company's consent page");
+  }
+  await signedInUser(ctx); // pushed, as the SDK does when it's offered
+  const opened = new URL(ctx.agent.userBrowser.urls.at(-1));
+  const names = new Set(opened.searchParams.keys());
+  check(
+    names.size === 2 && names.has("client_id") && names.has("request_uri"),
+    `only client_id and request_uri, got ${[...names].join(", ")}`,
+  );
+  const request = await buildDirectSignInRequest({
+    authorizationEndpoint: metadata.authorization_endpoint,
+    issuer: metadata.issuer,
+    clientId: ctx.agent.identity.clientId,
+    redirectUri: ctx.agent.identity.metadata.redirect_uris[0],
+    scopes: ctx.scenario.scopes,
+  });
+  const unpushed = await ctx.send("GET", request.authorizationUrl.reveal());
+  const location = unpushed.headers.get("location") ?? "";
+  check(
+    unpushed.status >= 400 || !location.includes("code="),
+    `a request that wasn't pushed is refused, got ${unpushed.status}`,
+  );
+  check(!(await textOf(unpushed)).includes("request_id"), "no consent page for it");
+});
+
 caseFor("dpop.conversation-and-stream")(async (ctx) => {
   const [signed] = await boundUser(ctx);
   const endpoint = await ctx.conversationsEndpoint();
@@ -2894,7 +2973,7 @@ caseFor("no-issuer.sign-in-offered-without-issuer")(async (ctx, fixture) => {
   const endpoint = await ctx.conversationsEndpoint();
   for (const offers of [
     { auth: { issuer: ctx.baseUrl } },
-    { agent: { protocols: [{ type: "poppy", endpoint, access: "signed_in" }] } },
+    { agent: { protocols: [{ type: "poppy", endpoint, description: "Anything about your account", access: "signed_in" }] } },
     { extensions: { "mediated-sign-in": [{ version: "1" }] } },
   ]) {
     const answer = jsonAnswer(200, { ...company.document, ...offers });

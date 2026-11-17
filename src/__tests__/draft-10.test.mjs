@@ -80,7 +80,7 @@ const hello = () => ({ id: `req_draft10_${String((requests += 1)).padStart(10, "
 // Protocol version 1.0, the default (§3.1, §3.4) --------------------------------------
 
 test("the draft is the default and the published version is available", () => {
-  assert.deepEqual([PROTOCOL_PROFILE, DRAFT_PROTOCOL_VERSION, DRAFT_PROTOCOL_REVISION], ["0.4", "1.0", "2026-11-11"]);
+  assert.deepEqual([PROTOCOL_PROFILE, DRAFT_PROTOCOL_VERSION, DRAFT_PROTOCOL_REVISION], ["0.4", "1.0", "2026-11-14"]);
   assert.equal(DEFAULT_PROTOCOL_VERSION, DRAFT_PROTOCOL_VERSION);
   assert.deepEqual([...SUPPORTED_PROTOCOL_VERSIONS], ["1.0"]);
   assert.deepEqual([...AVAILABLE_PROTOCOL_VERSIONS].sort(), ["0.4", "1.0"]);

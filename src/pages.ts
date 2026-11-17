@@ -45,7 +45,7 @@
  */
 import { TransportError } from "./errors.js";
 import { readLimited } from "./limits.js";
-import type { DiscoveredCompany, DiscoveryDocument } from "./models.js";
+import { urlDomain, type DiscoveredCompany, type DiscoveryDocument } from "./models.js";
 import { UrlSafetyPolicies, optionalContribution } from "./reactor.js";
 import { REDIRECT_STATUSES } from "./refusals.js";
 import type { PapSession } from "./sessions.js";
@@ -72,22 +72,11 @@ export interface FetchedPage {
 
 /**
  * Whether a page fetch carries the Session header (§5.2): an HTTPS URL whose host is exactly
- * `organization.domain`, compared ignoring case, on the default port.
+ * `organization.domain`, compared ignoring case, on its port: 443, or from 1.0 the one the
+ * domain names (§3.1).
  */
 export function pageCarriesSession(url: string, domain: string): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return false;
-  }
-  return (
-    parsed.protocol === "https:" &&
-    parsed.hostname.toLowerCase() === domain.toLowerCase().replace(/\.+$/, "") &&
-    parsed.port === "" &&
-    !parsed.username &&
-    !parsed.password
-  );
+  return urlDomain(url) === domain.toLowerCase().replace(/\.+$/, "");
 }
 
 /** A URL's origin and path: what names a document, whatever its query. */

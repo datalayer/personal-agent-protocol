@@ -7,17 +7,68 @@
 import type { ReactorPlatformView } from "@datalayer/reactor";
 
 import { AuthorizationError } from "./errors.js";
+import { parseJsonStrict } from "./json.js";
+import { readLimitedText } from "./limits.js";
 import { isLoopbackRedirect } from "./models.js";
 import { SecretValue } from "./secret.js";
-import { SessionClient, finishSignIn, provesWithDpop, type RandomBytes, type SignInResult } from "./sessions.js";
+import {
+  DPOP_HEADER,
+  DPOP_NONCE_HEADER,
+  SessionClient,
+  finishSignIn,
+  provesWithDpop,
+  type RandomBytes,
+  type SignInResult,
+} from "./sessions.js";
 import {
   AuthorizationStateStores,
   BrowserHandoffs,
   Clocks,
+  DpopProvers,
   RandomSources,
   firstContribution,
 } from "./reactor.js";
+import { refusalCode, refuseRedirect, refusedWithoutBody } from "./refusals.js";
 import { byIssuer, signInResult, traced } from "./telemetry.js";
+
+/** The parameters a Direct Sign-In request sets: an endpoint's own values for them are dropped. */
+const AUTHORIZATION_PARAMETERS = [
+  "response_type",
+  "client_id",
+  "redirect_uri",
+  "scope",
+  "state",
+  "code_challenge",
+  "code_challenge_method",
+  "prompt",
+  "request_uri",
+] as const;
+
+/**
+ * The OpenID Connect `prompt` a Direct Sign-In request carries (OpenID Connect Core §3.1.2.1,
+ * §4.2): the Company shows its consent page even when the account granted every scope to the
+ * `client_id` before (§10.8).
+ */
+export const PROMPT_CONSENT = "consent";
+
+/** The authorization endpoint with none of the parameters a Direct Sign-In request sets. */
+function bareEndpoint(endpoint: string): URL {
+  const url = new URL(endpoint);
+  for (const name of AUTHORIZATION_PARAMETERS) url.searchParams.delete(name);
+  url.hash = "";
+  return url;
+}
+
+/**
+ * The authorization URL after a push (RFC 9126 §4): `client_id` and `request_uri` only, on the
+ * authorization endpoint.
+ */
+function pushedUrl(authorizationEndpoint: string, clientId: string, requestUri: string): SecretValue {
+  const url = bareEndpoint(authorizationEndpoint);
+  url.searchParams.append("client_id", clientId);
+  url.searchParams.append("request_uri", requestUri);
+  return new SecretValue(url.toString());
+}
 
 function defaultRandomBytes(length: number): Uint8Array {
   if (!globalThis.crypto) {
@@ -90,8 +141,21 @@ export interface DirectSignInOptions {
   readonly redirectUri: string;
   readonly scopes: readonly string[];
   readonly randomBytes?: RandomBytes;
+  /**
+   * Add `prompt=consent` (§4.2, §10.8): a request MUST carry it unless the Personal Agent
+   * receives the redirect only on the device that opened the authorization URL; only then is it
+   * `false`. Default `true`.
+   */
+  readonly promptConsent?: boolean;
 }
 
+/**
+ * Authorization request state; its URL and PKCE values are secrets.
+ *
+ * `authorizationUrl` carries every parameter; `parameters`, the same parameters form encoded, is
+ * what a Pushed Authorization Request sends (RFC 9126, §4.2), after which the browser opens
+ * `pushedAuthorizationUrl(requestUri)` with only `client_id` and `request_uri`.
+ */
 export interface DirectSignInRequest {
   readonly authorizationUrl: SecretValue;
   readonly issuer: string;
@@ -100,8 +164,25 @@ export interface DirectSignInRequest {
   readonly scopes: readonly string[];
   readonly state: SecretValue;
   readonly codeVerifier: SecretValue;
+  /** The authorization endpoint, as given. */
+  readonly authorizationEndpoint: string;
+  /** The request's parameters, form encoded: what a push sends (RFC 9126 §2.1). */
+  readonly parameters: SecretValue;
+  /**
+   * The authorization URL after a push (RFC 9126 §4): `client_id` and `requestUri` only, on the
+   * authorization endpoint.
+   */
+  pushedAuthorizationUrl(requestUri: string): SecretValue;
 }
 
+/**
+ * Build a user-browser authorization URL with random state and S256 PKCE (§4.2).
+ *
+ * Plain OAuth: the sign-in names no Session, and any of the User's Sessions uses the tokens it
+ * returns (§5.4). It names no `resource` either: one sign-in covers every service the Company
+ * offers, and each token request names one (§4.5). It carries `prompt=consent` unless
+ * `promptConsent` is `false` (§4.2, §10.8).
+ */
 export async function buildDirectSignInRequest(
   options: DirectSignInOptions,
 ): Promise<DirectSignInRequest> {
@@ -122,22 +203,30 @@ export async function buildDirectSignInRequest(
   // Kept exactly as written: the callback's `iss` is compared character for character (§3.2).
   httpsUrl(options.issuer, "issuer");
   const issuer = options.issuer;
-  endpoint.searchParams.set("response_type", "code");
-  endpoint.searchParams.set("client_id", clientId);
-  endpoint.searchParams.set("redirect_uri", redirectUri);
-  endpoint.searchParams.set("scope", scopes.join(" "));
-  endpoint.searchParams.set("state", state);
-  endpoint.searchParams.set("code_challenge", challenge);
-  endpoint.searchParams.set("code_challenge_method", "S256");
-  endpoint.hash = "";
+  const parameters: [string, string][] = [
+    ["response_type", "code"],
+    ["client_id", clientId],
+    ["redirect_uri", redirectUri],
+    ["scope", scopes.join(" ")],
+    ["state", state],
+    ["code_challenge", challenge],
+    ["code_challenge_method", "S256"],
+  ];
+  if (options.promptConsent !== false) parameters.push(["prompt", PROMPT_CONSENT]);
+  const url = bareEndpoint(endpoint.toString());
+  for (const [name, value] of parameters) url.searchParams.append(name, value);
+  const authorizationEndpoint = endpoint.toString();
   return {
-    authorizationUrl: new SecretValue(endpoint.toString()),
+    authorizationUrl: new SecretValue(url.toString()),
     issuer,
     clientId,
     redirectUri,
     scopes,
     state: new SecretValue(state),
     codeVerifier: new SecretValue(verifier),
+    authorizationEndpoint,
+    parameters: new SecretValue(new URLSearchParams(parameters).toString()),
+    pushedAuthorizationUrl: (requestUri: string) => pushedUrl(authorizationEndpoint, clientId, requestUri),
   };
 }
 
@@ -210,6 +299,8 @@ interface PendingDirectSignIn {
   readonly expiresAt: Date;
   readonly dpopSigningAlgs: readonly string[] | undefined;
   readonly pairwiseUserId: string | undefined;
+  /** Where the request is pushed (RFC 9126), when it is: each opening pushes it again. */
+  readonly pushedAuthorizationRequestEndpoint: string | undefined;
 }
 
 export interface DirectSignInStart {
@@ -232,7 +323,7 @@ export const CROSS_DEVICE_LIFETIME_SECONDS = 300;
 export type DirectSignInResult = SignInResult;
 
 /** Plain OAuth: the sign-in names no Session, and any of the User's Sessions uses its tokens (§5.4). */
-export interface DirectSignInBeginOptions extends DirectSignInOptions {
+export interface DirectSignInBeginOptions extends Omit<DirectSignInOptions, "promptConsent"> {
   readonly tokenEndpoint: string;
   readonly tenantId: string;
   /** How long the one-use state lives: 600 seconds by default, 300 at most with `crossDevice`. */
@@ -254,6 +345,32 @@ export interface DirectSignInBeginOptions extends DirectSignInOptions {
   readonly dpopSigningAlgs?: readonly string[] | undefined;
   /** The User ID the sign-in is for: its DPoP key proves the code exchange (§4.5). */
   readonly pairwiseUserId?: string | undefined;
+  /**
+   * The host receives the redirect only on the device that opened the URL (a loopback
+   * `redirectUri`, or its own app signed in as the User who started): only then does the request
+   * go without `prompt=consent`, which otherwise has the Company show its consent page even for
+   * scopes the account granted before (§4.2, §10.8).
+   */
+  readonly sameDeviceRedirect?: boolean;
+  /**
+   * The issuer's `pushed_authorization_request_endpoint` (RFC 9126, §3.2): the request is pushed
+   * there with a client assertion, and a DPoP proof when tokens are bound, and the browser opens
+   * the authorization endpoint with only `client_id` and `request_uri` (§4.2: a SHOULD whenever
+   * it is listed, a MUST when required).
+   */
+  readonly pushedAuthorizationRequestEndpoint?: string | undefined;
+  /**
+   * The issuer's `require_pushed_authorization_requests`: refused (`RangeError`) without
+   * `pushedAuthorizationRequestEndpoint`, before anything is sent (RFC 9126 §5).
+   */
+  readonly requirePushedAuthorizationRequests?: boolean;
+  /**
+   * The agent's own page for a link the User opens later, an HTTPS URL with `{link}`: a
+   * `request_uri` expires quickly, so the browser handoff gets this page, and the page calls
+   * `openLink(link)` when opened, which pushes the request and returns the authorization URL to
+   * redirect to (§4.2).
+   */
+  readonly linkPage?: string;
 }
 
 export interface DirectSignInCompleteOptions {
@@ -290,6 +407,29 @@ async function stateReference(state: string): Promise<string> {
   ).join("")}`;
 }
 
+/** A sign-in link's key in the authorization state store: its digest, never the link. */
+async function linkReference(link: string): Promise<string> {
+  if ([...link].some((character) => character.charCodeAt(0) > 0x7f)) {
+    throw new AuthorizationError("invalid_or_expired_state", "The sign-in link is invalid");
+  }
+  const cryptoApi = globalThis.crypto;
+  if (!cryptoApi) {
+    throw new AuthorizationError("crypto_unavailable", "Web Crypto is required");
+  }
+  const digest = await cryptoApi.subtle.digest("SHA-256", new TextEncoder().encode(link));
+  return `direct-link:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+/** A response's JSON body, or `undefined` when it has none that parses. */
+function jsonBody(response: Response, text: string): unknown {
+  if (response.headers.get("content-type")?.split(";", 1)[0]?.trim() !== "application/json") return undefined;
+  try {
+    return parseJsonStrict(text);
+  } catch {
+    return undefined;
+  }
+}
+
 function callbackState(callbackUrl: string): string {
   const callback = redirectUrl(callbackUrl, "callbackUrl");
   if (callback.hash) {
@@ -322,6 +462,8 @@ function isPendingDirectSignIn(value: unknown): value is PendingDirectSignIn {
 export class DirectSignInClient {
   readonly #reactor: ReactorPlatformView;
   readonly #sessions: SessionClient;
+  readonly #fetch: typeof globalThis.fetch;
+  readonly #maxResponseBytes: number;
 
   constructor(options: DirectSignInClientOptions) {
     const fetcher = options.fetch ?? globalThis.fetch;
@@ -333,6 +475,8 @@ export class DirectSignInClient {
       throw new RangeError("maxResponseBytes must be a positive integer");
     }
     this.#reactor = options.reactor;
+    this.#fetch = fetcher;
+    this.#maxResponseBytes = maxResponseBytes;
     this.#sessions = new SessionClient({
       reactor: options.reactor,
       fetch: fetcher,
@@ -360,6 +504,18 @@ export class DirectSignInClient {
     if (!options.tenantId || options.tenantId.length > 256) {
       throw new RangeError("tenantId must contain between 1 and 256 characters");
     }
+    if (options.requirePushedAuthorizationRequests === true && options.pushedAuthorizationRequestEndpoint === undefined) {
+      throw new RangeError("a Company that requires PAR lists where to push (RFC 9126 §5)");
+    }
+    const linkPage = options.linkPage;
+    if (linkPage !== undefined) {
+      if (!linkPage.includes("{link}")) throw new RangeError("linkPage is an HTTPS URL with {link}");
+      httpsUrl(linkPage.replaceAll("{link}", "x"), "linkPage");
+    }
+    const pushedEndpoint =
+      options.pushedAuthorizationRequestEndpoint === undefined
+        ? undefined
+        : httpsUrl(options.pushedAuthorizationRequestEndpoint, "pushedAuthorizationRequestEndpoint").toString();
     provesWithDpop(options.dpopSigningAlgs, options.pairwiseUserId);
     const clock = firstContribution(this.#reactor, Clocks, "clock");
     const random = firstContribution(this.#reactor, RandomSources, "random source");
@@ -376,6 +532,7 @@ export class DirectSignInClient {
       redirectUri: options.redirectUri,
       scopes: options.scopes,
       randomBytes: (length) => random.bytes(length),
+      promptConsent: options.sameDeviceRedirect !== true,
     });
     const tokenEndpoint = httpsUrl(options.tokenEndpoint, "tokenEndpoint").toString();
     const expiresAt = new Date(clock.now().getTime() + lifetimeSeconds * 1000);
@@ -388,15 +545,139 @@ export class DirectSignInClient {
       expiresAt,
       dpopSigningAlgs: options.dpopSigningAlgs,
       pairwiseUserId: options.pairwiseUserId,
+      pushedAuthorizationRequestEndpoint: pushedEndpoint,
     };
     await store.put(reference, pending, { expiresAt });
+    let link: string | undefined;
+    let opened: SecretValue;
     try {
-      await browser.open(request.authorizationUrl);
+      if (linkPage !== undefined) {
+        link = base64Url(entropy(16, (length) => random.bytes(length)));
+        await store.put(await linkReference(link), reference, { expiresAt });
+        opened = new SecretValue(linkPage.replaceAll("{link}", link));
+      } else {
+        opened = await this.#authorizationUrl(pending);
+      }
+    } catch (error) {
+      await store.take(reference);
+      if (link !== undefined) await store.take(await linkReference(link));
+      throw error;
+    }
+    try {
+      await browser.open(opened);
     } catch (cause) {
       await store.take(reference);
+      if (link !== undefined) await store.take(await linkReference(link));
       throw new AuthorizationError("browser_handoff_failed", "Browser handoff failed", { cause });
     }
     return { expiresAt, requestedScopes: request.scopes, crossDevice };
+  }
+
+  /**
+   * The authorization URL for a sign-in link the User opened on the agent's own page
+   * (`begin({ linkPage })`, §4.2): the request pushed now when the Company takes PAR, so its
+   * short-lived `request_uri` is fresh, else the full URL. The page redirects the browser there.
+   * A link may be opened again until the sign-in completes or expires; `AuthorizationError`
+   * (`invalid_or_expired_state`) for an unknown or expired one.
+   */
+  async openLink(link: string): Promise<SecretValue> {
+    const store = firstContribution(this.#reactor, AuthorizationStateStores, "authorization state store");
+    const clock = firstContribution(this.#reactor, Clocks, "clock");
+    const linkKey = await linkReference(link);
+    const reference = await store.take(linkKey);
+    const pending = typeof reference === "string" ? await store.take(reference) : undefined;
+    if (!isPendingDirectSignIn(pending) || clock.now().getTime() > pending.expiresAt.getTime()) {
+      throw new AuthorizationError("invalid_or_expired_state", "The sign-in link is unknown or has expired");
+    }
+    await store.put(reference as string, pending, { expiresAt: pending.expiresAt });
+    await store.put(linkKey, reference, { expiresAt: pending.expiresAt });
+    return this.#authorizationUrl(pending);
+  }
+
+  /** The URL the browser opens: after a push when the Company takes PAR (§4.2). */
+  async #authorizationUrl(pending: PendingDirectSignIn): Promise<SecretValue> {
+    if (pending.pushedAuthorizationRequestEndpoint === undefined) return pending.request.authorizationUrl;
+    const request = pending.request;
+    return pushedUrl(request.authorizationEndpoint, request.clientId, await this.#push(pending));
+  }
+
+  /**
+   * Push the request (RFC 9126 §2): its parameters, a fresh client assertion, and a DPoP proof
+   * when tokens are bound, so the code is bound to the key (RFC 9449 §10.1); a `use_dpop_nonce`
+   * refusal is retried once. The `request_uri`.
+   */
+  async #push(pending: PendingDirectSignIn): Promise<string> {
+    const request = pending.request;
+    const endpoint = pending.pushedAuthorizationRequestEndpoint as string;
+    const proves = provesWithDpop(pending.dpopSigningAlgs, pending.pairwiseUserId);
+    let nonce: string | undefined;
+    let response: Response;
+    let payload: unknown;
+    while (true) {
+      const body = new URLSearchParams(request.parameters.reveal());
+      for (const [name, value] of Object.entries(
+        await this.#sessions.clientAuthentication({ clientId: request.clientId, issuer: request.issuer }),
+      )) {
+        body.set(name, value);
+      }
+      const headers: Record<string, string> = { Accept: "application/json" };
+      if (proves) {
+        const proof = await firstContribution(this.#reactor, DpopProvers, "DPoP prover").prove({
+          method: "POST",
+          url: endpoint,
+          tenantId: pending.tenantId,
+          issuer: request.issuer,
+          sub: pending.pairwiseUserId as string,
+          ...(nonce === undefined ? {} : { nonce }),
+        });
+        headers[DPOP_HEADER] = proof.reveal();
+      }
+      try {
+        response = await this.#fetch(endpoint, {
+          method: "POST",
+          headers,
+          body,
+          credentials: "omit",
+          redirect: "manual",
+        });
+      } catch (cause) {
+        throw new AuthorizationError("request_failed", "Pushed authorization failed", { cause });
+      }
+      await refuseRedirect(response, AuthorizationError);
+      const text = await readLimitedText(response, this.#maxResponseBytes);
+      if (new TextEncoder().encode(text).byteLength > this.#maxResponseBytes) {
+        throw new AuthorizationError("response_too_large", "Pushed authorization response exceeds size limit", {
+          statusCode: response.status,
+        });
+      }
+      payload = refusedWithoutBody(response, text) ? undefined : jsonBody(response, text);
+      const given = response.headers.get(DPOP_NONCE_HEADER);
+      if (
+        proves &&
+        nonce === undefined &&
+        given !== null &&
+        response.status === 400 &&
+        (payload as { error?: unknown } | undefined)?.error === "use_dpop_nonce"
+      ) {
+        nonce = given;
+        continue;
+      }
+      break;
+    }
+    if (response.status !== 200 && response.status !== 201) {
+      throw new AuthorizationError(
+        refusalCode(response, payload, "http_error"),
+        "The company refused the pushed authorization request",
+        { statusCode: response.status },
+      );
+    }
+    const answer = (typeof payload === "object" && payload !== null ? payload : {}) as Record<string, unknown>;
+    const requestUri = answer.request_uri;
+    const expiresIn = answer.expires_in;
+    if (typeof requestUri !== "string" || !requestUri || !Number.isInteger(expiresIn) || (expiresIn as number) <= 0) {
+      throw new AuthorizationError("invalid_par_response", "The pushed authorization response is malformed");
+    }
+    return requestUri;
   }
 
   complete(options: DirectSignInCompleteOptions): Promise<DirectSignInResult> {

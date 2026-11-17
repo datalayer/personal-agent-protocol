@@ -73,6 +73,7 @@ CONFIG = CompanyConfig(
     name="Juniper Library",
     domain=DOMAIN,
     scopes=("loans:read", "loans:write"),
+    agent_description="Anything about your account",
     write_scopes=("loans:write",),
     # The library's own scopes, each described in words a user and a model understand
     # (`auth.scopes`), with what its most consequential operation changes and whether it

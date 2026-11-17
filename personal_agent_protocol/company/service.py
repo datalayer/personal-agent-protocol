@@ -122,9 +122,12 @@ from ..models import (
     Message,
     Operation,
     compatible_versions,
+    domain_host,
+    effective_context,
     operations_content,
     parse_version,
     redirect_uri_matches,
+    split_domain,
 )
 from ..operations import (
     ACTION_FAILED,
@@ -222,6 +225,7 @@ from .store import (
     MEDIATED,
     OPERATION,
     PROPOSAL,
+    PUSHED_REQUEST,
     REFRESH_TOKEN,
     REQUEST_ID,
     SESSION,
@@ -246,6 +250,7 @@ from .store import (
     PendingAuthorization,
     PendingDevice,
     PendingMediated,
+    PushedAuthorization,
     RequestReceipt,
     SignInAttempts,
     StoredConversation,
@@ -374,6 +379,10 @@ class CompanyConfig:
     name: str
     domain: str
     scopes: tuple[str, ...]
+    #: What the Company Agent can help with, in plain language: the `description` of its
+    #: `agent.protocols` entry (§3.1, §8.1), which a 1.0 document requires. It may say the
+    #: agent can help with anything.
+    agent_description: str
     write_scopes: tuple[str, ...] = ()
     #: Mediated Sign-In's `fields`: `(name, label, secret)`. None, it isn't offered.
     mediated_fields: tuple[tuple[str, str, bool], ...] = ()
@@ -414,6 +423,17 @@ class CompanyConfig:
     access_token_lifetime: timedelta = timedelta(hours=1)
     #: How long a sign-in's refresh tokens work (§4.4).
     refresh_token_lifetime: timedelta = timedelta(days=90)
+    #: Bind each refresh token to the DPoP key of the request that issued it, and the
+    #: tokens rotated from it (§4.4, a MAY from 1.0): a refresh whose proof is missing or
+    #: by another key is `invalid_grant`. Off by default; needs `dpop_binding`.
+    bind_refresh_tokens: bool = False
+    #: Pushed Authorization Requests for Direct Sign-In (RFC 9126, §4.2, a MAY from 1.0):
+    #: `offered` lists `pushed_authorization_request_endpoint` (`/oauth/par`), and
+    #: `required` also sets `require_pushed_authorization_requests`, so the authorization
+    #: endpoint takes only a `request_uri` the agent pushed. Off by default.
+    pushed_authorization_requests: Literal["off", "offered", "required"] = "off"
+    #: How long a pushed request's `request_uri` lasts (RFC 9126 §2.2: briefly).
+    pushed_request_lifetime: timedelta = timedelta(seconds=60)
     #: A refresh token used again after it was rotated ends its whole sign-in, as RFC 9700
     #: §4.14.2 describes (guides, *Token lifetimes*): if a refresh token was copied, the grant
     #: ends as soon as both copies have been used. Off by default.
@@ -538,6 +558,14 @@ class CompanyConfig:
             raise ValueError("protocol_versions lists each version the company serves once")
         for version in self.protocol_versions:
             parse_version(version)
+        if not self.agent_description.strip():
+            # Every conversation protocol says what its agent helps with (§3.1, §8.1).
+            raise ValueError("agent_description says what the Company Agent can help with")
+        if split_domain(self.domain)[1] is not None and any(
+            parse_version(version)[0] < 1 for version in self.protocol_versions
+        ):
+            # A domain names its port when that isn't 443 from 1.0 only (§3.1).
+            raise ValueError("a domain with a port is served at 1.0 or later only")
         if any(version not in self.protocol_versions for version in self.deprecated_versions):
             raise ValueError("deprecated_versions are served versions")
         _check_positive(
@@ -549,7 +577,14 @@ class CompanyConfig:
             dpop_nonce_lifetime=self.dpop_nonce_lifetime,
             dpop_proof_window=self.dpop_proof_window,
             operator_signature_window=self.operator_signature_window,
+            pushed_request_lifetime=self.pushed_request_lifetime,
         )
+        if self.pushed_authorization_requests not in ("off", "offered", "required"):
+            raise ValueError("pushed_authorization_requests is off, offered or required")
+        if self.pushed_authorization_requests != "off" and not self.direct:
+            raise ValueError("pushed_authorization_requests are Direct Sign-In's: direct is on")
+        if self.bind_refresh_tokens and self.dpop_binding == "off":
+            raise ValueError("bind_refresh_tokens needs dpop_binding")
         if not self.oauth and (
             self.mediated_fields or self.operations or self.aliases or self.dpop_binding != "off"
         ):
@@ -580,7 +615,8 @@ class CompanyConfig:
             raise ValueError("consent_page must contain {request_id}")
         if self.device_page is not None:
             host = (urlsplit(self.device_page).hostname or "").lower()
-            if not (host == self.domain or host.endswith(f".{self.domain}")):
+            own = domain_host(self.domain)
+            if not (host == own or host.endswith(f".{own}")):
                 # A personal agent shows the link only on the issuer's host or
                 # `organization.domain`, or a subdomain of either (§4.3). The issuer is on
                 # `domain`, and an agent that found the company at an alias knows only that
@@ -662,6 +698,10 @@ class CompanyConfig:
     @property
     def device_endpoint(self) -> str:
         return f"{self.base}/oauth/device"
+
+    @property
+    def pushed_authorization_request_endpoint(self) -> str:
+        return f"{self.base}/oauth/par"
 
     @property
     def authorization_endpoint(self) -> str:
@@ -1012,10 +1052,23 @@ def _wait(request: CompanyRequest) -> int | None:
 
 def _incoming(value: object, request_id: str) -> Message:
     """A message as the personal agent sent it (§8.4): its ID is its request's, and a
-    `role` or `id` it set is ignored."""
+    `role` or `id` it set is ignored, as are `author.id`, `name` and `image`, which only
+    Company messages have (a later version may define them here)."""
 
     message = Message.model_validate(value)
-    return message.model_copy(update={"role": None, "id": request_id})
+    author = Author(type=message.author.type)
+    return message.model_copy(update={"role": None, "id": request_id, "author": author})
+
+
+def _shared_context(conversation: StoredConversation) -> dict[str, Any]:
+    """The context the personal agent's messages in a conversation share (§8.4)."""
+
+    return effective_context(
+        Message.model_validate(event.payload["message"])
+        for event in conversation.events
+        if event.payload.get("type") == "message"
+        and event.payload.get("message", {}).get("role") == "user"
+    )
 
 
 def _request_id(body: Mapping[str, Any]) -> str:
@@ -1355,6 +1408,12 @@ class CompanyService:
                 return await self._token(request)
             if method == "GET" and path == "/oauth/authorize" and self.config.direct:
                 return await self._authorize(request)
+            if (
+                method == "POST"
+                and path == "/oauth/par"
+                and self.config.pushed_authorization_requests != "off"
+            ):
+                return await self._pushed_request(request)
             if method == "GET" and path == "/api/openapi.json" and self._api() is not None:
                 return CompanyResponse(200, cast(CompanyApi, self._api()).openapi())
             if path.startswith("/api/") and self._api() is not None:
@@ -1534,10 +1593,16 @@ class CompanyService:
         """
         config = self.config
         organization = config.organization_domain(domain)
+        protocol_version = version or config.preferred_version
+        poppy: dict[str, Any] = {"type": "poppy", "endpoint": config.conversations_endpoint}
+        if parse_version(protocol_version)[0] >= 1:
+            # 1.0 requires it (§3.1, §8.1); 0.4 doesn't define it, so its document leaves it
+            # out: each side sends only what the other's version defines (§3.4).
+            poppy["description"] = config.agent_description
         document: dict[str, Any] = {
-            "protocol_version": version or config.preferred_version,
+            "protocol_version": protocol_version,
             "organization": {"name": config.name, "domain": organization},
-            "agent": {"protocols": [{"type": "poppy", "endpoint": config.conversations_endpoint}]},
+            "agent": {"protocols": [poppy]},
         }
         if version is None and len(config.protocol_versions) > 1:
             document["supported_versions"] = {
@@ -1723,6 +1788,13 @@ class CompanyService:
             grants.append(AUTHORIZATION_CODE_GRANT)
             metadata["authorization_endpoint"] = config.authorization_endpoint
             metadata["code_challenge_methods_supported"] = ["S256"]
+        if config.pushed_authorization_requests != "off":
+            # RFC 9126 §5 (§3.2, §4.2): where to push, and whether Direct Sign-In needs it.
+            metadata["pushed_authorization_request_endpoint"] = (
+                config.pushed_authorization_request_endpoint
+            )
+            if config.pushed_authorization_requests == "required":
+                metadata["require_pushed_authorization_requests"] = True
         if config.device:
             grants.append(DEVICE_CODE_GRANT)
             metadata["device_authorization_endpoint"] = config.device_endpoint
@@ -1847,8 +1919,12 @@ class CompanyService:
             # unverified (§3.2).
             raise _RefusedError(400, "invalid_grant")
         client_id = await self._client(form)
+        resource = self._resource(form)
+        if resource is not None and not await self._resource_allowed(client_id, resource):
+            # A service the company leaves out, for every agent or this one (§4.5).
+            raise _RefusedError(400, "invalid_target")
         # Before any grant is used: a proof refused spends no code.
-        jkt = await self._token_binding(request, self._resource(form))
+        jkt = await self._token_binding(request, resource)
         if grant == REFRESH_TOKEN_GRANT:
             return await self._refresh_grant(form, client_id, jkt)
         if grant == AUTHORIZATION_CODE_GRANT and self.config.direct:
@@ -1929,11 +2005,21 @@ class CompanyService:
     async def _dpop_nonce_given(self, nonce: str | None) -> bool:
         return nonce is not None and await self.store.get(DPOP_NONCE, nonce) is not None
 
+    async def _resource_allowed(self, client_id: str, resource: str) -> bool:
+        """Whether the client policy offers this agent a token for this service (§4.5):
+        `allows_resource`, when the policy has it; every service otherwise."""
+
+        policy = first_contribution(self.reactor, CLIENT_POLICIES, "policy")
+        decide = getattr(policy, "allows_resource", None)
+        return True if decide is None else bool(await decide(client_id, resource))
+
     def _resource(self, form: Mapping[str, str]) -> str | None:
         """The `resource` a token is issued for (RFC 8707, §4.5): one this company serves.
 
         `https://{domain}` (or an alias's) is the default token's, `None`; the MCP
-        server's `url` gets a token for it alone; anything else is `invalid_target`.
+        server's `url` gets a token for it alone; anything else is `invalid_target`. A
+        sign-in names no resource and covers every one, those added after it too: each
+        token request, the one that completes the sign-in or a refresh, names one.
         """
 
         resource = form.get("resource")
@@ -1981,6 +2067,12 @@ class CompanyService:
         ):
             raise _RefusedError(400, "invalid_grant")
         if await self._sign_in_ended(grant):
+            raise _RefusedError(400, "invalid_grant")
+        if grant.dpop_jkt is not None and (
+            jkt is None or not hmac.compare_digest(jkt, grant.dpop_jkt)
+        ):
+            # Bound to the key it was issued with (§4.4): a copied refresh token is useless
+            # with any other, and nothing is issued for it.
             raise _RefusedError(400, "invalid_grant")
         requested = tuple(scope for scope in form.get("scope", "").split(" ") if scope)
         if requested and any(scope not in grant.scopes for scope in requested):
@@ -2106,13 +2198,17 @@ class CompanyService:
             raise KeyError("unknown or already approved user code")
         return changed[1].granted
 
-    async def device_request(self, user_code: str) -> dict[str, Any]:
+    async def device_request(
+        self, user_code: str, *, account_id: str | None = None
+    ) -> dict[str, Any]:
         """A pending Device Sign-In request, for the company's verification page to show;
         not consumed.
 
         Who asks (the agent's `client_name` and its `client_id` domain), with the
         `heading` and `caution` the page starts with (§10.8), and for what. Raises
-        `KeyError` for an unknown, expired, approved or denied code.
+        `KeyError` for an unknown, expired, approved or denied code. The page is shown for
+        every Device Sign-In and lists every scope, those the account granted before too
+        (§4.3, §10.8): with `account_id`, each says whether it did (`granted_before`).
         """
 
         pointer = await self._read(USER_CODE, user_code, UserCode.from_json)
@@ -2137,10 +2233,12 @@ class CompanyService:
             "client_domain": urlsplit(pending.client_id).hostname or "",
             "heading": connect_heading(metadata.client_name, self.config.name),
             "caution": connect_caution(metadata.client_name),
-            "scopes": [
-                {"scope": scope, "description": self.config.describe(scope)}
-                for scope in pending.scopes
-            ],
+            "scopes": self._consent_scopes(
+                pending.scopes,
+                None
+                if account_id is None
+                else await self._granted_before(pending.client_id, account_id),
+            ),
             "expires_at": pending.expires_at.isoformat().replace("+00:00", "Z"),
         }
 
@@ -2384,6 +2482,7 @@ class CompanyService:
                 expires_at=expires_at,
                 family=family,
                 signed_in_at=self._now(),
+                dpop_jkt=jkt if self.config.bind_refresh_tokens else None,
             ).to_json(),
             expires_at=expires_at,
         )
@@ -2434,9 +2533,9 @@ class CompanyService:
     ) -> CompanyResponse:
         """A token response (§4.7): an access token, and the refresh token if any.
 
-        Bearer, or `DPoP` bound to the key `jkt` names; a refresh token is never bound
-        (RFC 9449 §5). `scope` follows RFC 6749: left out when it grants exactly the
-        scopes requested.
+        Bearer, or `DPoP` bound to the key `jkt` names. A refresh token is bound to that
+        key only with `bind_refresh_tokens` (§4.4), recorded with its grant. `scope`
+        follows RFC 6749: left out when it grants exactly the scopes requested.
         """
 
         access_token = self._id("at")
@@ -2506,10 +2605,101 @@ class CompanyService:
 
     # Direct Sign-In (§4.5) -------------------------------------------------------------
 
-    async def _authorize(self, request: CompanyRequest) -> CompanyResponse:
-        """The company's own sign-in and consent page for a personal agent's request."""
+    async def _pushed_request(self, request: CompanyRequest) -> CompanyResponse:
+        """`POST /oauth/par` (RFC 9126, §4.2): an authorization request's parameters, pushed
+        with the agent's client assertion, and a DPoP proof when it sends them (RFC 9449
+        §10.1). Checked as the authorization endpoint would check them; answered with a
+        one-use `request_uri` that lasts `pushed_request_lifetime`.
+        """
+
+        form = dict(parse_qsl(request.body.decode()))
+        if "request_uri" in form:
+            # A pushed request can't name another (RFC 9126 §2.1).
+            raise _RefusedError(400, "invalid_request")
+        client_id = await self._client(form)
+        jkt = (
+            await self._dpop_proof(request, status=400)
+            if request.headers.get("dpop") and self.config.dpop_binding != "off"
+            else None
+        )
+        resolver = cast(
+            ClientResolver, first_contribution(self.reactor, CLIENT_RESOLVERS, "client")
+        )
+        metadata, _ = await resolver.resolve(client_id)
+        redirect_uri = form.get("redirect_uri", "")
+        if not any(redirect_uri_matches(entry, redirect_uri) for entry in metadata.redirect_uris):
+            raise _RefusedError(400, "invalid_request")
+        scopes = tuple(scope for scope in form.get("scope", "").split(" ") if scope)
+        if form.get("response_type") != "code":
+            raise _RefusedError(400, "unsupported_response_type")
+        if form.get("code_challenge_method") != "S256" or not form.get("code_challenge"):
+            raise _RefusedError(400, "invalid_request")
+        if not scopes or any(scope not in self.config.offered_scopes for scope in scopes):
+            raise _RefusedError(400, "invalid_scope")
+        if not await self._sign_in_allowed(client_id, AUTHORIZATION_CODE_GRANT):
+            raise _RefusedError(400, "unauthorized_client")
+        parameters = {
+            name: value
+            for name, value in form.items()
+            if name not in {"client_assertion", "client_assertion_type"}
+        }
+        request_uri = f"urn:ietf:params:oauth:request_uri:{self._id('par')}"
+        expires_at = self._now() + self.config.pushed_request_lifetime
+        await self.store.put(
+            PUSHED_REQUEST,
+            request_uri,
+            PushedAuthorization(
+                client_id=client_id, parameters=parameters, expires_at=expires_at, dpop_jkt=jkt
+            ).to_json(),
+            expires_at=expires_at,
+        )
+        return CompanyResponse(
+            201,
+            {
+                "request_uri": request_uri,
+                "expires_in": int(self.config.pushed_request_lifetime.total_seconds()),
+            },
+            {"Cache-Control": "no-store"},
+        )
+
+    async def _pushed_parameters(
+        self, query: Mapping[str, str]
+    ) -> tuple[dict[str, str], str | None] | None:
+        """The authorization request a `request_uri` names, taken once, and the DPoP key
+        that pushed it (RFC 9126 §4); `None` for an unknown, used or expired one, or one
+        another agent pushed. Every other query parameter but `client_id` is ignored."""
+
+        taken = await self.store.take(PUSHED_REQUEST, query.get("request_uri", ""))
+        pushed = None if taken is None else PushedAuthorization.from_json(taken)
+        if (
+            pushed is None
+            or self._now() >= pushed.expires_at
+            or pushed.client_id != query.get("client_id")
+        ):
+            return None
+        return pushed.parameters, pushed.dpop_jkt
+
+    async def _authorize(  # noqa: C901 - the checks of §4.2, then the page
+        self, request: CompanyRequest
+    ) -> CompanyResponse:
+        """The company's own sign-in and consent page for a personal agent's request.
+
+        With `pushed_authorization_requests`, a `request_uri` the agent pushed stands for
+        the request (RFC 9126 §4); `required` takes nothing else. The page lists every
+        scope the sign-in would grant and is shown for every request, `prompt=consent` or
+        not, even when the account granted every scope before (§4.2, §10.8).
+        """
 
         query = dict(parse_qsl(urlsplit(request.url).query))
+        pushed_by: str | None = None
+        if "request_uri" in query and self.config.pushed_authorization_requests != "off":
+            pushed = await self._pushed_parameters(query)
+            if pushed is None:
+                return self._page(400, "This sign-in request is not valid or has expired.")
+            query, pushed_by = pushed
+        elif self.config.pushed_authorization_requests == "required":
+            # Only a pushed request (RFC 9126 §5): nothing the browser carried is trusted.
+            return self._page(400, "This sign-in request is not valid.")
         client_id = query.get("client_id", "")
         redirect_uri = query.get("redirect_uri", "")
         if not client_id or not await self._allowed(client_id):
@@ -2560,6 +2750,8 @@ class CompanyService:
                 expires_at=expires_at,
                 client_name=metadata.client_name,
                 browser_binding=None if hosted is not None else _digest(browser),
+                prompt=query.get("prompt"),
+                dpop_jkt=pushed_by,
             ).to_json(),
             expires_at=expires_at,
         )
@@ -2628,18 +2820,31 @@ class CompanyService:
             raise refused
         return ConsentDecision(request_id=request_id, allow=form["decision"] == "allow")
 
-    async def authorization_request(self, request_id: str) -> dict[str, Any]:
+    async def authorization_request(
+        self, request_id: str, *, account_id: str | None = None
+    ) -> dict[str, Any]:
         """A pending Direct Sign-In request, for a consent page to show; not consumed.
 
         Who asks (the agent's `client_name` and its `client_id` domain), for what
-        (each requested scope with its `custom_scopes` words), until when. No
-        `state`, PKCE challenge, or redirect: nothing that helps answer it.
-        Raises `KeyError` for an unknown, used, or expired request.
+        (each requested scope with its `custom_scopes` words), until when, and the
+        request's `prompt`. No `state`, PKCE challenge, or redirect: nothing that helps
+        answer it. Raises `KeyError` for an unknown, used, or expired request.
+
+        The page lists every scope in `scopes`, the ones the account granted this agent
+        before too, and is shown even when it granted them all (§4.2, §10.8): every User
+        of an agent shares its `client_id`. With `account_id`, the person signed in on
+        the page, each scope says whether that account granted it to this `client_id`
+        before (`granted_before`), which the page MAY mark.
         """
 
         pending = await self._read(AUTHORIZATION, request_id, PendingAuthorization.from_json)
         if pending is None or self._now() >= pending.expires_at:
             raise KeyError("unknown, used, or expired sign-in request")
+        before = (
+            await self._granted_before(pending.client_id, account_id)
+            if account_id is not None
+            else None
+        )
         return {
             "request_id": request_id,
             "client_name": pending.client_name,
@@ -2647,12 +2852,42 @@ class CompanyService:
             # What the page starts with and says before the person goes on (§10.8).
             "heading": connect_heading(pending.client_name, self.config.name),
             "caution": connect_caution(pending.client_name),
-            "scopes": [
-                {"scope": scope, "description": self.config.describe(scope)}
-                for scope in pending.scopes
-            ],
+            "scopes": self._consent_scopes(pending.scopes, before),
+            "prompt": pending.prompt,
             "expires_at": pending.expires_at.isoformat().replace("+00:00", "Z"),
         }
+
+    def _consent_scopes(
+        self, scopes: Sequence[str], before: frozenset[str] | None
+    ) -> list[dict[str, Any]]:
+        """Every scope a sign-in would grant, for its consent page (§10.8), each marked
+        `granted_before` when the account's earlier grants are known."""
+
+        return [
+            {
+                "scope": scope,
+                "description": self.config.describe(scope),
+                **({} if before is None else {"granted_before": scope in before}),
+            }
+            for scope in scopes
+        ]
+
+    async def _granted_before(self, client_id: str, account_id: str) -> frozenset[str]:
+        """The scopes the account's live sign-ins granted this `client_id` (§10.8)."""
+
+        agent = await self._read(
+            ACCOUNT_AGENT, _composite(client_id, account_id), AccountAgent.from_json
+        )
+        granted: set[str] = set()
+        for family_id in () if agent is None else agent.families:
+            family = await self._read(ACCOUNT_FAMILY, family_id, AccountFamily.from_json)
+            if family is None or family.revoked:
+                continue
+            for token in family.tokens:
+                grant = await self._read(REFRESH_TOKEN, token, AccountGrant.from_json)
+                if grant is not None and not grant.revoked and self._now() < grant.expires_at:
+                    granted.update(grant.scopes)
+        return frozenset(granted)
 
     async def approve_authorization(
         self, request_id: str, *, account_id: str, scopes: Sequence[str] | None = None
@@ -2677,6 +2912,7 @@ class CompanyService:
                 account_id=account_id,
                 scopes=granted,
                 expires_at=expires_at,
+                dpop_jkt=pending.dpop_jkt,
             ).to_json(),
             expires_at=expires_at,
         )
@@ -2715,6 +2951,11 @@ class CompanyService:
             b"="
         )
         if not hmac.compare_digest(challenge.decode(), issued.code_challenge):
+            raise _RefusedError(400, "invalid_grant")
+        if issued.dpop_jkt is not None and (
+            jkt is None or not hmac.compare_digest(jkt, issued.dpop_jkt)
+        ):
+            # Pushed with a DPoP proof, the code is bound to its key (RFC 9449 §10.1).
             raise _RefusedError(400, "invalid_grant")
         return await self._sign_in(
             client_id,
@@ -3825,6 +4066,7 @@ class CompanyService:
                     client_id=session.client_id,
                     is_direct=conversation.parent_id is not None,
                     supports_operations=negotiated,
+                    context=_shared_context(conversation),
                 )
             )
             for reply in replies:

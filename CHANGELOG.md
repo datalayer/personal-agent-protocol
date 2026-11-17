@@ -6,6 +6,80 @@
 
 # Changelog
 
+## 0.37.0 (2026-11-17)
+
+Version 1.0 **as published** (upstream `8c02b42`, frozen 2026-11-14; reviewed through
+`6764732`, whose later commits restructure the site and change no normative text), the
+default version, in both SDKs and both reference companies. **Breaking**: see the
+[0.36 → 0.37 migration](https://personal-agent-protocol.datalayer.tech/releases/migration/#036--037).
+0.4 as published is unchanged: where 1.0 changes a rule, the SDK applies it at 1.0 only.
+
+- **Conversation protocol descriptions** (spec 3.1, 8.1, UCP 5). `AgentProtocol.description`;
+  `DiscoveryDocument` (`parseDiscoveryDocument`) refuses a 1.0 document whose
+  `agent.protocols` entry has none. `CompanyConfig.agent_description` (`agentDescription`) is
+  required and goes in the 1.0 document only.
+- **Pushed Authorization Requests** (spec 3.2, 4.2, 4.8; RFC 9126).
+  `OAuthServerMetadata.require_pushed_authorization_requests`; `DirectSignInClient.begin`
+  pushes when given `pushed_authorization_request_endpoint` (and must when
+  `require_pushed_authorization_requests`), with a client assertion and a DPoP proof when
+  tokens are bound, and opens the authorization endpoint with `client_id` and `request_uri`
+  only; `link_page` and `open_link(link)` push when a link opened later is opened
+  (TypeScript `pushedAuthorizationRequestEndpoint`, `requirePushedAuthorizationRequests`,
+  `linkPage`, `openLink`). The `pap` CLI and the conformance runner push whenever the issuer
+  lists the endpoint. A company offers or requires it with
+  `CompanyConfig.pushed_authorization_requests` (`"off"`, the default, `"offered"`,
+  `"required"`): `POST /oauth/par`, a one-use `request_uri`, the code bound to the pushing
+  DPoP key.
+- **Minor versions** (spec 3.4). Nothing 1.0 adds goes into a 0.4 exchange: a 0.4 document
+  has no description and no port, and a 0.4 Session sends no `null` context
+  (`context_clear_unsupported`).
+- **PS384 required** (spec 4.1, 5.2, 10.7). Both reference companies accept `PS384` and
+  `ES256` client assertions and delegations, and now refuse RSA keys outside 2048 to 4096
+  bits (`RSA_KEY_BITS`).
+- **Consent for scopes granted before** (spec 4.2, 4.3, 10.8, 11). Direct Sign-In requests
+  carry `prompt=consent` (`PROMPT_CONSENT`) unless `same_device_redirect`
+  (`sameDeviceRedirect`). The reference companies show their consent page for every Direct
+  and Device Sign-In, list every scope, and with `account_id` mark each scope
+  `granted_before` in `authorization_request` and `device_request`, which also give `prompt`.
+- **Same DPoP key at refresh** (spec 4.4, 4.5, 4.8, 10.7). The agent keeps one DPoP key per
+  User ID across refreshes, as before. `CompanyConfig.bind_refresh_tokens`
+  (`bindRefreshTokens`) binds refresh tokens to the issuing request's key, rotated ones too:
+  another key is `invalid_grant`.
+- **UCP scope requests** (UCP 4, 11). `ucp_scopes(profile, held, needed=, protocol_version=)`
+  (`ucpScopes`) requests every scope still needed at 1.0, the missing ones at 0.4; the
+  reference companies grant only the scopes a request names.
+- **Ports in `organization.domain`** (spec 3.1, 3.2). A 1.0 domain includes its port when that
+  isn't 443, also in `protected_resources`; `DiscoveryClient(allow_ports=True)`
+  (`allowPorts`) uses such a company, refused otherwise (`port_not_allowed`). `split_domain`,
+  `domain_host`, `url_domain` (`splitDomain`, `domainHost`, `urlDomain`); a company serves a
+  domain with a port at 1.0 only.
+- **Client assertion lifetime** (spec 4.1). Already the rule: the SDK's assertions last 60
+  seconds, at most 300, and the reference companies accept up to five minutes.
+- **One sign-in for every resource** (spec 4.5, 4.7, 4.8, 7). Already so on both sides (no
+  `resource` at sign-in, one per token request). New: a client policy's
+  `allows_resource(client_id, resource)` (`allowsResource`) leaves a service out
+  (`invalid_target`), and `ServiceTokens` then uses it signed out.
+- **Clearing context** (spec 8.4). A `context` field set to `null` clears it:
+  `effective_context` (`effectiveContext`), `clears_context`; the company agent's
+  `Turn.context` is the shared context.
+- **Room to extend conversations** (spec 8.4, 8.6, 8.13). Unknown `role` reads `company`,
+  unknown `author.type` reads `agent` (`known_role`, `known_author_type`); the company drops
+  `author.id`, `name` and `image` from the agent's messages; unknown SSE event names are
+  skipped; an unknown conversation error code is `conversation_request_failed`, the code kept
+  in `details["error"]` (`KNOWN_CONVERSATION_ERRORS`, `known_conversation_error`).
+- **What `working` means** (spec 8.7). Already so: the reference companies set `working`
+  only while replying. The docs say so.
+- **Unknown sign-in errors** (spec 8.11). `ConversationEvent.error` is any string, and
+  `sign_in_scopes` (`signInScopes`) gives the scopes to sign in again for.
+- **Mediated Sign-In retirement date**: `MEDIATED_RETIREMENT_DATE` (`2027-03-17`).
+- **Scope descriptions** (spec 4.7, guides): the docs say what a good description says.
+- **Open topic**: what happens to an operation in flight at sign-out is open upstream
+  (personal-agent-protocol#84); the open-topics page says what the reference companies do.
+- **Conformance and records.** New fixture cases and a `pushed-requests` world (PAR required,
+  refresh tokens bound), run in all four pairings; the suite runs at 1.0 and at 0.4. The
+  vendored JSON Schemas are upstream's at `8c02b42`. The ledger adds the 1.0 statements
+  (`PAP10-*`, marked `version: '1.0'`) and marks UCP-4-06 as 0.4's.
+
 ## 0.36.1 (2026-11-16)
 
 - **A persisted Session keeps its version** (TypeScript). `PapSession.fromJson()` restores a

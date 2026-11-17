@@ -11,10 +11,12 @@ exports the same three values; `protocol/requirements.yaml`,
 `protocol/UPSTREAM.md` and the compatibility page state them too, and a test
 holds all of them equal.
 
-`DRAFT_PROTOCOL_VERSION` is the 1.0 draft, and `DRAFT_PROTOCOL_REVISION` the
-date of the draft text implemented. Since 0.36 it is `DEFAULT_PROTOCOL_VERSION`,
-the version a Personal Agent or a Company uses unless it asks for others
-(`protocol_versions`): 0.4 as published stays available, used only when named.
+`DRAFT_PROTOCOL_VERSION` is version 1.0, a draft until upstream published and
+froze it on 2026-11-14, and `DRAFT_PROTOCOL_REVISION` the date of the text
+implemented: since 0.37, 1.0 as published (commit 8c02b42). The names stay from
+the draft. Since 0.36 it is `DEFAULT_PROTOCOL_VERSION`, the version a Personal
+Agent or a Company uses unless it asks for others (`protocol_versions`): 0.4 as
+published stays available, used only when named.
 """
 
 from __future__ import annotations
@@ -24,11 +26,11 @@ PROTOCOL_PROFILE = "0.4"
 #: The upstream specification revision implemented: the day 0.4 was published (commit 4803900).
 PROTOCOL_REVISION = "2026-11-10"
 
-#: The draft protocol version, the 1.0 draft: the default since 0.36.
+#: Protocol version 1.0, the default since 0.36 (named while it was the draft).
 DRAFT_PROTOCOL_VERSION = "1.0"
-#: The draft's revision implemented: lookalike domains, its first fix (commit c71f515).
-DRAFT_PROTOCOL_REVISION = "2026-11-11"
-#: The version used unless a Personal Agent or a Company names others: the 1.0 draft.
+#: The 1.0 text implemented: 1.0 as published and frozen on 2026-11-14 (commit 8c02b42).
+DRAFT_PROTOCOL_REVISION = "2026-11-14"
+#: The version used unless a Personal Agent or a Company names others: 1.0.
 DEFAULT_PROTOCOL_VERSION = DRAFT_PROTOCOL_VERSION
 
 __all__ = [

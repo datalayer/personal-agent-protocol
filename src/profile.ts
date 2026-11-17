@@ -14,13 +14,15 @@ export const PROTOCOL_PROFILE = "0.4";
 /** The upstream specification revision implemented: the day 0.4 was published (commit 4803900). */
 export const PROTOCOL_REVISION = "2026-11-10";
 
-// DRAFT_PROTOCOL_VERSION is the 1.0 draft. Since 0.36 it is DEFAULT_PROTOCOL_VERSION, the
-// version a Personal Agent or a Company uses unless it asks for others (`protocolVersions`):
-// 0.4 as published stays available, used only when named.
+// DRAFT_PROTOCOL_VERSION is version 1.0, a draft until upstream published and froze it on
+// 2026-11-14, and DRAFT_PROTOCOL_REVISION the date of the text implemented: since 0.37, 1.0 as
+// published (commit 8c02b42). The names stay from the draft. Since 0.36 it is
+// DEFAULT_PROTOCOL_VERSION, the version a Personal Agent or a Company uses unless it asks for
+// others (`protocolVersions`): 0.4 as published stays available, used only when named.
 
-/** The draft protocol version, the 1.0 draft: the default since 0.36. */
+/** Protocol version 1.0, the default since 0.36 (named while it was the draft). */
 export const DRAFT_PROTOCOL_VERSION = "1.0";
-/** The draft's revision implemented: lookalike domains, its first fix (commit c71f515). */
-export const DRAFT_PROTOCOL_REVISION = "2026-11-11";
-/** The version used unless a Personal Agent or a Company names others: the 1.0 draft. */
+/** The 1.0 text implemented: 1.0 as published and frozen on 2026-11-14 (commit 8c02b42). */
+export const DRAFT_PROTOCOL_REVISION = "2026-11-14";
+/** The version used unless a Personal Agent or a Company names others: 1.0. */
 export const DEFAULT_PROTOCOL_VERSION = DRAFT_PROTOCOL_VERSION;

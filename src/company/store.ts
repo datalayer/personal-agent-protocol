@@ -217,6 +217,11 @@ export const RecordKinds = {
   device: "device",
   userCode: "user_code",
   authorization: "authorization",
+  /**
+   * A Pushed Authorization Request by its `request_uri` (RFC 9126, §4.2): the parameters a
+   * personal agent pushed with its client assertion, used once, briefly.
+   */
+  pushedRequest: "pushed_request",
   code: "code",
   mediated: "mediated",
   conversation: "conversation",
@@ -307,6 +312,12 @@ export interface AccountGrant {
    * before any such moment.
    */
   readonly signedInAt?: string;
+  /**
+   * With `bindRefreshTokens`, the thumbprint of the DPoP key of the request that issued it,
+   * carried by every token rotated from it: a refresh proves with that key, or is
+   * `invalid_grant` (§4.4). Absent: not bound.
+   */
+  readonly dpopJkt?: string;
 }
 
 /** One sign-in: every refresh token rotated from it, and the access tokens it gave. */
@@ -380,6 +391,28 @@ export interface PendingAuthorization {
    * then says which were granted.
    */
   readonly requested?: readonly string[];
+  /**
+   * The request's `prompt` (OpenID Connect Core §3.1.2.1, §4.2): `consent` asks for the consent
+   * page even when the account granted every scope before.
+   */
+  readonly prompt?: string;
+  /**
+   * The thumbprint of the DPoP key that pushed the request (RFC 9449 §10.1): the code is
+   * exchanged only with a proof by that key.
+   */
+  readonly dpopJkt?: string;
+}
+
+/**
+ * A Pushed Authorization Request (RFC 9126, §4.2): the authorization request's parameters, the
+ * agent whose client assertion pushed them, and the DPoP key that proved the push, if any. Used
+ * once, by the authorization endpoint.
+ */
+export interface PushedAuthorization {
+  readonly clientId: string;
+  readonly parameters: Readonly<Record<string, string>>;
+  readonly expiresAt: string;
+  readonly dpopJkt?: string;
 }
 
 /** A one-use authorization code, at most a minute old. */
@@ -392,6 +425,8 @@ export interface IssuedCode {
   readonly accountId: string;
   readonly scopes: readonly string[];
   readonly expiresAt: string;
+  /** The DPoP key that pushed the request (RFC 9449 §10.1): the exchange proves with it. */
+  readonly dpopJkt?: string;
 }
 
 export interface PendingMediated {

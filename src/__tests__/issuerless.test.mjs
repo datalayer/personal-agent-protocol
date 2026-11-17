@@ -18,7 +18,7 @@ const SIGNED_OUT = {
   protocol_version: "1.0",
   organization: { name: "Example", domain: "Example.COM" },
   apis: [{ type: "openapi", url: "https://example.com/o.json", description: "Catalog" }],
-  agent: { protocols: [{ type: "poppy", endpoint: "https://example.com/poppy" }] },
+  agent: { protocols: [{ type: "poppy", endpoint: "https://example.com/poppy", description: "Anything" }] },
   feedback: { endpoint: "https://example.com/feedback" },
   web: { browser_session_endpoint: "https://example.com/join" },
 };
@@ -66,7 +66,7 @@ test("with an issuer the identifier is the issuer", async () => {
 
 for (const [name, offers] of [
   ["auth.issuer", { auth: { issuer: "https://auth.example.com" } }],
-  ["access", { agent: { protocols: [{ type: "poppy", endpoint: "https://example.com/p", access: "signed_in" }] } }],
+  ["access", { agent: { protocols: [{ type: "poppy", endpoint: "https://example.com/p", description: "Anything", access: "signed_in" }] } }],
   ["mediated", { extensions: { "mediated-sign-in": [{ version: "2" }] } }],
 ]) {
   test(`no issuer is refused for a company that offers sign-in (${name})`, async () => {
@@ -137,6 +137,7 @@ const config = (changes = {}) =>
     name: "Shop",
     domain: "Shop.Example",
     scopes: ["orders:read"],
+    agentDescription: "Anything about your orders",
     scopeDescriptions: { "orders:read": "See your orders" },
     oauth: false,
     operations: false,

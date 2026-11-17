@@ -48,6 +48,7 @@ CONFIG = CompanyConfig(
     name="Northwind Bank",
     domain=DOMAIN,
     scopes=("accounts:read", "payments:write"),
+    agent_description="Your accounts, balances, and payments",
     write_scopes=("payments:write",),
     mediated_fields=(("account_number", "Account number", False), ("pin", "PIN", True)),
     mediated_scopes=("accounts:read",),

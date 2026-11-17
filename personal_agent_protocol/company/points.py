@@ -149,6 +149,9 @@ class Turn:
     #: The Company speaks first: the user accepted a `user_requested` invitation and the
     #: Direct Conversation has no message yet (§8.10). `text` and `data` are then None.
     opening: bool = False
+    #: The context the personal agent's messages in this conversation share (§8.4): each
+    #: field's latest value, and none for a field a message set to `null` (from 1.0).
+    context: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -270,18 +273,28 @@ class ClientPolicy(Protocol):
     signed out, with `allows_sign_in(client_id, grant_type)` (§4.1): the grant's
     endpoint then answers `unauthorized_client`. Without the method, every agent the
     policy allows may sign in.
+
+    A sign-in covers every resource the company offers personal agents (§4.5): with
+    `allows_resource(client_id, resource)` a policy may leave a service out, for every
+    agent or by `client_id`, and a token request for it is `invalid_target`. `resource`
+    is the service's (the MCP server's `url`, the conversation endpoint), never the
+    default token's. Without the method, every agent gets a token for every service.
     """
 
     async def allows(self, client_id: str) -> bool: ...
 
 
 class AllowEveryAgent:
-    """The default policy: any agent with valid identity is welcome, and may sign in."""
+    """The default policy: any agent with valid identity is welcome, may sign in, and gets
+    tokens for every service."""
 
     async def allows(self, client_id: str) -> bool:
         return True
 
     async def allows_sign_in(self, client_id: str, grant_type: str) -> bool:
+        return True
+
+    async def allows_resource(self, client_id: str, resource: str) -> bool:
         return True
 
 

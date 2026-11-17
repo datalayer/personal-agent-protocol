@@ -45,6 +45,7 @@ import {
   type PendingAuthorization,
   type PendingDevice,
   type PendingMediated,
+  type PushedAuthorization,
   type ReplayMark,
   type SignInAttempts,
   type StoredConversation,
@@ -124,6 +125,7 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
       revoked: true,
       family: "fam_1",
       signedInAt: now.toISOString(),
+      dpopJkt: "jkt",
     } satisfies AccountGrant,
     [RecordKinds.accountFamily]: {
       clientId: "c",
@@ -155,7 +157,15 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
       expiresAt: later,
       clientName: "Atlas",
       browserBinding: "bind",
+      prompt: "consent",
+      dpopJkt: "jkt",
     } satisfies PendingAuthorization,
+    [RecordKinds.pushedRequest]: {
+      clientId: "c",
+      parameters: { response_type: "code", scope: "a" },
+      expiresAt: later,
+      dpopJkt: "jkt",
+    } satisfies PushedAuthorization,
     [RecordKinds.code]: {
       clientId: "c",
       redirectUri: "https://atlas.example/cb",
@@ -164,6 +174,7 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
       accountId: "acct_1",
       scopes: ["a"],
       expiresAt: later,
+      dpopJkt: "jkt",
     } satisfies IssuedCode,
     [RecordKinds.mediated]: {
       clientId: "c",

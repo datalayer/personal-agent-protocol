@@ -27,7 +27,8 @@
  *   `invalid_session` (HTTP 400); one for a Session that has ended `session_ended` (§5.5).
  *   Its own access token without the header is refused.
  * - OAuth (§4): access tokens, Bearer or, with `dpopBinding`, bound with DPoP (§4.5), and
- *   refresh tokens, never bound; Direct Sign-In, Device
+ *   refresh tokens, bound to the same key only with `bindRefreshTokens` (§4.4); Direct Sign-In,
+ *   with Pushed Authorization Requests when `pushedAuthorizationRequests` (RFC 9126), Device
  *   Sign-In with `authorization_pending` and `slow_down`, refresh with rotation,
  *   narrower scopes and `resource` (RFC 8707: `invalid_target` for one it doesn't
  *   serve), and revocation (RFC 7009) whose sign-in ends whole.
@@ -111,7 +112,10 @@ import {
   type Message,
   type Operation,
   compatibleVersions,
+  domainHost,
+  effectiveContext,
   parseVersion,
+  splitDomain,
 } from "../models.js";
 import {
   APPROVAL_DECLINED,
@@ -183,6 +187,7 @@ import {
   type PendingAuthorization,
   type PendingDevice,
   type PendingMediated,
+  type PushedAuthorization,
   type Acceptance,
   type SignInAttempts,
   type StoreWriteOptions,
@@ -245,11 +250,23 @@ export type MediatedFieldSpec = readonly [name: string, label: string, secret: b
 export type DpopBinding = "off" | "optional" | "required";
 /** Whether a company checks operator signatures (§5.3). */
 export type OperatorSignatures = "off" | "optional" | "required";
+/** Whether a company takes Pushed Authorization Requests for Direct Sign-In (RFC 9126, §4.2). */
+export type PushedAuthorizationRequests = "off" | "offered" | "required";
 
 export interface CompanyConfigOptions {
   readonly name: string;
+  /**
+   * The company's domain, `organization.domain` (§3.1): with its port when that isn't 443, such
+   * as `shop.example:8443`, only when every protocol version it serves is 1.0 or later.
+   */
   readonly domain: string;
   readonly scopes: readonly string[];
+  /**
+   * What the Company Agent can help with, in plain language: the `description` of its
+   * `agent.protocols` entry (§3.1, §8.1), which a 1.0 document requires. It may say the agent can
+   * help with anything.
+   */
+  readonly agentDescription: string;
   readonly writeScopes?: readonly string[];
   /** Mediated Sign-In's `fields`. None, it isn't offered. */
   readonly mediatedFields?: readonly MediatedFieldSpec[];
@@ -295,6 +312,21 @@ export interface CompanyConfigOptions {
   readonly accessTokenLifetimeSeconds?: number;
   /** How long a sign-in's refresh tokens work (§4.4; default 90 days). */
   readonly refreshTokenLifetimeSeconds?: number;
+  /**
+   * Bind each refresh token to the DPoP key of the request that issued it, and the tokens rotated
+   * from it (§4.4, a MAY from 1.0): a refresh whose proof is missing or by another key is
+   * `invalid_grant`. Off by default; needs `dpopBinding`.
+   */
+  readonly bindRefreshTokens?: boolean;
+  /**
+   * Pushed Authorization Requests for Direct Sign-In (RFC 9126, §4.2, a MAY from 1.0): `offered`
+   * lists `pushed_authorization_request_endpoint` (`/oauth/par`), and `required` also sets
+   * `require_pushed_authorization_requests`, so the authorization endpoint takes only a
+   * `request_uri` the agent pushed. Off by default; needs `direct`.
+   */
+  readonly pushedAuthorizationRequests?: PushedAuthorizationRequests;
+  /** How long a pushed request's `request_uri` lasts, in seconds (RFC 9126 §2.2: briefly; default 60). */
+  readonly pushedRequestLifetimeSeconds?: number;
   /**
    * A refresh token used again after it was rotated ends its whole sign-in, as RFC 9700 §4.14.2
    * describes (guides, *Token lifetimes*): a copied refresh token's grant ends as soon as both
@@ -480,6 +512,7 @@ export class CompanyConfig {
   readonly name: string;
   readonly domain: string;
   readonly scopes: readonly string[];
+  readonly agentDescription: string;
   readonly writeScopes: readonly string[];
   readonly mediatedFields: readonly MediatedFieldSpec[];
   readonly mediatedScopes: readonly string[];
@@ -496,6 +529,9 @@ export class CompanyConfig {
   readonly accessTokenLifetimeSeconds: number;
   readonly refreshTokenLifetimeSeconds: number;
   readonly refreshReuseRevokes: boolean;
+  readonly bindRefreshTokens: boolean;
+  readonly pushedAuthorizationRequests: PushedAuthorizationRequests;
+  readonly pushedRequestLifetimeSeconds: number;
   readonly operationLifetimeSeconds: number;
   readonly deviceInterval: number;
   readonly maxCodeAttempts: number;
@@ -539,6 +575,11 @@ export class CompanyConfig {
     this.name = options.name;
     this.domain = options.domain;
     this.scopes = [...options.scopes];
+    this.agentDescription = options.agentDescription;
+    if (typeof this.agentDescription !== "string" || !this.agentDescription.trim()) {
+      // Every conversation protocol says what its agent helps with (§3.1, §8.1).
+      throw new RangeError("agentDescription says what the Company Agent can help with");
+    }
     this.writeScopes = [...(options.writeScopes ?? [])];
     this.mediatedFields = [...(options.mediatedFields ?? [])];
     this.mediatedScopes = [...(options.mediatedScopes ?? [])];
@@ -565,6 +606,9 @@ export class CompanyConfig {
     this.accessTokenLifetimeSeconds = options.accessTokenLifetimeSeconds ?? 60 * 60;
     this.refreshTokenLifetimeSeconds = options.refreshTokenLifetimeSeconds ?? 90 * 24 * 60 * 60;
     this.refreshReuseRevokes = options.refreshReuseRevokes ?? false;
+    this.bindRefreshTokens = options.bindRefreshTokens ?? false;
+    this.pushedAuthorizationRequests = options.pushedAuthorizationRequests ?? "off";
+    this.pushedRequestLifetimeSeconds = options.pushedRequestLifetimeSeconds ?? 60;
     this.operationLifetimeSeconds = options.operationLifetimeSeconds ?? 15 * 60;
     this.deviceInterval = options.deviceInterval ?? 5;
     this.maxCodeAttempts = options.maxCodeAttempts ?? 3;
@@ -580,6 +624,10 @@ export class CompanyConfig {
       throw new RangeError("protocolVersions lists each version the company serves once");
     }
     for (const version of this.protocolVersions) parseVersion(version);
+    if (splitDomain(this.domain)[1] !== undefined && this.protocolVersions.some((version) => parseVersion(version)[0] < 1)) {
+      // A domain names its port when that isn't 443 from 1.0 only (§3.1).
+      throw new RangeError("a domain with a port is served at 1.0 or later only");
+    }
     this.deprecatedVersions = { ...(options.deprecatedVersions ?? {}) };
     this.conversationCarryOver = options.conversationCarryOver ?? true;
     if (Object.keys(this.deprecatedVersions).some((version) => !this.protocolVersions.includes(version))) {
@@ -628,8 +676,18 @@ export class CompanyConfig {
       dpopNonceLifetimeSeconds: this.dpopNonceLifetimeSeconds,
       dpopProofWindowSeconds: this.dpopProofWindowSeconds,
       operatorSignatureWindowSeconds: this.operatorSignatureWindowSeconds,
+      pushedRequestLifetimeSeconds: this.pushedRequestLifetimeSeconds,
     })) {
       if (!(lifetime > 0)) throw new RangeError(`${name} must be positive`);
+    }
+    if (!["off", "offered", "required"].includes(this.pushedAuthorizationRequests)) {
+      throw new RangeError("pushedAuthorizationRequests is off, offered or required");
+    }
+    if (this.pushedAuthorizationRequests !== "off" && !this.direct) {
+      throw new RangeError("pushedAuthorizationRequests are Direct Sign-In's: direct is on");
+    }
+    if (this.bindRefreshTokens && this.dpopBinding === "off") {
+      throw new RangeError("bindRefreshTokens needs dpopBinding");
     }
     if (
       !this.oauth &&
@@ -655,7 +713,8 @@ export class CompanyConfig {
     }
     if (this.devicePage !== undefined) {
       const host = new URL(this.devicePage).hostname.toLowerCase();
-      if (!(host === this.domain || host.endsWith(`.${this.domain}`))) {
+      const own = domainHost(this.domain);
+      if (!(host === own || host.endsWith(`.${own}`))) {
         // A personal agent shows the link only on the issuer's host or `organization.domain`,
         // or a subdomain of either (§4.3). The issuer is on `domain`, and an agent that found
         // the company at an alias knows only that alias as its domain, so a page on another
@@ -731,6 +790,10 @@ export class CompanyConfig {
   }
   get authorizationEndpoint(): string {
     return `${this.base}/oauth/authorize`;
+  }
+  /** Where a Pushed Authorization Request goes (RFC 9126 §2). */
+  get pushedAuthorizationRequestEndpoint(): string {
+    return `${this.base}/oauth/par`;
   }
   get apiDescription(): string {
     return `${this.base}/api/openapi.json`;
@@ -828,6 +891,16 @@ export class CompanyConfig {
   get servesTasks(): boolean {
     return this.excludedTasks.length > 0 || this.skills.length > 0 || this.feedback;
   }
+}
+
+/**
+ * A scope on a consent page (§10.8): its words, and with the signed-in account known, whether it
+ * granted the scope to this agent before (`granted_before`).
+ */
+export interface ConsentScope {
+  readonly scope: string;
+  readonly description: string;
+  readonly granted_before?: boolean;
 }
 
 /** A request as any framework hands it over: full HTTPS URL, lower-case headers. */
@@ -1048,11 +1121,24 @@ function waitOf(request: CompanyRequest): number | undefined {
 /** A message as the personal agent sent it; a `role` it set is ignored (§7.4). */
 /**
  * A message as the personal agent sent it (§8.4): its ID is its request's, and a `role` or `id`
- * it set is ignored.
+ * it set is ignored, as are `author.id`, `name` and `image`, which only Company messages have.
  */
 function incoming(value: unknown, requestId: string): Message {
-  const { role: _role, id: _id, ...rest } = parseMessage(value);
-  return { ...rest, id: requestId } as Message;
+  const { role: _role, id: _id, author, ...rest } = parseMessage(value);
+  // `author.id`, `name` and `image` are Company messages' only (a later version may define
+  // them here): ignored.
+  return { ...rest, author: { type: author.type }, id: requestId } as Message;
+}
+
+/** The context the personal agent's messages in a conversation share (§8.4). */
+function sharedContext(conversation: StoredConversation): Record<string, unknown> {
+  return effectiveContext(
+    conversation.events
+      .map((event) => event.payload)
+      .filter((payload) => payload.type === "message")
+      .map((payload) => payload.message as Message | undefined)
+      .filter((message): message is Message => message !== undefined && message.role === "user"),
+  );
 }
 
 /** The request's `id` (§8.3): required, in the URL-safe base64 alphabet, else `invalid_request`. */
@@ -1534,6 +1620,9 @@ export class CompanyService {
       if (method === "GET" && path === "/oauth/authorize" && this.config.direct) {
         return await this.#authorize(request);
       }
+      if (method === "POST" && path === "/oauth/par" && this.config.pushedAuthorizationRequests !== "off") {
+        return await this.#pushedRequest(request);
+      }
       const api = this.#api();
       if (method === "GET" && path === "/api/openapi.json" && api !== undefined) {
         return { status: 200, body: api.openapi(), headers: {} };
@@ -1715,8 +1804,15 @@ export class CompanyService {
     if (domain !== undefined && domain !== config.domain && !config.aliases.includes(domain)) {
       throw new RangeError(`${domain} is not one of this company's domains`);
     }
+    const protocolVersion = version ?? config.preferredVersion;
+    const poppy: Record<string, unknown> = { type: "poppy", endpoint: config.conversationsEndpoint };
+    if (parseVersion(protocolVersion)[0] >= 1) {
+      // 1.0 requires it (§3.1, §8.1); 0.4 doesn't define it, so its document leaves it out:
+      // each side sends only what the other's version defines (§3.4).
+      poppy.description = config.agentDescription;
+    }
     const document: Record<string, unknown> = {
-      protocol_version: version ?? config.preferredVersion,
+      protocol_version: protocolVersion,
       ...(version === undefined && config.protocolVersions.length > 1
         ? {
             supported_versions: Object.fromEntries(
@@ -1729,7 +1825,7 @@ export class CompanyService {
         domain: domain ?? config.domain,
         ...(config.logoUri === undefined ? {} : { logo_uri: config.logoUri }),
       },
-      agent: { protocols: [{ type: "poppy", endpoint: config.conversationsEndpoint }] },
+      agent: { protocols: [poppy] },
     };
     if (config.oauth) {
       // Direct and Device Sign-In are the issuer's grants, not listed here (§3.2, §4.4).
@@ -1901,6 +1997,11 @@ export class CompanyService {
       metadata.authorization_endpoint = config.authorizationEndpoint;
       metadata.code_challenge_methods_supported = ["S256"];
     }
+    if (config.pushedAuthorizationRequests !== "off") {
+      // RFC 9126 §5 (§3.2, §4.2): where to push, and whether Direct Sign-In needs it.
+      metadata.pushed_authorization_request_endpoint = config.pushedAuthorizationRequestEndpoint;
+      if (config.pushedAuthorizationRequests === "required") metadata.require_pushed_authorization_requests = true;
+    }
     if (config.device) {
       grants.push(DEVICE_CODE_GRANT);
       metadata.device_authorization_endpoint = config.deviceEndpoint;
@@ -2021,8 +2122,13 @@ export class CompanyService {
     // No tokens to protect: every refresh is `invalid_grant`, the client assertion unverified (§3.2).
     if (grant === REFRESH_TOKEN_GRANT && (await this.#neverIssued())) throw new Refused(400, "invalid_grant");
     const clientId = await this.#client(form);
+    const resource = this.#resource(form);
+    if (resource !== undefined && !(await this.#resourceAllowed(clientId, resource))) {
+      // A service the company leaves out, for every agent or this one (§4.5).
+      throw new Refused(400, "invalid_target");
+    }
     // Before any grant is used: a proof refused spends no code.
-    const jkt = await this.#tokenBinding(request, this.#resource(form));
+    const jkt = await this.#tokenBinding(request, resource);
     if (grant === REFRESH_TOKEN_GRANT) return this.#refreshGrant(form, clientId, jkt);
     if (grant === AUTHORIZATION_CODE_GRANT && this.config.direct) return this.#codeGrant(form, clientId, jkt);
     if (grant === DEVICE_CODE_GRANT && this.config.device) return this.#deviceGrant(form, clientId, jkt);
@@ -2100,10 +2206,21 @@ export class CompanyService {
   }
 
   /**
+   * Whether the client policy offers this agent a token for this service (§4.5):
+   * `allowsResource`, when the policy has it; every service otherwise.
+   */
+  async #resourceAllowed(clientId: string, resource: string): Promise<boolean> {
+    const policy = firstContribution(this.reactor, ClientPolicies, "policy");
+    return policy.allowsResource === undefined ? true : policy.allowsResource(clientId, resource);
+  }
+
+  /**
    * The `resource` a token is issued for (RFC 8707, §4.5): one this company serves.
    *
    * `https://{domain}` (or an alias's) is the default token's, `undefined`; the MCP server's
-   * `url` gets a token for it alone; anything else is `invalid_target`.
+   * `url` gets a token for it alone; anything else is `invalid_target`. A sign-in names no
+   * resource and covers every one, those added after it too: each token request, the one that
+   * completes the sign-in or a refresh, names one.
    */
   #resource(form: Readonly<Record<string, string>>): string | undefined {
     const resource = form.resource;
@@ -2151,6 +2268,11 @@ export class CompanyService {
       throw new Refused(400, "invalid_grant");
     }
     if (await this.#signInEnded(grant)) throw new Refused(400, "invalid_grant");
+    if (grant.dpopJkt !== undefined && (jkt === undefined || !sameText(jkt, grant.dpopJkt))) {
+      // Bound to the key it was issued with (§4.4): a copied refresh token is useless with any
+      // other, and nothing is issued for it.
+      throw new Refused(400, "invalid_grant");
+    }
     const requested = words(form.scope);
     if (requested.length && requested.some((scope) => !grant.scopes.includes(scope))) {
       throw new Refused(400, "invalid_scope");
@@ -2287,14 +2409,19 @@ export class CompanyService {
    *
    * Who asks (the agent's `client_name` and its `client_id` domain), with the `heading` and
    * `caution` the page starts with (§10.8), and for what. Rejects for an unknown, expired,
-   * approved or denied code.
+   * approved or denied code. The page is shown for every Device Sign-In and lists every scope,
+   * those the account granted before too (§4.3, §10.8): with `accountId`, each says whether it
+   * did (`granted_before`).
    */
-  async deviceRequest(userCode: string): Promise<{
+  async deviceRequest(
+    userCode: string,
+    options: { readonly accountId?: string } = {},
+  ): Promise<{
     readonly client_name: string;
     readonly client_domain: string;
     readonly heading: string;
     readonly caution: string;
-    readonly scopes: readonly { readonly scope: string; readonly description: string }[];
+    readonly scopes: readonly ConsentScope[];
     readonly expires_at: string;
   }> {
     const pointer = await this.#read<UserCode>(RecordKinds.userCode, userCode);
@@ -2310,7 +2437,10 @@ export class CompanyService {
       client_domain: new URL(pending.clientId).hostname,
       heading: connectHeading(metadata.client_name, this.config.name),
       caution: connectCaution(metadata.client_name),
-      scopes: pending.scopes.map((scope) => ({ scope, description: this.config.describe(scope) })),
+      scopes: this.#consentScopes(
+        pending.scopes,
+        options.accountId === undefined ? undefined : await this.#grantedBefore(pending.clientId, options.accountId),
+      ),
       expires_at: isoZ(new Date(pending.expiresAt)),
     };
   }
@@ -2556,6 +2686,8 @@ export class CompanyService {
       revoked: false,
       family,
       signedInAt: this.#now().toISOString(),
+      // Bound to the key of the request that issued it, and every token rotated from it (§4.4).
+      ...(this.config.bindRefreshTokens && jkt !== undefined ? { dpopJkt: jkt } : {}),
     };
     await this.store.put(RecordKinds.refreshToken, family, json(grant), expiry(expiresAt));
     const signIn: AccountFamily = {
@@ -2595,8 +2727,9 @@ export class CompanyService {
   /**
    * A token response (§4.7): an access token, and the refresh token if any.
    *
-   * Bearer, or `DPoP` bound to the key `jkt` names; a refresh token is never bound (RFC 9449
-   * §5). `scope` follows RFC 6749: left out when it grants exactly the scopes requested.
+   * Bearer, or `DPoP` bound to the key `jkt` names. A refresh token is bound to that key only
+   * with `bindRefreshTokens` (§4.4), recorded with its grant. `scope` follows RFC 6749: left out
+   * when it grants exactly the scopes requested.
    */
   async #issue(options: {
     readonly clientId: string;
@@ -2674,9 +2807,91 @@ export class CompanyService {
 
   // Direct Sign-In (§4.5) -------------------------------------------------------------
 
-  /** The company's own sign-in and consent page for a personal agent's request. */
+  /**
+   * `POST /oauth/par` (RFC 9126, §4.2): an authorization request's parameters, pushed with the
+   * agent's client assertion, and a DPoP proof when it sends them (RFC 9449 §10.1). Checked as the
+   * authorization endpoint would check them; answered with a one-use `request_uri` that lasts
+   * `pushedRequestLifetimeSeconds`.
+   */
+  async #pushedRequest(request: CompanyRequest): Promise<CompanyResponse> {
+    const form = pairs(text(request.body));
+    // A pushed request can't name another (RFC 9126 §2.1).
+    if ("request_uri" in form) throw new Refused(400, "invalid_request");
+    const clientId = await this.#client(form);
+    const jkt =
+      request.headers.dpop && this.config.dpopBinding !== "off"
+        ? await this.#dpopProof(request, { status: 400 })
+        : undefined;
+    const resolver = firstContribution(this.reactor, ClientResolvers, "client");
+    const [metadata] = await resolver.resolve(clientId);
+    const redirectUri = form.redirect_uri ?? "";
+    if (!metadata.redirect_uris.some((entry) => redirectUriMatches(entry, redirectUri))) {
+      throw new Refused(400, "invalid_request");
+    }
+    const scopes = words(form.scope);
+    if (form.response_type !== "code") throw new Refused(400, "unsupported_response_type");
+    if (form.code_challenge_method !== "S256" || !form.code_challenge) throw new Refused(400, "invalid_request");
+    if (!scopes.length || scopes.some((scope) => !this.config.offeredScopes.includes(scope))) {
+      throw new Refused(400, "invalid_scope");
+    }
+    if (!(await this.#signInAllowed(clientId, AUTHORIZATION_CODE_GRANT))) {
+      throw new Refused(400, "unauthorized_client");
+    }
+    const parameters = Object.fromEntries(
+      Object.entries(form).filter(([name]) => name !== "client_assertion" && name !== "client_assertion_type"),
+    );
+    const requestUri = `urn:ietf:params:oauth:request_uri:${this.#id("par")}`;
+    const expiresAt = this.#later(this.config.pushedRequestLifetimeSeconds);
+    const pushed: PushedAuthorization = {
+      clientId,
+      parameters,
+      expiresAt: expiresAt.toISOString(),
+      ...(jkt === undefined ? {} : { dpopJkt: jkt }),
+    };
+    await this.store.put(RecordKinds.pushedRequest, requestUri, json(pushed), expiry(expiresAt));
+    return {
+      status: 201,
+      body: { request_uri: requestUri, expires_in: Math.floor(this.config.pushedRequestLifetimeSeconds) },
+      headers: { ...NO_STORE },
+    };
+  }
+
+  /**
+   * The authorization request a `request_uri` names, taken once, and the DPoP key that pushed it
+   * (RFC 9126 §4); `undefined` for an unknown, used or expired one, or one another agent pushed.
+   * Every other query parameter but `client_id` is ignored.
+   */
+  async #pushedParameters(
+    query: Readonly<Record<string, string>>,
+  ): Promise<readonly [Record<string, string>, string | undefined] | undefined> {
+    const pushed = (await this.store.take(RecordKinds.pushedRequest, query.request_uri ?? "")) as unknown as
+      | PushedAuthorization
+      | undefined;
+    if (pushed === undefined || this.#passed(pushed.expiresAt) || pushed.clientId !== query.client_id) {
+      return undefined;
+    }
+    return [{ ...pushed.parameters }, pushed.dpopJkt];
+  }
+
+  /**
+   * The company's own sign-in and consent page for a personal agent's request.
+   *
+   * With `pushedAuthorizationRequests`, a `request_uri` the agent pushed stands for the request
+   * (RFC 9126 §4); `required` takes nothing else. The page lists every scope the sign-in would
+   * grant and is shown for every request, `prompt=consent` or not, even when the account granted
+   * every scope before (§4.2, §10.8).
+   */
   async #authorize(request: CompanyRequest): Promise<CompanyResponse> {
-    const query = pairs(new URL(request.url).search);
+    let query = pairs(new URL(request.url).search);
+    let pushedBy: string | undefined;
+    if ("request_uri" in query && this.config.pushedAuthorizationRequests !== "off") {
+      const pushed = await this.#pushedParameters(query);
+      if (pushed === undefined) return page(400, "This sign-in request is not valid or has expired.");
+      [query, pushedBy] = pushed;
+    } else if (this.config.pushedAuthorizationRequests === "required") {
+      // Only a pushed request (RFC 9126 §5): nothing the browser carried is trusted.
+      return page(400, "This sign-in request is not valid.");
+    }
     const clientId = query.client_id ?? "";
     const redirectUri = query.redirect_uri ?? "";
     if (!clientId || !(await this.#allowed(clientId))) {
@@ -2731,6 +2946,8 @@ export class CompanyService {
       expiresAt: expiresAt.toISOString(),
       clientName: metadata.client_name,
       ...(hosted === undefined ? { browserBinding: digest(browser) } : {}),
+      ...(query.prompt === undefined ? {} : { prompt: query.prompt }),
+      ...(pushedBy === undefined ? {} : { dpopJkt: pushedBy }),
     };
     await this.store.put(RecordKinds.authorization, requestId, json(pending), expiry(expiresAt));
     if (hosted !== undefined) {
@@ -2801,22 +3018,33 @@ export class CompanyService {
    * A pending Direct Sign-In request, for a consent page to show; not consumed.
    *
    * Who asks (`client_name`, the `client_id` domain), for what (each scope with its
-   * `scopeDescriptions` words), until when; never `state`, PKCE, or the redirect. Rejects
-   * for an unknown, used, or expired request.
+   * `scopeDescriptions` words), until when, and the request's `prompt`; never `state`, PKCE, or
+   * the redirect. Rejects for an unknown, used, or expired request.
+   *
+   * The page lists every scope in `scopes`, the ones the account granted this agent before too,
+   * and is shown even when it granted them all (§4.2, §10.8): every User of an agent shares its
+   * `client_id`. With `accountId`, the person signed in on the page, each scope says whether that
+   * account granted it to this `client_id` before (`granted_before`), which the page MAY mark.
    */
-  async authorizationRequest(requestId: string): Promise<{
+  async authorizationRequest(
+    requestId: string,
+    options: { readonly accountId?: string } = {},
+  ): Promise<{
     readonly request_id: string;
     readonly client_name: string;
     readonly client_domain: string;
     readonly heading: string;
     readonly caution: string;
-    readonly scopes: readonly { readonly scope: string; readonly description: string }[];
+    readonly scopes: readonly ConsentScope[];
+    readonly prompt: string | null;
     readonly expires_at: string;
   }> {
     const pending = await this.#read<PendingAuthorization>(RecordKinds.authorization, requestId);
     if (pending === undefined || this.#passed(pending.expiresAt)) {
       throw new Error("unknown, used, or expired sign-in request");
     }
+    const before =
+      options.accountId === undefined ? undefined : await this.#grantedBefore(pending.clientId, options.accountId);
     return {
       request_id: requestId,
       client_name: pending.clientName ?? "",
@@ -2824,9 +3052,39 @@ export class CompanyService {
       // What the page starts with and says before the person goes on (§10.8).
       heading: connectHeading(pending.clientName ?? "", this.config.name),
       caution: connectCaution(pending.clientName ?? ""),
-      scopes: pending.scopes.map((scope) => ({ scope, description: this.config.describe(scope) })),
+      scopes: this.#consentScopes(pending.scopes, before),
+      prompt: pending.prompt ?? null,
       expires_at: isoZ(new Date(pending.expiresAt)),
     };
+  }
+
+  /**
+   * Every scope a sign-in would grant, for its consent page (§10.8), each marked
+   * `granted_before` when the account's earlier grants are known.
+   */
+  #consentScopes(scopes: readonly string[], before: ReadonlySet<string> | undefined): ConsentScope[] {
+    return scopes.map((scope) => ({
+      scope,
+      description: this.config.describe(scope),
+      ...(before === undefined ? {} : { granted_before: before.has(scope) }),
+    }));
+  }
+
+  /** The scopes the account's live sign-ins granted this `client_id` (§10.8). */
+  async #grantedBefore(clientId: string, accountId: string): Promise<ReadonlySet<string>> {
+    const agent = await this.#read<AccountAgent>(RecordKinds.accountAgent, composite(clientId, accountId));
+    const granted = new Set<string>();
+    for (const familyId of agent?.families ?? []) {
+      const family = await this.#read<AccountFamily>(RecordKinds.accountFamily, familyId);
+      if (family === undefined || family.revoked) continue;
+      for (const token of family.tokens) {
+        const grant = await this.#read<AccountGrant>(RecordKinds.refreshToken, token);
+        if (grant !== undefined && !grant.revoked && !this.#passed(grant.expiresAt)) {
+          for (const scope of grant.scopes) granted.add(scope);
+        }
+      }
+    }
+    return granted;
   }
 
   /**
@@ -2852,6 +3110,7 @@ export class CompanyService {
       accountId: options.accountId,
       scopes: granted,
       expiresAt: expiresAt.toISOString(),
+      ...(pending.dpopJkt === undefined ? {} : { dpopJkt: pending.dpopJkt }),
     };
     await this.store.put(RecordKinds.code, digest(code), json(issued), expiry(expiresAt));
     return this.#redirectUrl(pending.redirectUri, { code, state: pending.state });
@@ -2898,6 +3157,10 @@ export class CompanyService {
       .update(form.code_verifier ?? "")
       .digest("base64url");
     if (!sameText(verifier, issued.codeChallenge)) throw new Refused(400, "invalid_grant");
+    if (issued.dpopJkt !== undefined && (jkt === undefined || !sameText(jkt, issued.dpopJkt))) {
+      // Pushed with a DPoP proof, the code is bound to its key (RFC 9449 §10.1).
+      throw new Refused(400, "invalid_grant");
+    }
     return this.#signIn(clientId, issued.accountId, issued.scopes, issued.requested, jkt, this.#resource(form));
   }
 
@@ -3919,6 +4182,7 @@ export class CompanyService {
       isDirect: true,
       supportsOperations: negotiated,
       opening: true,
+      context: {},
     });
     const events: StoredEvent[] = [];
     for (const reply of replies) {
@@ -4151,6 +4415,7 @@ export class CompanyService {
         clientId: session.clientId,
         isDirect: conversation.parentId !== undefined,
         supportsOperations: negotiated,
+        context: sharedContext(conversation),
       });
       for (const reply of replies) {
         const event = await this.#reply(conversationId, session, reply, message.id);

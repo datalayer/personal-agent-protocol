@@ -52,6 +52,7 @@ def test_hosted_page_templates_are_checked() -> None:
         "name": "Shop",
         "domain": "shop.example",
         "scopes": ("orders:read",),
+        "agent_description": "Anything about your orders",
         "scope_descriptions": {"orders:read": "See orders"},
         "operations": False,
     }
@@ -126,8 +127,11 @@ async def test_authorize_redirects_to_the_hosted_consent_page_which_reads_the_re
         "heading",
         "caution",
         "scopes",
+        "prompt",
         "expires_at",
     }
+    # The agent asked for the consent page whatever the account granted before (spec 4.2).
+    assert summary["prompt"] == "consent"
 
     # The user allows on the hosted page; the sign-in completes as before.
     callback = await world.shop.approve_authorization(request_id, account_id="acct_ada")

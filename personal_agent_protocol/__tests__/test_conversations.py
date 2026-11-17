@@ -116,9 +116,9 @@ async def test_start_and_continue_preserve_message_ids_and_parse_waited_events()
 
 
 @pytest.mark.asyncio
-async def test_surfaces_message_id_conflict_without_response_body() -> None:
+async def test_surfaces_request_id_conflict_without_response_body() -> None:
     def company(_: httpx.Request) -> httpx.Response:
-        return httpx.Response(409, json={"error": "message_id_conflict", "secret": "omit"})
+        return httpx.Response(409, json={"error": "request_id_conflict", "secret": "omit"})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(company)) as http:
         reactor, _ = build_pap_reactor(http_client=http)
@@ -132,7 +132,7 @@ async def test_surfaces_message_id_conflict_without_response_body() -> None:
             )
         reactor.stop()
 
-    assert caught.value.code == "message_id_conflict"
+    assert caught.value.code == "request_id_conflict"
     assert "secret" not in str(caught.value)
 
 

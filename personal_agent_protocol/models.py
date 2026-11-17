@@ -32,9 +32,9 @@ from .profile import DEFAULT_PROTOCOL_VERSION, DRAFT_PROTOCOL_VERSION, PROTOCOL_
 _VERSION = re.compile(r"^(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)$")
 #: The protocol versions a Personal Agent implements unless it asks for others (§3.4): a
 #: Company's document is used at a version compatible with one of them, the same major
-#: and, before 1.0, the same minor. The 1.0 draft only (`DEFAULT_PROTOCOL_VERSION`).
+#: and, before 1.0, the same minor. 1.0 only (`DEFAULT_PROTOCOL_VERSION`).
 SUPPORTED_PROTOCOL_VERSIONS = frozenset({DEFAULT_PROTOCOL_VERSION})
-#: Every protocol version this SDK implements: 0.4 as published and the 1.0 draft. A
+#: Every protocol version this SDK implements: 0.4 and 1.0, both as published. A
 #: Personal Agent (`DiscoveryClient(protocol_versions=...)`) or a Company
 #: (`CompanyConfig.protocol_versions`) uses 0.4 only when it names it.
 AVAILABLE_PROTOCOL_VERSIONS = frozenset({PROTOCOL_PROFILE, DRAFT_PROTOCOL_VERSION})
@@ -200,10 +200,51 @@ def redirect_uri_matches(registered: str, given: str) -> bool:
 
 
 def _domain(value: str) -> str:
-    normalized = value.rstrip(".").lower()
-    if not _DOMAIN.fullmatch(normalized):
-        raise ValueError("must be a DNS domain name")
-    return normalized
+    normalized = value.lower()
+    host, port = split_domain(normalized)
+    host = host.rstrip(".")
+    if not _DOMAIN.fullmatch(host):
+        raise ValueError("must be a DNS domain name, with its port when that isn't 443")
+    return host if port is None else f"{host}:{port}"
+
+
+def split_domain(domain: str) -> tuple[str, int | None]:
+    """`organization.domain` as its host and its port, `None` for 443 (§3.1).
+
+    From 1.0 a domain includes its port when that isn't 443, such as
+    `shop.example:8443`; `ValueError` for a port that isn't a number from 1 to 65535,
+    or `:443`, which a domain never names."""
+
+    host, colon, port = domain.rpartition(":")
+    if not colon:
+        return domain, None
+    if not port.isdigit() or port.startswith("0") or not 0 < int(port) <= 65535:
+        raise ValueError("a domain's port is a number from 1 to 65535")
+    if int(port) == 443:
+        raise ValueError("a domain names its port only when that isn't 443")
+    return host, int(port)
+
+
+def domain_host(domain: str) -> str:
+    """The host of `organization.domain`, without the port it names (§3.1)."""
+
+    return split_domain(domain)[0].rstrip(".").lower()
+
+
+def url_domain(url: str) -> str | None:
+    """The domain an HTTPS URL is on, as `organization.domain` names it (§3.1): its host,
+    lowercase, with its port when that isn't 443. `None` for another scheme, user
+    information or an invalid port."""
+
+    parsed = urlsplit(url)
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        return None
+    host = parsed.hostname.lower().rstrip(".")
+    return host if port in {None, 443} else f"{host}:{port}"
 
 
 class ProtocolModel(BaseModel):
@@ -371,13 +412,18 @@ class AuthCapabilities(ProtocolModel):
 
 
 class AgentProtocol(ProtocolModel):
-    """A conversation protocol the Company Agent speaks (§3.1, §8).
+    """A conversation protocol the Company Agent speaks (§3.1, §8.1).
 
+    `description` says, in plain language, what the agent at `endpoint` can help with,
+    so the Personal Agent can decide whether a conversation serves the task at hand and
+    choose between the entries and the Company's APIs. Required from 1.0: a 1.0 document
+    whose entry has none is invalid (`DiscoveryDocument`); 0.4 doesn't define it.
     `access` is kept as written, whatever it says; read `account_access`.
     """
 
     type: str = Field(min_length=1)
     endpoint: str
+    description: str | None = Field(default=None, min_length=1)
     access: str | None = None
 
     @property
@@ -534,6 +580,19 @@ class DiscoveryDocument(ProtocolModel):
         return self
 
     @model_validator(mode="after")
+    def validate_version_fields(self) -> DiscoveryDocument:
+        # What 1.0 adds to the document, checked by the version the document follows.
+        major = parse_version(self.protocol_version)[0]
+        if major >= 1 and self.agent is not None:
+            if any(entry.description is None for entry in self.agent.protocols):
+                # Every conversation protocol says what its agent helps with (§3.1, §8.1).
+                raise ValueError("each agent.protocols entry needs a description")
+        if major < 1 and split_domain(self.organization.domain)[1] is not None:
+            # A port in organization.domain is 1.0's (§3.1); 0.4 names a host only.
+            raise ValueError("organization.domain names a port only from version 1.0")
+        return self
+
+    @model_validator(mode="after")
     def validate_version_used(self, info: ValidationInfo) -> DiscoveryDocument:
         # A document is used only at a version compatible with one the Personal Agent
         # implements, its own or one it links to (§3.1, §3.4): any this SDK implements, or
@@ -651,7 +710,10 @@ class OAuthServerMetadata(ProtocolModel):
     protected_resources: list[str] = Field(min_length=1)
     authorization_endpoint: str | None = None
     device_authorization_endpoint: str | None = None
+    #: Where Direct Sign-In's request is pushed (RFC 9126, §3.2, §4.2): a Personal Agent
+    #: SHOULD push whenever it is listed, and MUST when `require_pushed_authorization_requests`.
     pushed_authorization_request_endpoint: str | None = None
+    require_pushed_authorization_requests: bool = False
     scopes_supported: list[str] | None = None
     dpop_signing_alg_values_supported: list[str] | None = None
 
@@ -678,6 +740,14 @@ class OAuthServerMetadata(ProtocolModel):
             raise ValueError("authorization_code needs authorization_endpoint")
         if self.offers_device and self.device_authorization_endpoint is None:
             raise ValueError("the device grant needs device_authorization_endpoint")
+        if (
+            self.require_pushed_authorization_requests
+            and self.pushed_authorization_request_endpoint is None
+        ):
+            # A Company that requires PAR lists where to push (RFC 9126 §5).
+            raise ValueError(
+                "require_pushed_authorization_requests needs pushed_authorization_request_endpoint"
+            )
         return self
 
     @property
@@ -695,8 +765,9 @@ class OAuthServerMetadata(ProtocolModel):
     def lists_resource(self, domain: str) -> bool:
         """Whether `protected_resources` names `https://{domain}` (§3.2).
 
-        Exactly, except that the host compares ignoring case: an entry with a path, a
-        port or a trailing slash does not match.
+        Exactly, except that the host compares ignoring case: an entry with a path or a
+        trailing slash does not match, nor one whose port isn't the domain's. From 1.0 a
+        domain includes its port when that isn't 443, and so does its entry (§3.1, §3.2).
         """
 
         wanted = domain.lower().rstrip(".")
@@ -704,7 +775,7 @@ class OAuthServerMetadata(ProtocolModel):
             if not entry.startswith("https://"):
                 continue
             host = entry[len("https://") :]
-            if host and not any(char in host for char in "/?#:@") and host.lower() == wanted:
+            if host and not any(char in host for char in "/?#@") and host.lower() == wanted:
                 return True
         return False
 
@@ -1051,6 +1122,25 @@ def operations_content(
     return {"operations": content.model_dump(mode="json", exclude_none=True)}
 
 
+#: The `author.type` values and message roles this version defines (§8.4).
+AUTHOR_TYPES = ("agent", "human")
+MESSAGE_ROLES = ("user", "company")
+
+
+def known_author_type(value: object) -> object:
+    """An `author.type` this SDK doesn't recognize reads as `agent` (§8.4): a message is a
+    person's own words only when it says so."""
+
+    return value if not isinstance(value, str) or value in AUTHOR_TYPES else "agent"
+
+
+def known_role(value: object) -> object:
+    """A `role` this SDK doesn't recognize reads as `company` (§8.4): content from the
+    Company, never the User's (§10.1)."""
+
+    return value if not isinstance(value, str) or value in MESSAGE_ROLES else "company"
+
+
 class Author(ProtocolModel):
     """Who wrote a message (§7.4): `agent` or `human`, and for a Company message, who.
 
@@ -1062,6 +1152,10 @@ class Author(ProtocolModel):
     id: str | None = None
     name: str | None = Field(default=None, min_length=1)
     image: str | None = None
+
+    _type = field_validator("type", mode="before")(
+        classmethod(lambda cls, value: known_author_type(value))
+    )
 
     @field_validator("id")
     @classmethod
@@ -1088,6 +1182,10 @@ class Message(ProtocolModel):
     id: str | None = None
     author: Author
     role: Literal["user", "company"] | None = None
+
+    _role = field_validator("role", mode="before")(
+        classmethod(lambda cls, value: known_role(value))
+    )
     #: What the writer had seen (§8.4), hints neither side depends on: on a Company Agent
     #: message, the ID of the latest request it took into account; on a message the
     #: Personal Agent wrote, the last cursor it had read. A person's message carries neither.
@@ -1205,6 +1303,28 @@ class Message(ProtocolModel):
         return self
 
 
+def effective_context(messages: Iterable[Message]) -> dict[str, Any]:
+    """The context the Personal Agent's messages share, in order (§8.4): fields a message
+    leaves out keep their previous values, and a field set to `null` is cleared, as if
+    it had never been shared (from 1.0)."""
+
+    shared: dict[str, Any] = {}
+    for message in messages:
+        for name, value in (message.context or {}).items():
+            if value is None:
+                shared.pop(name, None)
+            else:
+                shared[name] = value
+    return shared
+
+
+def clears_context(message: Message) -> bool:
+    """Whether a message sets a `context` field to `null` to clear it (§8.4): 1.0's, so a
+    Personal Agent sends it only in a Session at 1.0 or later (§3.4)."""
+
+    return any(value is None for value in (message.context or {}).values())
+
+
 #: The `handoff` values and responders this version defines (§8.7).
 HANDOFF_STATES = ("none", "pending")
 RESPONDERS = ("agent", "human")
@@ -1225,9 +1345,11 @@ def known_responder(value: object) -> object:
 class ConversationState(ProtocolModel):
     """Where a conversation stands, in four fields each independent of the others (§8.7).
 
-    `working` is true while the Company has work in progress: a request it accepted but
-    hasn't acted on, a reply being written, or work it started on its own; a Personal
-    Agent that wants the whole reply reads until it is false. `handoff` is `pending`
+    `working` is true only while the Company is still replying: a request it accepted but
+    hasn't acted on, or a reply being written (§8.7, from 1.0). Work it finishes later,
+    such as a refund that takes days, isn't `working`: the Company says so in a message,
+    and adds another when it's done. A Personal Agent that wants the whole reply reads
+    until it is false. `handoff` is `pending`
     while the Company looks for a person (§8.9). `responder` is who handles the Company
     side. `closed` means the conversation takes no more messages (§8.12). A new
     conversation starts with `handoff` `none`, `responder` `agent` and `closed` false.
@@ -1264,7 +1386,9 @@ class ConversationEvent(ProtocolModel):
     handoff: Literal["none", "pending"] | None = None
     responder: Literal["agent", "human"] | None = None
     closed: bool | None = None
-    error: Literal["insufficient_scope"] | None = None
+    #: An `authorization` event's error (§8.11): `insufficient_scope`, or a value a later
+    #: version adds. Whatever it says, the Personal Agent signs in again for `scope`.
+    error: str | None = Field(default=None, min_length=1)
     scope: str | None = None
     reason: str | None = None
     conversation_id: str | None = None
@@ -1288,6 +1412,16 @@ class ConversationEvent(ProtocolModel):
         """Whether this SDK knows the type; an unknown one is skipped, never an error."""
 
         return self.type in KNOWN_EVENT_TYPES
+
+    @property
+    def sign_in_scopes(self) -> tuple[str, ...]:
+        """For an `authorization` event, the scopes to sign in again for (§5.4, §8.11):
+        those in `scope`, whatever `error` says, a value this SDK doesn't recognize
+        included. Empty for any other event."""
+
+        if self.type != "authorization" or not self.scope:
+            return ()
+        return tuple(dict.fromkeys(scope for scope in self.scope.split(" ") if scope))
 
     @field_validator("created_at")
     @classmethod

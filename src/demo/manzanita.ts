@@ -146,6 +146,7 @@ export const CONFIG_OPTIONS: CompanyConfigOptions = {
   name: "Manzanita Outfitters",
   domain: DOMAIN,
   scopes: ["orders:read", "orders:write"],
+  agentDescription: "Anything about your orders, returns, and our outdoor gear",
   writeScopes: ["orders:write"],
   links: true,
   disclosures: true,

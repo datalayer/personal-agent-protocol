@@ -220,14 +220,14 @@ test("finding 3: a retried start answers only who may read the conversation", as
 
 test("finding 5: operations without a write scope is a configuration error", () => {
   assert.throws(
-    () => new CompanyConfig({ name: "Shop", domain: "shop.example", scopes: ["orders:read"], scopeDescriptions: { "orders:read": "See orders" } }),
+    () => new CompanyConfig({ name: "Shop", domain: "shop.example", agentDescription: "Anything about your account", scopes: ["orders:read"], scopeDescriptions: { "orders:read": "See orders" } }),
     /writeScopes/,
   );
   assert.throws(
-    () => new CompanyConfig({ name: "Shop", domain: "shop.example", scopes: ["a:read"], writeScopes: ["a:write"], scopeDescriptions: { "a:read": "Read" } }),
+    () => new CompanyConfig({ name: "Shop", domain: "shop.example", agentDescription: "Anything about your account", scopes: ["a:read"], writeScopes: ["a:write"], scopeDescriptions: { "a:read": "Read" } }),
     /among scopes/,
   );
-  new CompanyConfig({ name: "Shop", domain: "shop.example", scopes: ["orders:read"], scopeDescriptions: { "orders:read": "See orders" }, operations: false });
+  new CompanyConfig({ name: "Shop", domain: "shop.example", agentDescription: "Anything about your account", scopes: ["orders:read"], scopeDescriptions: { "orders:read": "See orders" }, operations: false });
 });
 
 test("finding 5: an operation records and requires its scopes", async () => {
@@ -564,7 +564,7 @@ test("finding 12: the Node company fetches over the resolving transport by defau
   const { hostname } = await import("node:os");
   const { DiscoveryTransports } = await import("../../lib/index.js");
   const { buildCompany } = await import("../../lib/server.js");
-  const service = buildCompany(new CompanyConfig({ name: "Shop", domain: "shop.example", scopes: ["a:read"], scopeDescriptions: { "a:read": "Read" }, operations: false }));
+  const service = buildCompany(new CompanyConfig({ name: "Shop", domain: "shop.example", agentDescription: "Anything about your account", scopes: ["a:read"], scopeDescriptions: { "a:read": "Read" }, operations: false }));
   const transport = firstContribution(service.reactor, DiscoveryTransports, "transport");
   // This machine's own name resolves (through /etc/hosts) to a loopback or private address.
   await assert.rejects(transport.fetch(new URL(`https://${hostname()}/agent.json`), {}), (error) => ["unsafe_address", "dns_failed"].includes(error.code));

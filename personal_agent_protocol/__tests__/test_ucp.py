@@ -71,7 +71,10 @@ async def test_a_company_that_speaks_ucp_lists_it_and_serves_its_profile_on_its_
     assert set(profile.identity_linking_scopes) <= set(metadata.scopes_supported or [])
     assert metadata.offers_direct
     assert "private_key_jwt" in world.shop.oauth_metadata()["token_endpoint_auth_methods_supported"]
-    assert ucp_scopes(profile, ("orders:read",)) == ()
+    # From 1.0 a sign-in after insufficient_scope requests every scope still needed; 0.4
+    # requested only the missing ones (UCP extension 4).
+    assert ucp_scopes(profile, ("orders:read",)) == ("orders:read",)
+    assert ucp_scopes(profile, ("orders:read",), protocol_version="0.4") == ()
     # A company that doesn't speak UCP lists nothing, and its profile isn't fetched.
     world = World()
     world.shop, world.plugin = manzanita(

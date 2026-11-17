@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -36,8 +37,12 @@ from ..errors import ProofError, SessionError
 from ..models import ClientMetadata, JsonWebKeySet
 from .points import ReplayCache
 
-#: Companies accept client assertions and delegations signed with these (§4.1, §5.2).
+#: Companies accept client assertions and delegations signed with these (§4.1, §5.2): both
+#: are required from 1.0.
 _ALGORITHMS = ("ES256", "PS384")
+#: The RSA key sizes accepted for `PS384`, in bits (guides, *Signing and verifying JWTs*):
+#: 2048 to 4096. A smaller key is weak, a larger one costly to verify.
+RSA_KEY_BITS = (2048, 4096)
 #: An assertion lives at most this long: `exp` at most five minutes after `iat` (§4.1).
 #: The SDKs' own assertions live 60 seconds.
 _MAX_LIFETIME = timedelta(seconds=300)
@@ -128,9 +133,10 @@ def _decode(
             continue
         if key.alg is not None and key.alg != algorithm:
             continue
-        public = jwt.PyJWK.from_dict(
-            json.loads(key.model_dump_json(exclude_none=True)), algorithm=algorithm
-        ).key
+        jwk_value = json.loads(key.model_dump_json(exclude_none=True))
+        if not _key_size_accepted(jwk_value):
+            continue
+        public = jwt.PyJWK.from_dict(jwk_value, algorithm=algorithm).key
         try:
             return jwt.decode(
                 compact,
@@ -149,6 +155,21 @@ def _decode(
         except jwt.InvalidSignatureError:
             continue
     return None
+
+
+def _key_size_accepted(jwk_value: dict[str, Any]) -> bool:
+    """Whether a verifying key's size is accepted, read from the JWK before it is loaded:
+    an RSA key of 2048 to 4096 bits (`RSA_KEY_BITS`); an EC key's curve is `ES256`'s."""
+
+    if jwk_value.get("kty") != "RSA":
+        return True
+    modulus = str(jwk_value.get("n", ""))
+    try:
+        bits = int.from_bytes(base64.urlsafe_b64decode(modulus + "=" * (-len(modulus) % 4)), "big")
+    except (ValueError, TypeError):
+        return False
+    low, high = RSA_KEY_BITS
+    return low <= bits.bit_length() <= high
 
 
 def _status(error: str) -> int:
@@ -265,9 +286,10 @@ async def verify_delegation(  # noqa: C901 - the four steps of §5.2, in order
     if key is None or (key.alg is not None and key.alg != algorithm):
         raise _refused("No key of the agent's jwks_uri signed the delegation")
     try:
-        public = jwt.PyJWK.from_dict(
-            json.loads(key.model_dump_json(exclude_none=True)), algorithm=algorithm
-        ).key
+        jwk_value = json.loads(key.model_dump_json(exclude_none=True))
+        if not _key_size_accepted(jwk_value):
+            raise ValueError("an RSA key is 2048 to 4096 bits")
+        public = jwt.PyJWK.from_dict(jwk_value, algorithm=algorithm).key
         claims = jwt.decode(
             compact,
             public,

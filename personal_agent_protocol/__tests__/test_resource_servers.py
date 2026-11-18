@@ -108,6 +108,38 @@ async def test_a_token_stops_working_there_when_it_expires() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_blocked_agents_token_stops_working_there_at_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The client policy is asked when the token is presented, not only when it was
+    issued: an agent the company blocks, or a service it leaves out for that agent
+    (§4.5), and its unexpired token is refused."""
+
+    from personal_agent_protocol.company.points import CLIENT_POLICIES
+    from personal_agent_protocol.reactor import first_contribution
+
+    world = world_with(ELSEWHERE)
+    await signed_in(world)
+    token = (await token_for(world, ELSEWHERE)).access_token.get_secret_value()
+    assert await world.shop.access_token_for(token, ELSEWHERE) is not None
+    policy = first_contribution(world.shop.reactor, CLIENT_POLICIES, "policy")
+
+    async def left_out(client_id: str, resource: str) -> bool:
+        return resource != ELSEWHERE
+
+    monkeypatch.setattr(policy, "allows_resource", left_out, raising=False)
+    assert await world.shop.access_token_for(token, ELSEWHERE) is None
+    monkeypatch.delattr(policy, "allows_resource")
+    assert await world.shop.access_token_for(token, ELSEWHERE) is not None
+
+    async def blocked(client_id: str) -> bool:
+        return False
+
+    monkeypatch.setattr(policy, "allows", blocked)
+    assert await world.shop.access_token_for(token, ELSEWHERE) is None
+
+
+@pytest.mark.asyncio
 async def test_it_gets_bearer_tokens_from_an_issuer_that_binds_its_own() -> None:
     """§7: a company whose MCP server doesn't accept DPoP returns Bearer tokens for it."""
 
@@ -180,6 +212,8 @@ def test_every_accepted_one_reads_back_through_the_metadata_parser() -> None:
         "https://",
         "https://not a host/mcp",
         "https://mcp.manzanita.example:port/mcp",
+        "https://mcp.manzanita.example:65536/mcp",
+        "https://mcp.manzanita.example:99999/mcp",
         "https://münchen.example/mcp",
         "https://MCP.manzanita.example/mcp",
         "https://mcp.manzanita.example/mcp?x=1",

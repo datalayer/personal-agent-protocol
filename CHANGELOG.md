@@ -22,7 +22,9 @@ names none behaves exactly as before.
   named no `resource` covers them, those added after it too (4.5).
 - **`CompanyService.access_token_for(token, resource)` (`accessTokenFor`)**: for such a service
   to verify what it is sent. The token's record when it was issued for that service, is
-  unexpired, its sign-in has not ended and its scopes are still offered; nothing otherwise, the
+  unexpired, its sign-in has not ended, its scopes are still offered and the client policy
+  still allows its agent and this service for it (asked when the token is presented, so a
+  blocked agent's token stops working at once); nothing otherwise, the
   default token and a token for another service among them (4.5: a token issued for a
   `resource` is accepted only at that service). The service enforces the record's `scopes`.
 - **`resource_metadata_url(resource)` (`resourceMetadataUrl`)**: where a service's protected

@@ -2871,8 +2871,8 @@ export class CompanyService {
    * The record of an access token presented at one of `resourceServers`, or `undefined`.
    *
    * For the service at `resource` to verify what it is sent (§4.5, §7): the token was issued
-   * here **for that service**, is unexpired, its sign-in has not ended, and every scope it
-   * holds is still offered. A token for another resource, the default token among them, is
+   * here **for that service**, is unexpired, its sign-in has not ended, every scope it holds is
+   * still offered, and the client policy still allows its agent, and this service for it. A token for another resource, the default token among them, is
    * `undefined`: the service answers `invalid_token` with its `resource_metadata`
    * (`resourceMetadataUrl`). The record says whose it is (`accountId`), which agent holds it
    * (`clientId`) and its `scopes`, which the service enforces.
@@ -2883,6 +2883,12 @@ export class CompanyService {
     }
     const issued = await this.#accessToken(token);
     if (issued === undefined || issued.resource !== resource || !this.#offers(issued.scopes)) return undefined;
+    // The client policy, asked now and not only when the token was issued: a blocked agent's
+    // tokens stop working at once, and so does one for a service the policy has since left out
+    // for this agent (§4.5).
+    if (!(await this.#allowed(issued.clientId)) || !(await this.#resourceAllowed(issued.clientId, resource))) {
+      return undefined;
+    }
     return issued;
   }
 

@@ -13,13 +13,14 @@ import {
   RefreshTokenClient,
   SessionClient,
   discoverCompany,
+  firstContribution,
   negotiateExtensions,
   parseOAuthServerMetadata,
   parseProtectedResourceMetadata,
 } from "../../lib/index.js";
 // The helper discovery and `fetchMcpServerMetadata` read the metadata at.
 import { protectedResourceMetadataUrl } from "../../lib/models.js";
-import { CompanyConfig, resourceMetadataUrl } from "../../lib/server.js";
+import { ClientPolicies, CompanyConfig, resourceMetadataUrl } from "../../lib/server.js";
 import { manzanita } from "../../lib/demo/manzanita.js";
 import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./support/world.mjs";
 
@@ -110,6 +111,22 @@ test("the issuer lists it and issues a Bearer token for it, which only it takes"
   assert.equal(await w.shop.accessTokenFor(token.accessToken.reveal(), ELSEWHERE), undefined);
 });
 
+test("a blocked agent's token stops working there at once", async () => {
+  // The client policy is asked when the token is presented, not only when it was issued: an
+  // agent the company blocks, or a service it leaves out for that agent (§4.5), and its
+  // unexpired token is refused.
+  const w = await signedInWorld({ resourceServers: [ELSEWHERE] });
+  const token = (await w.tokenFor(ELSEWHERE)).token.accessToken.reveal();
+  assert.ok(await w.shop.accessTokenFor(token, ELSEWHERE));
+  const policy = firstContribution(w.shop.reactor, ClientPolicies, "policy");
+  policy.allowsResource = async (_clientId, resource) => resource !== ELSEWHERE;
+  assert.equal(await w.shop.accessTokenFor(token, ELSEWHERE), undefined);
+  delete policy.allowsResource;
+  assert.ok(await w.shop.accessTokenFor(token, ELSEWHERE));
+  policy.allows = async () => false;
+  assert.equal(await w.shop.accessTokenFor(token, ELSEWHERE), undefined);
+});
+
 test("it gets Bearer tokens from an issuer that binds its own", async () => {
   // §7: a company whose MCP server doesn't accept DPoP returns Bearer tokens for it.
   const w = await signedInWorld({ resourceServers: [ELSEWHERE], dpopBinding: "optional" });
@@ -158,6 +175,8 @@ test("anything else is refused when the company is configured", () => {
     "https://",
     "https://not a host/mcp",
     "https://mcp.shop.example:port/mcp",
+    "https://mcp.shop.example:65536/mcp",
+    "https://mcp.shop.example:99999/mcp",
     "https://münchen.example/mcp",
     "https://MCP.shop.example/mcp",
     "https://mcp.shop.example/mcp?x=1",

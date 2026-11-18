@@ -400,6 +400,10 @@ def _check_resource_servers(config: CompanyConfig) -> None:
     for server in servers:
         _https_url(server, "a resource server")
         parts = urlsplit(server)
+        # Read, so a port that is no port (above 65535) is refused here: `urlsplit`
+        # checks it only when asked, and a URL parser that checks at once would refuse
+        # the issuer's whole metadata over it.
+        _ = parts.port
         if not _RESOURCE_AUTHORITY.fullmatch(parts.netloc):
             raise ValueError(
                 "a resource server names a host in small letters, and no user information"
@@ -2671,7 +2675,8 @@ class CompanyService:
 
         For the service at `resource` to verify what it is sent (§4.5, §7): the token
         was issued here **for that service**, is unexpired, its sign-in has not ended,
-        and every scope it holds is still offered. A token for another resource, the
+        every scope it holds is still offered, and the client policy still allows its
+        agent, and this service for it. A token for another resource, the
         default token among them, is `None`: the service answers `invalid_token` with
         its `resource_metadata` (`resource_metadata_url`). The record says whose it is
         (`account_id`), which agent holds it (`client_id`) and its `scopes`, which the
@@ -2682,6 +2687,13 @@ class CompanyService:
             raise ValueError(f"{resource} is not one of this company's resource_servers")
         issued = await self._access_token(token)
         if issued is None or issued.resource != resource or not self._offers(issued.scopes):
+            return None
+        # The client policy, asked now and not only when the token was issued: a blocked
+        # agent's tokens stop working at once, and so does one for a service the policy
+        # has since left out for this agent (§4.5).
+        if not await self._allowed(issued.client_id) or not await self._resource_allowed(
+            issued.client_id, resource
+        ):
             return None
         return issued
 

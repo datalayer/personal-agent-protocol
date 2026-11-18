@@ -39,7 +39,15 @@ import { defineContributionPoint } from "@datalayer/reactor";
 
 import type { JWK } from "jose";
 
-import type { Alternative, Approval, ClientMetadata, JsonWebKeySet, Link, Operation } from "../models.js";
+import type {
+  Alternative,
+  Approval,
+  ClientMetadata,
+  JsonWebKeySet,
+  Link,
+  Operation,
+  PublicClientMetadata,
+} from "../models.js";
 import type { SecretValue } from "../secret.js";
 import { RecordKinds, type CompanyStore } from "./store.js";
 
@@ -278,6 +286,14 @@ export interface ClientResolver {
     clientId: string,
     options?: { readonly kid?: string },
   ): Promise<readonly [ClientMetadata, JsonWebKeySet]>;
+  /**
+   * What a resolver adds to verify a public client by its domain: the client ID metadata
+   * document of a client that is no personal agent (an MCP client), one that says
+   * `token_endpoint_auth_method` is `none` and names no key. It fetches as `resolve` does, never
+   * a private address. A resolver without it verifies no public client: with `publicClients`,
+   * only those that registered themselves sign in.
+   */
+  resolvePublic?(clientId: string): Promise<PublicClientMetadata>;
 }
 
 /**

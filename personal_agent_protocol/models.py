@@ -199,13 +199,17 @@ def redirect_uri_matches(registered: str, given: str) -> bool:
     return (one.hostname, one.path, one.query) == (other.hostname, other.path, other.query)
 
 
-#: An HTTPS redirect URI's authority for a public client: DNS labels in small ASCII
-#: letters (an internationalized name as its A-labels), and a port when it is not 443.
-_PUBLIC_REDIRECT_AUTHORITY = re.compile(
-    r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:[0-9]{1,5})?"
+#: A public client's HTTPS redirect URI: a host of DNS labels in small ASCII letters (an
+#: internationalized name as its A-labels), a port when it is not 443, then a path or a
+#: query. Read as text, never through a URL parser: what is compared is what was written.
+_PUBLIC_HTTPS_REDIRECT = re.compile(
+    r"https://([a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:[0-9]{1,5})?)"
+    r"([/?].*)?"
 )
-#: A loopback redirect URI's authority: `127.0.0.1`, `[::1]` or `localhost`, any port.
-_PUBLIC_LOOPBACK_AUTHORITY = re.compile(r"(127\.0\.0\.1|\[::1\]|localhost)(:[0-9]{1,5})?")
+#: A public client's loopback redirect URI: `127.0.0.1`, `[::1]` or `localhost`, any port.
+_PUBLIC_LOOPBACK_REDIRECT = re.compile(
+    r"http://((127\.0\.0\.1|\[::1\]|localhost)(:[0-9]{1,5})?)([/?].*)?"
+)
 #: The longest redirect URI a public client names, and the longest name it shows.
 PUBLIC_REDIRECT_URI_MAX = 2000
 PUBLIC_CLIENT_NAME_MAX = 100
@@ -214,15 +218,33 @@ PUBLIC_CLIENT_NAME_MAX = 100
 _UNSHOWABLE = re.compile(
     "[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]"
 )
+#: What no redirect URI holds: a space, a control character, a backslash, a fragment.
+_UNSAFE_IN_REDIRECT = re.compile("[\u0000-\u0020\u007f-\u009f\\\\#]")
 
 
-def _port_of(authority: str) -> bool:
+def _port_is_a_port(authority: str) -> bool:
     """Whether the authority's port, if it names one, is a port (1 to 65535)."""
 
-    _, colon, port = authority.rpartition(":")
-    if not colon or authority.endswith("]"):
+    port = authority.rpartition(":")[2] if not authority.endswith("]") else ""
+    if ":" not in authority or not port:
         return True
     return port.isdigit() and 0 < int(port) <= 65535
+
+
+def _public_redirect(value: str) -> tuple[bool, str, str, str] | None:
+    """A public client's redirect URI, as `(loopback, authority, host, rest)`; `None` for
+    anything else."""
+
+    if not value or len(value) > PUBLIC_REDIRECT_URI_MAX or _UNSAFE_IN_REDIRECT.search(value):
+        return None
+    loopback = _PUBLIC_LOOPBACK_REDIRECT.fullmatch(value)
+    if loopback is not None and _port_is_a_port(loopback.group(1)):
+        return True, loopback.group(1), loopback.group(2), loopback.group(4) or ""
+    https = _PUBLIC_HTTPS_REDIRECT.fullmatch(value)
+    if https is not None and _port_is_a_port(https.group(1)):
+        authority = https.group(1)
+        return False, authority, authority.partition(":")[0], https.group(6) or ""
+    return None
 
 
 def is_public_loopback_redirect(value: str) -> bool:
@@ -233,14 +255,8 @@ def is_public_loopback_redirect(value: str) -> bool:
     literal (`is_loopback_redirect`): the apps that are MCP clients name it.
     """
 
-    if "#" in value or "\\" in value:
-        return False
-    parsed = urlsplit(value)
-    return (
-        parsed.scheme == "http"
-        and _PUBLIC_LOOPBACK_AUTHORITY.fullmatch(parsed.netloc) is not None
-        and _port_of(parsed.netloc)
-    )
+    parsed = _public_redirect(value)
+    return parsed is not None and parsed[0]
 
 
 def public_redirect_uri(value: str) -> str:
@@ -249,27 +265,13 @@ def public_redirect_uri(value: str) -> str:
     HTTPS to a host in small ASCII letters, a port allowed; or `http` to the User's own
     computer (`is_public_loopback_redirect`). Never user information, a fragment, a
     backslash, a space or a control character, each a way to make two readers of one URL
-    see two hosts; never another scheme.
+    see two hosts; never another scheme. Read as text, as written: nothing is normalized.
     """
 
-    if (
-        not value
-        or len(value) > PUBLIC_REDIRECT_URI_MAX
-        or any(ord(character) <= 0x20 or 0x7F <= ord(character) <= 0x9F for character in value)
-        or "\\" in value
-        or "#" in value
-    ):
-        raise ValueError("a redirect URI is a URL without spaces, backslashes or a fragment")
-    if is_public_loopback_redirect(value):
-        return value
-    parsed = urlsplit(value)
-    if (
-        parsed.scheme != "https"
-        or not _PUBLIC_REDIRECT_AUTHORITY.fullmatch(parsed.netloc)
-        or not _port_of(parsed.netloc)
-    ):
+    if not isinstance(value, str) or _public_redirect(value) is None:
         raise ValueError(
-            "a redirect URI is HTTPS to a host in small letters, or http to the loopback"
+            "a redirect URI is HTTPS to a host in small letters, or http to the loopback, "
+            "with no user information, fragment, backslash or space"
         )
     return value
 
@@ -282,16 +284,12 @@ def public_redirect_uri_matches(registered: str, given: str) -> bool:
     prefix, no other path, no added query, no other host.
     """
 
-    try:
-        public_redirect_uri(given)
-    except ValueError:
+    one, other = _public_redirect(registered), _public_redirect(given)
+    if one is None or other is None:
         return False
     if registered == given:
         return True
-    if not (is_public_loopback_redirect(registered) and is_public_loopback_redirect(given)):
-        return False
-    one, other = urlsplit(registered), urlsplit(given)
-    return (one.hostname, one.path, one.query) == (other.hostname, other.path, other.query)
+    return one[0] and other[0] and (one[2], one[3]) == (other[2], other[3])
 
 
 def redirect_host(redirect_uri: str) -> str:
@@ -1041,11 +1039,8 @@ class PublicClientMetadata(ProtocolModel):
         host = urlsplit(self.client_id).hostname
         usable = []
         for uri in self.redirect_uris:
-            try:
-                public_redirect_uri(uri)
-            except ValueError:
-                continue
-            if is_public_loopback_redirect(uri) or urlsplit(uri).hostname == host:
+            parsed = _public_redirect(uri) if isinstance(uri, str) else None
+            if parsed is not None and (parsed[0] or parsed[2] == host):
                 usable.append(uri)
         return tuple(usable)
 

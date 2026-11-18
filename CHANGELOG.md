@@ -6,6 +6,48 @@
 
 # Changelog
 
+## 0.37.4 (2026-11-18)
+
+Clients that are no personal agents. In both SDKs; additive API only, off by default, and a
+company that turns nothing on behaves exactly as before.
+
+- **`public_clients` (`publicClients`) on `CompanyConfig`** (spec 7: MCP clients sign in with
+  MCP's own OAuth flow). A public client, such as an MCP client, authenticates with nothing but
+  PKCE (S256) at Direct Sign-In's authorization endpoint. It is either verified by its domain,
+  a client ID metadata document that says `token_endpoint_auth_method` is `none` and names no
+  key, read by the client resolver's new optional `resolve_public` (`resolvePublic`); or, with
+  **`client_registration` (`clientRegistration`)**, registered at `POST /oauth/register`
+  (RFC 7591), unverified. A document that names a key is a personal agent's and no document is
+  both, so a personal agent can't skip its assertion. Guide: guides/company, *Other clients
+  than personal agents*.
+- **One service, and nothing of the protocol.** A public client's token is a Bearer token for
+  one of `resource_servers` or the company's own MCP server, named as `resource` in every
+  request; never the default token. It is refused at every endpoint of the protocol, with or
+  without a Session header; at the MCP server it calls tools with no Session, and a tool that
+  needs approval returns no operation. `access_token_for` (`accessTokenFor`) returns such a
+  token's record with `public` true, and asks the client policy as before. Scopes are
+  `public_client_scopes` (`publicClientScopes`), never `poppy:browser-sign-in`.
+- **Refresh tokens** of a public client are rotated at every use and one used twice ends the
+  sign-in whole, whatever `refresh_reuse_revokes` says; a sign-in lasts
+  `public_client_refresh_lifetime` (`publicClientRefreshLifetimeSeconds`, 30 days).
+- **Redirect URIs** of a public client are loopback or HTTPS, written without user
+  information, fragment, backslash or space, compared as text, exactly but for a loopback
+  port (`public_redirect_uri`, `public_redirect_uri_matches`). An unverified client's errors
+  are pages, never redirects.
+- **For a consent page**: `authorization_request` (`authorizationRequest`) adds `client_class`
+  (`personal_agent` or `public_client`), `verified`, `redirect_host`, and `resource` for a
+  public client. The company's own page says when a client is unverified and where the
+  browser goes back to.
+- **Registration is bounded**: the host's rate limit is asked with `registration:{address}`,
+  then `client_registrations_per_hour` (10) for each address. `CompanyRequest` has an optional
+  `client_address` (`clientAddress`), which the ASGI and Node adapters fill with the peer's.
+- **For the company's owner**: `public_client_sign_ins` (`publicClientSignIns`) and
+  `revoke_public_client_sign_in` (`revokePublicClientSignIn`).
+- The issuer's metadata gains `none` in `token_endpoint_auth_methods_supported` and
+  `authorization_response_iss_parameter_supported` only with `public_clients`, and
+  `registration_endpoint` only with `client_registration`. New record kinds `public_client` and
+  `registration_count`; a personal agent's records are written as before.
+
 ## 0.37.3 (2026-11-18)
 
 A company's services at URLs of their own. In both SDKs; additive API only, and a company that

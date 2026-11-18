@@ -109,6 +109,9 @@ export function companyRequestListener(
           url: `${service.config.base}${request.url ?? "/"}`,
           headers: lowerCaseHeaders(request),
           body,
+          // The peer's address, as the server saw it: what client registration is rate-limited
+          // by. Behind a proxy it is the proxy's, one count for all.
+          ...(request.socket.remoteAddress === undefined ? {} : { clientAddress: request.socket.remoteAddress }),
         });
         if (answer.stream !== undefined) {
           response.writeHead(answer.status, outgoing(answer.headers));

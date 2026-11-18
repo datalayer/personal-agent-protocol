@@ -251,6 +251,13 @@ export const RecordKinds = {
    * lasts: a key that signs for another User ID is refused (§5.2).
    */
   delegatedKey: "delegated_key",
+  /**
+   * A public client that registered itself (RFC 7591), by the `client_id` it was given: its
+   * name and redirect URIs, as it stated them. Nothing verifies them.
+   */
+  publicClient: "public_client",
+  /** How many clients one address registered in the current window (RFC 7591 §5). */
+  registrationCount: "registration_count",
 } as const;
 
 export type RecordKind = (typeof RecordKinds)[keyof typeof RecordKinds];
@@ -273,6 +280,41 @@ export interface IssuedAccessToken {
   readonly family: string;
   readonly resource?: string;
   readonly dpopJkt?: string;
+  /**
+   * Issued to a public client (an MCP client), never a personal agent: it works at its
+   * `resource` alone, and belongs to no Session. Absent on a personal agent's.
+   */
+  readonly public?: true;
+}
+
+/**
+ * What a sign-in by a public client carries, from its request to its tokens.
+ *
+ * A public client is another client than a personal agent (an MCP client): it authenticates
+ * with nothing but PKCE, and its tokens work at one service and never at the protocol's own
+ * endpoints. `verified` says its `client_id` is a client ID metadata document read from its
+ * own domain; a client that registered itself (RFC 7591) is not, and its `name` is only what it
+ * said. `resource` is the one service the sign-in is for; `redirectHost` where the person's
+ * browser was sent back.
+ */
+export interface PublicClient {
+  readonly name: string;
+  readonly verified: boolean;
+  readonly resource: string;
+  readonly redirectHost: string;
+}
+
+/** A public client that registered itself (RFC 7591): what it said, never verified. */
+export interface RegisteredClient {
+  readonly clientId: string;
+  readonly clientName: string;
+  readonly redirectUris: readonly string[];
+  readonly registeredAt: string;
+}
+
+/** The clients one address registered in the window its record lasts. */
+export interface RegistrationCount {
+  readonly count: number;
 }
 
 /**
@@ -318,6 +360,11 @@ export interface AccountGrant {
    * `invalid_grant` (§4.4). Absent: not bound.
    */
   readonly dpopJkt?: string;
+  /**
+   * The public client the sign-in is of, carried by every token rotated from it; absent for a
+   * personal agent's.
+   */
+  readonly public?: PublicClient;
 }
 
 /** One sign-in: every refresh token rotated from it, and the access tokens it gave. */
@@ -328,6 +375,10 @@ export interface AccountFamily {
   readonly accessTokens: readonly string[];
   /** Revoked (§4.6) or disconnected: no token joins it any more. */
   readonly revoked: boolean;
+  /** The public client the sign-in is of; absent for a personal agent's. */
+  readonly public?: PublicClient;
+  /** When a public client's sign-in last got tokens: at the sign-in, then each refresh. */
+  readonly lastUsedAt?: string;
 }
 
 /** The sign-ins of one agent to one account, for disconnecting it. */
@@ -401,6 +452,11 @@ export interface PendingAuthorization {
    * exchanged only with a proof by that key.
    */
   readonly dpopJkt?: string;
+  /**
+   * The public client that asks, with whether it is verified and where the browser goes back,
+   * for the consent page to show; absent when a personal agent asks.
+   */
+  readonly public?: PublicClient;
 }
 
 /**
@@ -427,6 +483,11 @@ export interface IssuedCode {
   readonly expiresAt: string;
   /** The DPoP key that pushed the request (RFC 9449 §10.1): the exchange proves with it. */
   readonly dpopJkt?: string;
+  /**
+   * The public client the code was issued to; absent for a personal agent's. A code is
+   * exchanged only by the class of client it was issued to.
+   */
+  readonly public?: PublicClient;
 }
 
 export interface PendingMediated {

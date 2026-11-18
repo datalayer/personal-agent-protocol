@@ -700,6 +700,9 @@ def test_a_redirect_uri_is_loopback_or_https_and_nothing_else() -> None:
         assert public_redirect_uri(accepted) == accepted
     for refused in (
         "",
+        "HTTPS://client.example/callback",
+        "https:/client.example/callback",
+        "https://client.example.:443/callback",
         "http://client.example/callback",
         "https://user@client.example/callback",
         "https://user:pw@client.example/callback",

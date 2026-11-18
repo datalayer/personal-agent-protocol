@@ -17,8 +17,10 @@ import { OPERATOR_DIRECTORY_MEDIA_TYPE } from "./operator-signatures.js";
 import {
   parseClientMetadata,
   parseJsonWebKeySet,
+  parsePublicClientMetadata,
   type ClientMetadata,
   type JsonWebKeySet,
+  type PublicClientMetadata,
 } from "./models.js";
 import {
   DiscoveryTransports,
@@ -107,23 +109,54 @@ export class AgentIdentityClient {
     this.#unfetchableMs = (options.unfetchableSeconds ?? 30) * 1000;
   }
 
-  async fetchMetadata(
+  /**
+   * Fetch a public client's client ID metadata document, bound to `clientId`.
+   *
+   * The document a personal agent's metadata is read from, fetched the same way: HTTPS, no
+   * redirect, bounded, and only at an address `pap.urlSafetyPolicy` approves, so a `client_id`
+   * naming a private address is never fetched. It is a public client's only when it says
+   * `token_endpoint_auth_method` is `none` and names no key; a personal agent's document is
+   * refused here, as a public client's is by `fetchMetadata`.
+   */
+  async fetchPublicMetadata(
     clientId: string,
     options: IdentityRequestOptions = {},
-  ): Promise<ClientMetadata> {
+  ): Promise<PublicClientMetadata> {
+    const [requested, value] = await this.#clientDocument(clientId, options);
+    let metadata: PublicClientMetadata;
+    try {
+      metadata = parsePublicClientMetadata(value);
+    } catch (cause) {
+      throw new ProtocolValidationError(
+        "invalid_client_metadata",
+        "Client metadata is not a public client's",
+        { cause },
+      );
+    }
+    if (metadata.client_id !== requested.toString()) {
+      throw new IdentityError(
+        "client_id_mismatch",
+        "Client metadata client_id does not match the URL that was fetched",
+      );
+    }
+    return metadata;
+  }
+
+  /** The document at a `client_id`, cached, and the URL it was fetched at. */
+  async #clientDocument(clientId: string, options: IdentityRequestOptions): Promise<readonly [URL, unknown]> {
     const requested = this.#clientIdUrl(clientId);
     const now = this.#cache.now().getTime();
     const remembered = this.#unfetchable.get(requested.toString());
     if (remembered !== undefined && now < remembered.at) throw remembered.error;
-    let value: unknown;
     try {
-      value = await this.#cachedJson(
+      const value = await this.#cachedJson(
         `pap.client-metadata:${requested.toString()}`,
         requested,
         0,
         undefined,
         options.signal,
       );
+      return [requested, value];
     } catch (error) {
       // Unfetchable for a while: a stream of assertions naming it does not fetch it each time.
       if (error instanceof IdentityError || error instanceof DiscoveryError) {
@@ -131,6 +164,13 @@ export class AgentIdentityClient {
       }
       throw error;
     }
+  }
+
+  async fetchMetadata(
+    clientId: string,
+    options: IdentityRequestOptions = {},
+  ): Promise<ClientMetadata> {
+    const [requested, value] = await this.#clientDocument(clientId, options);
     let metadata: ClientMetadata;
     try {
       metadata = parseClientMetadata(value);

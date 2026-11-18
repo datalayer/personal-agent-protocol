@@ -7,4 +7,4 @@
 
 """Personal Agent Protocol."""
 
-__version__ = "0.37.3"
+__version__ = "0.37.4"

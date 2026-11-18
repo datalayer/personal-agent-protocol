@@ -14,7 +14,11 @@ from personal_agent_protocol.accounts import RefreshTokenClient
 from personal_agent_protocol.company import CompanyConfig, resource_metadata_url
 from personal_agent_protocol.demo.manzanita import CONFIG, manzanita
 from personal_agent_protocol.errors import PersonalAgentProtocolError
-from personal_agent_protocol.models import ProtectedResourceMetadata
+from personal_agent_protocol.models import (
+    OAuthServerMetadata,
+    ProtectedResourceMetadata,
+    protected_resource_metadata_url,
+)
 
 from .test_company_end_to_end import World
 from .test_company_refusals import signed_in
@@ -112,30 +116,89 @@ async def test_it_gets_bearer_tokens_from_an_issuer_that_binds_its_own() -> None
     assert (await token_for(world, ELSEWHERE)).token_type == "Bearer"
 
 
-def test_its_metadata_is_where_rfc_9728_puts_it() -> None:
-    assert resource_metadata_url(ELSEWHERE) == (
-        "https://mcp.manzanita.example/.well-known/oauth-protected-resource/mcp"
-    )
-    assert resource_metadata_url("https://mcp.manzanita.example") == (
-        "https://mcp.manzanita.example/.well-known/oauth-protected-resource"
-    )
+@pytest.mark.parametrize(
+    ("resource", "published"),
+    [
+        (ELSEWHERE, "https://mcp.manzanita.example/.well-known/oauth-protected-resource/mcp"),
+        (
+            "https://mcp.manzanita.example/mcp/",
+            "https://mcp.manzanita.example/.well-known/oauth-protected-resource/mcp",
+        ),
+        (
+            "https://mcp.manzanita.example/",
+            "https://mcp.manzanita.example/.well-known/oauth-protected-resource",
+        ),
+        (
+            "https://mcp.manzanita.example",
+            "https://mcp.manzanita.example/.well-known/oauth-protected-resource",
+        ),
+        (
+            "https://api.manzanita.example/v2/mcp",
+            "https://api.manzanita.example/.well-known/oauth-protected-resource/v2/mcp",
+        ),
+    ],
+)
+def test_its_metadata_is_published_where_discovery_reads_it(resource: str, published: str) -> None:
+    """RFC 9728 §3.1, and one implementation: what a service publishes at is what a
+    Personal Agent fetches (`fetch_mcp_server_metadata`), a trailing slash included."""
+
+    assert resource_metadata_url(resource) == published
+    assert resource_metadata_url(resource) == protected_resource_metadata_url(resource)
+
+
+ACCEPTED = (
+    ELSEWHERE,
+    "https://mcp.manzanita.example:8443/mcp",
+    "https://xn--mnchen-3ya.example/mcp",
+    "https://api.manzanita.example/v2/mcp",
+    "https://mcp.manzanita.example/mcp/",
+)
+
+
+def test_every_accepted_one_reads_back_through_the_metadata_parser() -> None:
+    """Each is published in `protected_resources`: one entry a Personal Agent's parser
+    refuses would fail discovery for the whole company."""
+
+    import httpx
+
+    from personal_agent_protocol.company import build_company
+
+    config = dataclasses.replace(CONFIG, resource_servers=ACCEPTED)
+    service = build_company(config, http_client=httpx.AsyncClient())
+    parsed = OAuthServerMetadata.model_validate(service.oauth_metadata())
+    assert set(ACCEPTED) <= set(parsed.protected_resources)
+    assert parsed.lists_resource("manzanita.example")
 
 
 @pytest.mark.parametrize(
-    "servers",
+    "server",
     [
-        ("http://mcp.manzanita.example/mcp",),
-        ("https://mcp.manzanita.example/mcp?x=1",),
-        ("https://mcp.manzanita.example/mcp#x",),
-        ("https://MCP.manzanita.example/mcp",),
-        ("https://manzanita.example",),
-        ("https://manzanita.example/mcp",),
-        (ELSEWHERE, ELSEWHERE),
+        "http://mcp.manzanita.example/mcp",
+        "https://user:pass@mcp.manzanita.example/mcp",
+        "https://user@mcp.manzanita.example/mcp",
+        "https:///mcp",
+        "https://",
+        "https://not a host/mcp",
+        "https://mcp.manzanita.example:port/mcp",
+        "https://münchen.example/mcp",
+        "https://MCP.manzanita.example/mcp",
+        "https://mcp.manzanita.example/mcp?x=1",
+        "https://mcp.manzanita.example/mcp?",
+        "https://mcp.manzanita.example/mcp#x",
+        "https://[::1/mcp",
+        "mcp.manzanita.example/mcp",
+        "https://manzanita.example",
+        "https://manzanita.example/mcp",
     ],
 )
-def test_each_is_an_https_url_of_its_own_named_once(servers: tuple[str, ...]) -> None:
+def test_anything_else_is_refused_when_the_company_is_configured(server: str) -> None:
     with pytest.raises(ValueError):
-        dataclasses.replace(CONFIG, resource_servers=servers)
+        dataclasses.replace(CONFIG, resource_servers=(server,))
+
+
+def test_each_is_named_once() -> None:
+    with pytest.raises(ValueError):
+        dataclasses.replace(CONFIG, resource_servers=(ELSEWHERE, ELSEWHERE))
 
 
 def test_a_company_with_no_issuer_has_none() -> None:

@@ -121,11 +121,13 @@ from ..models import (
     LinksContent,
     Message,
     Operation,
+    _https_url,
     compatible_versions,
     domain_host,
     effective_context,
     operations_content,
     parse_version,
+    protected_resource_metadata_url,
     redirect_uri_matches,
     split_domain,
 )
@@ -359,15 +361,32 @@ class ConsentDecision:
 
 def resource_metadata_url(resource: str) -> str:
     """Where a service's protected resource metadata is (RFC 9728 §3.1): the well-known
-    path between its host and its own path."""
+    path between its host and its own path.
 
-    parts = urlsplit(resource)
-    path = "" if parts.path in ("", "/") else parts.path
-    return f"{parts.scheme}://{parts.netloc}/.well-known/oauth-protected-resource{path}"
+    The URL discovery reads it at (`models.protected_resource_metadata_url`, which this
+    is): what a service publishes and what a Personal Agent fetches cannot differ, a
+    trailing slash on the service's `url` included.
+    """
+
+    return protected_resource_metadata_url(resource)
+
+
+#: A resource server's authority: DNS labels in small ASCII letters (an
+#: internationalized name as its A-labels), and a port when it is not 443.
+_RESOURCE_AUTHORITY = re.compile(
+    r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:[0-9]{1,5})?"
+)
 
 
 def _check_resource_servers(config: CompanyConfig) -> None:
-    """Each of `resource_servers` is an HTTPS URL of its own, named once (§4.5)."""
+    """Each of `resource_servers` is an HTTPS URL of its own, named once (§4.5).
+
+    Checked with the rule the issuer's metadata is read with (`models._https_url`: HTTPS,
+    a host, no user information), since each is published in `protected_resources` and
+    one entry a Personal Agent refuses fails discovery for the whole company; then
+    narrowed to what names one service: a well-formed host in small letters, no query,
+    no fragment.
+    """
 
     servers = config.resource_servers
     if not servers:
@@ -379,11 +398,14 @@ def _check_resource_servers(config: CompanyConfig) -> None:
     own = {f"https://{domain}" for domain in (config.domain, *config.aliases)}
     own |= {f"https://{config.domain}/mcp", f"https://{config.domain}/poppy/conversations"}
     for server in servers:
+        _https_url(server, "a resource server")
         parts = urlsplit(server)
-        if parts.scheme != "https" or not parts.netloc or parts.query or parts.fragment:
+        if not _RESOURCE_AUTHORITY.fullmatch(parts.netloc):
+            raise ValueError(
+                "a resource server names a host in small letters, and no user information"
+            )
+        if parts.query or parts.fragment or "?" in server or "#" in server:
             raise ValueError("a resource server is an HTTPS URL, without query or fragment")
-        if parts.netloc != parts.netloc.lower():
-            raise ValueError("a resource server's host is in small letters")
         if server in own:
             raise ValueError("a resource server is another service than the company's own")
     if len(set(servers)) != len(servers):

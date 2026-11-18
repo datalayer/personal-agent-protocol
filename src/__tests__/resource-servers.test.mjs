@@ -14,8 +14,11 @@ import {
   SessionClient,
   discoverCompany,
   negotiateExtensions,
+  parseOAuthServerMetadata,
   parseProtectedResourceMetadata,
 } from "../../lib/index.js";
+// The helper discovery and `fetchMcpServerMetadata` read the metadata at.
+import { protectedResourceMetadataUrl } from "../../lib/models.js";
 import { CompanyConfig, resourceMetadataUrl } from "../../lib/server.js";
 import { manzanita } from "../../lib/demo/manzanita.js";
 import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./support/world.mjs";
@@ -113,23 +116,60 @@ test("it gets Bearer tokens from an issuer that binds its own", async () => {
   assert.equal((await w.tokenFor(ELSEWHERE)).token.tokenType, "Bearer");
 });
 
-test("its metadata is where RFC 9728 puts it", () => {
-  assert.equal(resourceMetadataUrl(ELSEWHERE), "https://mcp.manzanita.example/.well-known/oauth-protected-resource/mcp");
-  assert.equal(resourceMetadataUrl("https://mcp.manzanita.example"), "https://mcp.manzanita.example/.well-known/oauth-protected-resource");
+test("its metadata is published where discovery reads it", () => {
+  // RFC 9728 §3.1, and one implementation: what a service publishes at is what a Personal Agent
+  // fetches (`fetchMcpServerMetadata`), a trailing slash included.
+  for (const [resource, published] of [
+    [ELSEWHERE, "https://mcp.manzanita.example/.well-known/oauth-protected-resource/mcp"],
+    ["https://mcp.manzanita.example/mcp/", "https://mcp.manzanita.example/.well-known/oauth-protected-resource/mcp"],
+    ["https://mcp.manzanita.example/", "https://mcp.manzanita.example/.well-known/oauth-protected-resource"],
+    ["https://mcp.manzanita.example", "https://mcp.manzanita.example/.well-known/oauth-protected-resource"],
+    ["https://api.manzanita.example/v2/mcp", "https://api.manzanita.example/.well-known/oauth-protected-resource/v2/mcp"],
+  ]) {
+    assert.equal(resourceMetadataUrl(resource), published);
+    assert.equal(resourceMetadataUrl(resource), protectedResourceMetadataUrl(resource));
+  }
 });
 
-test("each is an HTTPS URL of its own, named once, of a company with an issuer", () => {
-  const base = { name: "Shop", domain: "shop.example", scopes: ["orders:read"], agentDescription: "Orders", scopeDescriptions: { "orders:read": "Read orders" }, operations: false };
-  assert.deepEqual(new CompanyConfig({ ...base, resourceServers: [ELSEWHERE] }).resourceServers, [ELSEWHERE]);
-  for (const resourceServers of [
-    ["http://mcp.shop.example/mcp"],
-    ["https://mcp.shop.example/mcp?x=1"],
-    ["https://mcp.shop.example/mcp#x"],
-    ["https://MCP.shop.example/mcp"],
-    ["https://shop.example"],
-    ["https://shop.example/mcp"],
-    [ELSEWHERE, ELSEWHERE],
+const BASE = { name: "Shop", domain: "shop.example", scopes: ["orders:read"], agentDescription: "Orders", scopeDescriptions: { "orders:read": "Read orders" }, operations: false };
+const ACCEPTED = [
+  ELSEWHERE,
+  "https://mcp.shop.example:8443/mcp",
+  "https://xn--mnchen-3ya.example/mcp",
+  "https://api.shop.example/v2/mcp",
+  "https://mcp.shop.example/mcp/",
+];
+
+test("every accepted one reads back through the metadata parser", async () => {
+  // Each is published in `protected_resources`: one entry a Personal Agent's parser refuses
+  // would fail discovery for the whole company.
+  const w = await signedInWorld({ resourceServers: ACCEPTED });
+  const parsed = parseOAuthServerMetadata(w.shop.oauthMetadata());
+  for (const resource of ACCEPTED) assert.ok(parsed.protected_resources.includes(resource), resource);
+  assert.deepEqual(new CompanyConfig({ ...BASE, resourceServers: ACCEPTED }).resourceServers, ACCEPTED);
+});
+
+test("anything else is refused when the company is configured", () => {
+  for (const server of [
+    "http://mcp.shop.example/mcp",
+    "https://user:pass@mcp.shop.example/mcp",
+    "https://user@mcp.shop.example/mcp",
+    "https:///mcp",
+    "https://",
+    "https://not a host/mcp",
+    "https://mcp.shop.example:port/mcp",
+    "https://münchen.example/mcp",
+    "https://MCP.shop.example/mcp",
+    "https://mcp.shop.example/mcp?x=1",
+    "https://mcp.shop.example/mcp?",
+    "https://mcp.shop.example/mcp#x",
+    "https://[::1/mcp",
+    "mcp.shop.example/mcp",
+    "https://shop.example",
+    "https://shop.example/mcp",
   ]) {
-    assert.throws(() => new CompanyConfig({ ...base, resourceServers }), RangeError, String(resourceServers));
+    assert.throws(() => new CompanyConfig({ ...BASE, resourceServers: [server] }), RangeError, server);
   }
+  assert.throws(() => new CompanyConfig({ ...BASE, resourceServers: [ELSEWHERE, ELSEWHERE] }), RangeError);
+  assert.throws(() => new CompanyConfig({ ...BASE, oauth: false, scopes: [], scopeDescriptions: {}, device: false, direct: false, resourceServers: [ELSEWHERE] }), RangeError);
 });

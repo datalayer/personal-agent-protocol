@@ -114,7 +114,9 @@ import {
   compatibleVersions,
   domainHost,
   effectiveContext,
+  httpsUrl,
   parseVersion,
+  protectedResourceMetadataUrl,
   splitDomain,
 } from "../models.js";
 import {
@@ -732,9 +734,22 @@ export class CompanyConfig {
         `https://${this.domain}/poppy/conversations`,
       ]);
       for (const server of this.resourceServers) {
-        const match = /^https:\/\/([^/?#]+)(\/[^?#]*)?$/.exec(server);
-        if (match === null) throw new RangeError("a resource server is an HTTPS URL, without query or fragment");
-        if (match[1] !== match[1]!.toLowerCase()) throw new RangeError("a resource server's host is in small letters");
+        // The rule the issuer's metadata is read with (`httpsUrl`: HTTPS, no user information),
+        // since each is published in `protected_resources` and one entry a Personal Agent
+        // refuses fails discovery for the whole company; then narrowed to what names one
+        // service: a well-formed host in small letters, no query, no fragment.
+        try {
+          httpsUrl(server, "a resource server");
+        } catch (cause) {
+          throw new RangeError("a resource server is an HTTPS URL, without user information", { cause });
+        }
+        const authority = /^https:\/\/([^/?#]*)/.exec(server)?.[1] ?? "";
+        if (!RESOURCE_AUTHORITY.test(authority) || new URL(server).host !== authority.replace(/:443$/, "")) {
+          throw new RangeError("a resource server names a host in small letters, and no user information");
+        }
+        if (server.includes("?") || server.includes("#")) {
+          throw new RangeError("a resource server is an HTTPS URL, without query or fragment");
+        }
         if (own.has(server)) throw new RangeError("a resource server is another service than the company's own");
       }
       if (new Set(this.resourceServers).size !== this.resourceServers.length) {
@@ -1390,10 +1405,16 @@ function expiry(at: Date | string | undefined): StoreWriteOptions {
  * its host and its own path.
  */
 export function resourceMetadataUrl(resource: string): string {
-  const url = new URL(resource);
-  const path = url.pathname === "/" ? "" : url.pathname;
-  return `${url.protocol}//${url.host}/.well-known/oauth-protected-resource${path}`;
+  // The URL discovery reads it at (`protectedResourceMetadataUrl`, which this is): what a service
+  // publishes and what a Personal Agent fetches cannot differ, a trailing slash included.
+  return protectedResourceMetadataUrl(resource);
 }
+
+/**
+ * A resource server's authority: DNS labels in small ASCII letters (an internationalized name as
+ * its A-labels), and a port when it is not 443.
+ */
+const RESOURCE_AUTHORITY = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:[0-9]{1,5})?$/;
 
 export function connectHeading(agent: string, company: string): string {
   return `${agent} wants to connect to your ${company} account`;

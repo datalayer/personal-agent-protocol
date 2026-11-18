@@ -26,9 +26,16 @@ names none behaves exactly as before.
   default token and a token for another service among them (4.5: a token issued for a
   `resource` is accepted only at that service). The service enforces the record's `scopes`.
 - **`resource_metadata_url(resource)` (`resourceMetadataUrl`)**: where a service's protected
-  resource metadata is (RFC 9728 §3.1), for the `resource_metadata` of its challenges (7).
-- Each resource server is an HTTPS URL without query or fragment, its host in small letters,
-  named once, and not one of the company's own (`https://{domain}`, an alias, its `/mcp`, its
+  resource metadata is (RFC 9728 §3.1), for the `resource_metadata` of its challenges (7). It
+  is the helper discovery reads the metadata at (`protected_resource_metadata_url`,
+  `protectedResourceMetadataUrl`), so what a service publishes and what a Personal Agent fetches
+  agree, a trailing slash on the `url` included.
+- Each resource server is checked when the company is configured, with the rule the issuer's
+  metadata is read with (HTTPS, a host, no user information), since each is published in
+  `protected_resources` and one entry a Personal Agent refuses would fail discovery for the
+  whole company. Narrowed to what names one service: a well-formed host in small ASCII letters
+  (an internationalized name as its A-labels, a port allowed), no query, no fragment, named
+  once, and not one of the company's own (`https://{domain}`, an alias, its `/mcp`, its
   conversation endpoint); a company with no issuer has none. A service named here gets Bearer
   tokens even from an issuer that binds its own with DPoP (7: a company whose MCP server
   doesn't accept DPoP returns Bearer tokens for it).

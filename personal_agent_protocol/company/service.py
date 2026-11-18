@@ -357,6 +357,39 @@ class ConsentDecision:
     allow: bool
 
 
+def resource_metadata_url(resource: str) -> str:
+    """Where a service's protected resource metadata is (RFC 9728 §3.1): the well-known
+    path between its host and its own path."""
+
+    parts = urlsplit(resource)
+    path = "" if parts.path in ("", "/") else parts.path
+    return f"{parts.scheme}://{parts.netloc}/.well-known/oauth-protected-resource{path}"
+
+
+def _check_resource_servers(config: CompanyConfig) -> None:
+    """Each of `resource_servers` is an HTTPS URL of its own, named once (§4.5)."""
+
+    servers = config.resource_servers
+    if not servers:
+        return
+    if not config.oauth:
+        raise ValueError(
+            "resource_servers take the issuer's tokens: a company with no issuer has none"
+        )
+    own = {f"https://{domain}" for domain in (config.domain, *config.aliases)}
+    own |= {f"https://{config.domain}/mcp", f"https://{config.domain}/poppy/conversations"}
+    for server in servers:
+        parts = urlsplit(server)
+        if parts.scheme != "https" or not parts.netloc or parts.query or parts.fragment:
+            raise ValueError("a resource server is an HTTPS URL, without query or fragment")
+        if parts.netloc != parts.netloc.lower():
+            raise ValueError("a resource server's host is in small letters")
+        if server in own:
+            raise ValueError("a resource server is another service than the company's own")
+    if len(set(servers)) != len(servers):
+        raise ValueError("each resource server is named once")
+
+
 def _check_aliases(domain: str, aliases: tuple[str, ...]) -> None:
     """Each alias a DNS name in small letters, another than `domain`, named once."""
     for alias in aliases:
@@ -475,6 +508,13 @@ class CompanyConfig:
     #: metadata naming itself as `resource`, with this company's issuer, the issuer lists
     #: it in `protected_resources` and issues tokens for it, and it takes only those.
     conversation_resource: bool = False
+    #: Services of this company at URLs of their own that take its access tokens (§4.5, §7):
+    #: an MCP server on another host than the issuer's, each named by its `url` as
+    #: `poppy.json` lists it. The issuer lists each in `protected_resources` (§3.2) and
+    #: issues Bearer tokens for it, at the request that completes a sign-in or at refresh
+    #: (RFC 8707); each publishes its own protected resource metadata naming this issuer,
+    #: and takes only the tokens issued for it (`CompanyService.access_token_for`).
+    resource_servers: tuple[str, ...] = ()
     web: bool = False
     #: Whether the website returns operations to a joined browser (Operations 2, 4): the
     #: `operations` entry lists `endpoint` (`/poppy/operations`), beside the browser-session
@@ -552,6 +592,7 @@ class CompanyConfig:
 
     def __post_init__(self) -> None:  # noqa: C901 - one branch per protocol rule
         _check_aliases(self.domain, self.aliases)
+        _check_resource_servers(self)
         if not self.protocol_versions or len(set(self.protocol_versions)) != len(
             self.protocol_versions
         ):
@@ -1784,6 +1825,7 @@ class CompanyService:
             metadata["protected_resources"].append(config.mcp_url)
         if config.conversation_resource:
             metadata["protected_resources"].append(config.conversations_endpoint)
+        metadata["protected_resources"].extend(config.resource_servers)
         if config.direct:
             grants.append(AUTHORIZATION_CODE_GRANT)
             metadata["authorization_endpoint"] = config.authorization_endpoint
@@ -2032,6 +2074,8 @@ class CompanyService:
         if self._mcp() is not None and resource == self.config.mcp_url:
             return resource
         if self.config.conversation_resource and resource == self.config.conversations_endpoint:
+            return resource
+        if resource in self.config.resource_servers:
             return resource
         raise _RefusedError(400, "invalid_target")
 
@@ -2580,6 +2624,9 @@ class CompanyService:
         if self._mcp() is not None and resource == self.config.mcp_url:
             listed = self.protected_resource_metadata().get("dpop_signing_alg_values_supported")
             return DPOP_ALGORITHM in (listed or ())
+        if resource in self.config.resource_servers:
+            # A service of its own verifies no proof here: it gets Bearer tokens (§7).
+            return False
         return True
 
     async def _access_token(self, token: str) -> IssuedAccessToken | None:
@@ -2594,6 +2641,25 @@ class CompanyService:
             if await self._signed_out_before(issued.account_id) is not None:
                 return None
         elif await self._sign_in_ended(grant):
+            return None
+        return issued
+
+    async def access_token_for(self, token: str, resource: str) -> IssuedAccessToken | None:
+        """The record of an access token presented at one of `resource_servers`, or `None`.
+
+        For the service at `resource` to verify what it is sent (§4.5, §7): the token
+        was issued here **for that service**, is unexpired, its sign-in has not ended,
+        and every scope it holds is still offered. A token for another resource, the
+        default token among them, is `None`: the service answers `invalid_token` with
+        its `resource_metadata` (`resource_metadata_url`). The record says whose it is
+        (`account_id`), which agent holds it (`client_id`) and its `scopes`, which the
+        service enforces.
+        """
+
+        if resource not in self.config.resource_servers:
+            raise ValueError(f"{resource} is not one of this company's resource_servers")
+        issued = await self._access_token(token)
+        if issued is None or issued.resource != resource or not self._offers(issued.scopes):
             return None
         return issued
 
@@ -3305,6 +3371,8 @@ class CompanyService:
             return self.config.mcp_resource_metadata
         if resource == self.config.conversations_endpoint:
             return self.config.conversation_resource_metadata
+        if resource in self.config.resource_servers:
+            return resource_metadata_url(resource)
         return f"{self.config.base}/.well-known/oauth-protected-resource"
 
     async def _session(self, verified: Any) -> str:

@@ -400,6 +400,15 @@ export interface CompanyConfigOptions {
    */
   readonly conversationResource?: boolean;
   /**
+   * Services of this company at URLs of their own that take its access tokens (§4.5, §7): an
+   * MCP server on another host than the issuer's, each named by its `url` as `poppy.json` lists
+   * it. The issuer lists each in `protected_resources` (§3.2) and issues Bearer tokens for it,
+   * at the request that completes a sign-in or at refresh (RFC 8707); each publishes its own
+   * protected resource metadata naming this issuer, and takes only the tokens issued for it
+   * (`CompanyService.accessTokenFor`).
+   */
+  readonly resourceServers?: readonly string[];
+  /**
    * Tasks a feedback report may name that can be done after all: the alternative (§8.2)
    * the company answers with, HTTP 200, keyed by task, compared ignoring case.
    */
@@ -547,6 +556,7 @@ export class CompanyConfig {
   readonly conversationCarryOver: boolean;
   readonly skills: readonly (readonly [name: string, description: string, text: string])[];
   readonly conversationResource: boolean;
+  readonly resourceServers: readonly string[];
   readonly feedbackAnswers: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
   readonly devicePage: string | undefined;
   readonly consentPage: string | undefined;
@@ -635,6 +645,7 @@ export class CompanyConfig {
     }
     this.skills = [...(options.skills ?? [])];
     this.conversationResource = options.conversationResource ?? false;
+    this.resourceServers = [...(options.resourceServers ?? [])];
     this.feedbackAnswers = { ...(options.feedbackAnswers ?? {}) };
     this.devicePage = hostedPage("devicePage", options.devicePage);
     this.consentPage = hostedPage("consentPage", options.consentPage);
@@ -710,6 +721,25 @@ export class CompanyConfig {
     }
     if (this.aliases.includes(this.domain) || new Set(this.aliases).size !== this.aliases.length) {
       throw new RangeError("each alias is another domain, named once");
+    }
+    if (this.resourceServers.length > 0) {
+      if (!this.oauth) {
+        throw new RangeError("resourceServers take the issuer's tokens: a company with no issuer has none");
+      }
+      const own = new Set([
+        ...[this.domain, ...this.aliases].map((domain) => `https://${domain}`),
+        `https://${this.domain}/mcp`,
+        `https://${this.domain}/poppy/conversations`,
+      ]);
+      for (const server of this.resourceServers) {
+        const match = /^https:\/\/([^/?#]+)(\/[^?#]*)?$/.exec(server);
+        if (match === null) throw new RangeError("a resource server is an HTTPS URL, without query or fragment");
+        if (match[1] !== match[1]!.toLowerCase()) throw new RangeError("a resource server's host is in small letters");
+        if (own.has(server)) throw new RangeError("a resource server is another service than the company's own");
+      }
+      if (new Set(this.resourceServers).size !== this.resourceServers.length) {
+        throw new RangeError("each resource server is named once");
+      }
     }
     if (this.devicePage !== undefined) {
       const host = new URL(this.devicePage).hostname.toLowerCase();
@@ -1355,6 +1385,16 @@ function expiry(at: Date | string | undefined): StoreWriteOptions {
  * the personal agent and says it wants to connect, never "Sign in with …", which reads as
  * signing in with an account at the agent.
  */
+/**
+ * Where a service's protected resource metadata is (RFC 9728 §3.1): the well-known path between
+ * its host and its own path.
+ */
+export function resourceMetadataUrl(resource: string): string {
+  const url = new URL(resource);
+  const path = url.pathname === "/" ? "" : url.pathname;
+  return `${url.protocol}//${url.host}/.well-known/oauth-protected-resource${path}`;
+}
+
 export function connectHeading(agent: string, company: string): string {
   return `${agent} wants to connect to your ${company} account`;
 }
@@ -1992,6 +2032,7 @@ export class CompanyService {
     };
     if (this.#mcp() !== undefined) resources.push(config.mcpUrl);
     if (config.conversationResource) resources.push(config.conversationsEndpoint);
+    resources.push(...config.resourceServers);
     if (config.direct) {
       grants.push(AUTHORIZATION_CODE_GRANT);
       metadata.authorization_endpoint = config.authorizationEndpoint;
@@ -2230,6 +2271,7 @@ export class CompanyService {
     }
     if (this.#mcp() !== undefined && resource === this.config.mcpUrl) return resource;
     if (this.config.conversationResource && resource === this.config.conversationsEndpoint) return resource;
+    if (this.config.resourceServers.includes(resource)) return resource;
     throw new Refused(400, "invalid_target");
   }
 
@@ -2740,6 +2782,8 @@ export class CompanyService {
       const listed = this.protectedResourceMetadata().dpop_signing_alg_values_supported;
       return Array.isArray(listed) && listed.includes(DPOP_ALGORITHM);
     }
+    // A service of its own verifies no proof here: it gets Bearer tokens (§7).
+    if (this.config.resourceServers.includes(resource)) return false;
     return true;
   }
 
@@ -2799,6 +2843,25 @@ export class CompanyService {
     } else if (await this.#signInEnded(grant)) {
       return undefined;
     }
+    return issued;
+  }
+
+  /**
+   * The record of an access token presented at one of `resourceServers`, or `undefined`.
+   *
+   * For the service at `resource` to verify what it is sent (§4.5, §7): the token was issued
+   * here **for that service**, is unexpired, its sign-in has not ended, and every scope it
+   * holds is still offered. A token for another resource, the default token among them, is
+   * `undefined`: the service answers `invalid_token` with its `resource_metadata`
+   * (`resourceMetadataUrl`). The record says whose it is (`accountId`), which agent holds it
+   * (`clientId`) and its `scopes`, which the service enforces.
+   */
+  async accessTokenFor(token: string, resource: string): Promise<IssuedAccessToken | undefined> {
+    if (!this.config.resourceServers.includes(resource)) {
+      throw new RangeError(`${resource} is not one of this company's resourceServers`);
+    }
+    const issued = await this.#accessToken(token);
+    if (issued === undefined || issued.resource !== resource || !this.#offers(issued.scopes)) return undefined;
     return issued;
   }
 
@@ -3641,6 +3704,7 @@ export class CompanyService {
   #resourceMetadataUrl(resource: string | undefined): string {
     if (resource === this.config.mcpUrl) return this.config.mcpResourceMetadata;
     if (resource === this.config.conversationsEndpoint) return this.config.conversationResourceMetadata;
+    if (resource !== undefined && this.config.resourceServers.includes(resource)) return resourceMetadataUrl(resource);
     return `${this.config.base}/.well-known/oauth-protected-resource`;
   }
 

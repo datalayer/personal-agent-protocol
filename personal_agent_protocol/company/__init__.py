@@ -84,6 +84,7 @@ from .service import (
     ConsentDecision,
     OpenWork,
     StaleConversationError,
+    resource_metadata_url,
 )
 from .store import RECORD_KINDS, StoredRecord
 from .verify import verify_assertion
@@ -182,7 +183,7 @@ def build_company(
     reactor.register_plugin(
         PluginManifest(
             name="personal-agent-protocol.company",
-            version="0.37.2",
+            version="0.37.3",
             contribution_points=[
                 COMPANY_STORES.id,
                 COMPANY_ACCOUNTS.id,
@@ -272,5 +273,6 @@ __all__ = [
     "WebResult",
     "build_company",
     "company_app",
+    "resource_metadata_url",
     "verify_assertion",
 ]

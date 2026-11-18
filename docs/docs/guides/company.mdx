@@ -249,6 +249,10 @@ implements, of version 0.4 and Operations version 3:
   `resource`); the endpoint takes only those, answering the default token with
   `invalid_token` and `resource_metadata`, and a signed-out request with the
   Session header alone. Session JWT audiences and User IDs stay the company's;
+- with `resource_servers` (`resourceServers`), the company's services at URLs of
+  their own, such as an MCP server on another host than the issuer's
+  (`https://mcp.example.com/mcp`): see [A service at a URL of its
+  own](#a-service-at-a-url-of-its-own);
 - Bearer access tokens, or tokens bound with DPoP (`dpop_binding`, in TypeScript
   `dpopBinding`: `off` by default, `optional` binds when a proof comes, `required`
   refuses a token request with none; `dpop_nonces`, `dpopNonces`, asks for server
@@ -637,6 +641,56 @@ same issuer: one company, never a second identity. Every endpoint stays on
 `domain`; on an alias, which the request's `Host` names, anything but
 `/.well-known/poppy.json` answers `404 not_found`. An alias is a DNS name in
 small letters, another than `domain`, named once.
+
+### A service at a URL of its own
+
+The reference company serves its MCP server at `https://{domain}/mcp`, on the
+issuer's own host. A company whose MCP server answers elsewhere, such as
+`https://mcp.example.com/mcp` beside an issuer at `https://example.com`, names it
+in `resource_servers` (`resourceServers`):
+
+```python
+from personal_agent_protocol.company import resource_metadata_url
+
+config = CompanyConfig(
+    name="Example",
+    domain="example.com",
+    scopes=("orders:read",),
+    agent_description="Your orders",
+    scope_descriptions={"orders:read": "See your orders"},
+    operations=False,
+    resource_servers=("https://mcp.example.com/mcp",),
+)
+print(resource_metadata_url(config.resource_servers[0]))
+```
+
+The URL is the server's `url` as `poppy.json` lists it in `apis`, since that is the
+`resource` a Personal Agent asks a token for (§7). For each one:
+
+- the issuer's metadata lists it in `protected_resources`, after `https://{domain}`
+  (§3.2: it MAY list other resources, such as the Company's MCP servers);
+- the token endpoint issues a token for it when a request names it as `resource`,
+  the request that completes a sign-in or a refresh (§4.5, RFC 8707). A sign-in that
+  named no `resource` covers it, a service added after the sign-in too. Any other
+  `resource` is still `invalid_target`, and the client policy's `allows_resource`
+  can leave a service out for an agent;
+- the token is a Bearer token, even when the issuer binds its own with DPoP (§7: a
+  Company whose MCP server doesn't accept DPoP returns Bearer tokens for it).
+
+The service does its own half (§7). It publishes protected resource metadata whose
+`resource` equals its `url` and whose `authorization_servers` includes the company's
+issuer, at `resource_metadata_url(url)` (`resourceMetadataUrl`, RFC 9728 §3.1), which
+the example prints. It verifies each token it is sent with
+`await service.access_token_for(token, url)` (`accessTokenFor`), which answers the
+token's record only when it was issued for that service, is unexpired, its sign-in
+has not ended and its scopes are still offered. The default token and a token for
+another service answer `None` (`undefined`): the Company accepts a token issued for
+a `resource` only at that service (§4.5), and a service that gets a token not issued
+for it returns `invalid_token` with `resource_metadata` in its challenge. The
+record's `account_id`, `client_id` and `scopes` are what the service acts on, and it
+enforces the scopes on every call.
+
+A company that names no resource server behaves as before.
 
 ### Before production
 

@@ -316,6 +316,13 @@ _REGISTRATION_WINDOW = timedelta(hours=1)
 #: How long a registration is kept before its client first signs in: long enough to
 #: register and then ask the person, short enough that clients nobody used don't pile up.
 _REGISTRATION_UNUSED = timedelta(hours=1)
+#: What a registration that is not a public client's is told: exactly what to send.
+_REGISTER_AS_PUBLIC = (
+    'Only public clients register here. Send "token_endpoint_auth_method": "none" '
+    "(it is not assumed when left out, and no other method is taken), with no "
+    '"client_secret", "jwks" or "jwks_uri"; sign in with the authorization code grant '
+    "and PKCE (S256)."
+)
 #: What a public client asking for an action that needs approval is told: operations are
 #: approved by a personal agent in its Session, and a public client has neither.
 _PUBLIC_NEEDS_APPROVAL = (
@@ -3174,10 +3181,7 @@ class CompanyService:
         if body.get("token_endpoint_auth_method") != "none" or any(
             member in body for member in ("jwks", "jwks_uri", "client_secret")
         ):
-            raise invalid(
-                "only public clients register: token_endpoint_auth_method is none, "
-                "and no key or secret is named"
-            )
+            raise invalid(_REGISTER_AS_PUBLIC)
         grants = body.get("grant_types", [AUTHORIZATION_CODE_GRANT])
         if (
             not isinstance(grants, list)

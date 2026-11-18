@@ -822,6 +822,12 @@ test("only a public client registers", async () => {
   assert.deepEqual(accepted.body.response_types, ["code"]);
   assert.ok(!("client_secret" in accepted.body) && !("registration_access_token" in accepted.body));
   assert.equal((await w.register({ client_name: null })).status, 400);
+  // A client that leaves the method out, or names another, is told exactly what to send.
+  for (const method of [undefined, "client_secret_post"]) {
+    const told = (await w.register({ token_endpoint_auth_method: method })).body;
+    assert.equal(told.error, "invalid_client_metadata");
+    assert.match(told.error_description, /"token_endpoint_auth_method": "none"/);
+  }
 
   const refusals = [
     [{ token_endpoint_auth_method: "client_secret_basic" }, "invalid_client_metadata"],

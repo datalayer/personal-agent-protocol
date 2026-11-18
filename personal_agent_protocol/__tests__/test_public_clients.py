@@ -925,6 +925,11 @@ async def test_only_a_public_client_registers() -> None:
     assert body["response_types"] == ["code"]
     assert "client_secret" not in body and "registration_access_token" not in body
     assert (await register(world, client_name=None)).status_code == 400
+    # A client that leaves the method out, or names another, is told exactly what to send.
+    for method in (None, "client_secret_post"):
+        told = (await register(world, token_endpoint_auth_method=method)).json()
+        assert told["error"] == "invalid_client_metadata"
+        assert '"token_endpoint_auth_method": "none"' in told["error_description"]
 
     refusals: list[tuple[dict[str, object], str]] = [
         ({"token_endpoint_auth_method": "client_secret_basic"}, "invalid_client_metadata"),

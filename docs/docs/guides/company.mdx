@@ -733,7 +733,10 @@ company that leaves it off behaves exactly as before.
 - **Registered itself**, with `client_registration` (`clientRegistration`): `POST
   /oauth/register` (RFC 7591) gives it a `client_id` that is no URL, and no secret. Only
   a public client registers: `token_endpoint_auth_method` must be `none`, said and not
-  assumed. Nothing verifies what it says of itself, its name least of all.
+  assumed. A registration that leaves it out (RFC 7591 then means a client with a
+  secret) or names another method, `client_secret_post` among them, is
+  `invalid_client_metadata`, with an `error_description` saying what to send. Nothing
+  verifies what it says of itself, its name least of all.
 
 **Redirect URIs** of a public client are `http` to the loopback (`127.0.0.1`, `[::1]`,
 `localhost`) or HTTPS to a host written in small letters, with no user information,

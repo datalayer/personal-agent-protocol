@@ -891,6 +891,60 @@ async def test_a_refresh_token_is_its_clients_and_lasts_thirty_days() -> None:
 
 
 @pytest.mark.asyncio
+async def test_no_token_of_a_sign_in_outlives_it() -> None:
+    """Thirty days from the consent, exactly: refreshed a minute before they end, the
+    access token ends with them. Once the sign-in is over its owner can no longer list
+    or revoke it, so nothing of it works."""
+
+    world = public_world()
+    client_id = await registered(world)
+    tokens = await sign_in(world, client_id, resource=ELSEWHERE)
+    assert tokens["expires_in"] == 3600
+    world.clock.advance(30 * 24 * 3600 - 60)
+    last = await refresh(world, client_id, tokens["refresh_token"], resource=ELSEWHERE)
+    assert last.status_code == 200
+    assert 0 < last.json()["expires_in"] <= 60
+    late = last.json()["access_token"]
+    record = await world.shop.access_token_for(late, ELSEWHERE)
+    assert record is not None
+    assert record.expires_at == (await world.shop.public_client_sign_ins())[0].expires_at
+    world.clock.advance(59)
+    assert await world.shop.access_token_for(late, ELSEWHERE) is not None
+    # The deadline: refused at the resource server, and nothing is left to list.
+    world.clock.advance(1)
+    assert await world.shop.access_token_for(late, ELSEWHERE) is None
+    assert await world.shop.public_client_sign_ins() == ()
+    after = await refresh(world, client_id, last.json()["refresh_token"], resource=ELSEWHERE)
+    assert after.json()["error"] == "invalid_grant"
+    # The same at the company's own MCP server.
+    own = await sign_in(world, client_id)
+    world.clock.advance(30 * 24 * 3600 - 60)
+    last_own = (await refresh(world, client_id, own["refresh_token"])).json()
+    assert 0 < last_own["expires_in"] <= 60
+    assert (await mcp(world, last_own["access_token"], LIST_TOOLS)).status_code == 200
+    world.clock.advance(60)
+    assert (await mcp(world, last_own["access_token"], LIST_TOOLS)).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_a_token_whose_sign_in_record_is_gone_is_refused() -> None:
+    """Whatever the token's own record says: it is held to its sign-in, which the owner
+    lists and revokes. A personal agent's token is read as before."""
+
+    for kind in ("refresh_token", "account_family"):
+        world = public_world()
+        client_id = await registered(world)
+        elsewhere = await sign_in(world, client_id, resource=ELSEWHERE)
+        own = await sign_in(world, client_id)
+        assert await world.shop.access_token_for(elsewhere["access_token"], ELSEWHERE)
+        assert (await mcp(world, own["access_token"], LIST_TOOLS)).status_code == 200
+        for entry in await world.shop.public_client_sign_ins():
+            await world.shop.store.delete(kind, entry.sign_in_id)
+        assert await world.shop.access_token_for(elsewhere["access_token"], ELSEWHERE) is None, kind
+        assert (await mcp(world, own["access_token"], LIST_TOOLS)).status_code == 401, kind
+
+
+@pytest.mark.asyncio
 async def test_a_public_client_revokes_its_own_sign_in() -> None:
     world = public_world()
     client_id = await registered(world)
@@ -941,7 +995,13 @@ async def test_only_a_public_client_registers() -> None:
         ({"grant_types": ["client_credentials"]}, "invalid_client_metadata"),
         ({"grant_types": ["refresh_token"]}, "invalid_client_metadata"),
         ({"grant_types": ["authorization_code", DEVICE_CODE_GRANT]}, "invalid_client_metadata"),
+        ({"grant_types": ["authorization_code", {}]}, "invalid_client_metadata"),
+        ({"grant_types": ["authorization_code", ["refresh_token"]]}, "invalid_client_metadata"),
+        ({"grant_types": {"authorization_code": 1}}, "invalid_client_metadata"),
         ({"response_types": ["token"]}, "invalid_client_metadata"),
+        ({"response_types": [{}]}, "invalid_client_metadata"),
+        ({"redirect_uris": [{}]}, "invalid_redirect_uri"),
+        ({"redirect_uris": [[LOOPBACK]]}, "invalid_redirect_uri"),
         ({"client_name": ""}, "invalid_client_metadata"),
         ({"client_name": "x" * 101}, "invalid_client_metadata"),
         ({"client_name": "Claude‮ (verified)"}, "invalid_client_metadata"),
@@ -968,6 +1028,136 @@ async def test_only_a_public_client_registers() -> None:
             f"{SHOP}/oauth/register", content=content, headers={"content-type": "application/json"}
         )
         assert refused.status_code == 400, content[:10]
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_registration_is_the_callers_mistake_never_an_error_of_ours() -> None:
+    """Nobody signed the body: whatever is in it, the answer is 400 and says so."""
+
+    world = public_world(client_registrations_per_hour=1000)
+    nothing: Any = None
+    odd: list[Any] = [
+        nothing,
+        True,
+        7,
+        1.5,
+        "text",
+        [],
+        {},
+        [[]],
+        [{}],
+        {"a": {"b": []}},
+        [nothing],
+    ]
+    for member in (
+        "token_endpoint_auth_method",
+        "grant_types",
+        "response_types",
+        "redirect_uris",
+        "client_name",
+        "scope",
+        "jwks",
+        "jwks_uri",
+        "client_secret",
+    ):
+        for value in odd:
+            if value == "text" and member in {"scope", "client_name"}:
+                continue
+            answer = await register(world, **{member: value})
+            assert answer.status_code == 400, (member, value, answer.text)
+            assert answer.json()["error"] in {
+                "invalid_client_metadata",
+                "invalid_redirect_uri",
+            }, (member, value)
+    # Members a public client may send and the company does not read: taken, whatever they are.
+    for member in ("contacts", "client_uri", "logo_uri", "tos_uri", "software_id", "unknown"):
+        for value in odd:
+            assert (await register(world, **{member: value})).status_code == 201, (member, value)
+    # Entries of the wrong type, too many, too long, and bodies that are no registration.
+    for changes in (
+        {"redirect_uris": [LOOPBACK, None]},
+        {"redirect_uris": [LOOPBACK, {"uri": LOOPBACK}]},
+        {"redirect_uris": [LOOPBACK] * 2},
+        {"redirect_uris": ["https://pocket.example/" + "a" * 2000]},
+        {"redirect_uris": {"0": LOOPBACK}},
+        {"grant_types": ["authorization_code", None]},
+        {"grant_types": [["authorization_code"]]},
+        {"response_types": ["code", "code"]},
+        {"response_types": [None]},
+        {"client_name": ["Pocket"]},
+    ):
+        answer = await register(world, **changes)
+        assert answer.status_code == 400, changes
+    deep = b"[" * 8000 + b"]" * 8000
+    nested = b'{"redirect_uris": ' + deep + b', "token_endpoint_auth_method": "none"}'
+    for content in (
+        b"",
+        b"null",
+        b"7",
+        b'"text"',
+        b"[]",
+        b"{",
+        b"\xff\xfe",
+        b'{"token_endpoint_auth_method": "none", "token_endpoint_auth_method": "none"}',
+        b'{"redirect_uris": NaN}',
+        deep,
+        nested,
+        b" " * (16 * 1024 + 1),
+    ):
+        answer = await world.http.post(
+            f"{SHOP}/oauth/register", content=content, headers={"content-type": "application/json"}
+        )
+        assert answer.status_code == 400, content[:20]
+        assert answer.json()["error"] in {
+            "invalid_client_metadata",
+            "invalid_redirect_uri",
+        }, content[:20]
+
+
+@pytest.mark.asyncio
+async def test_what_no_check_foresaw_is_refused_and_logged(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from personal_agent_protocol.company import service
+
+    def broken(_value: object) -> str:
+        raise TypeError("a bug of ours")
+
+    world = public_world()
+    monkeypatch.setattr(service, "public_client_name", broken)
+    with caplog.at_level("ERROR", logger=service.logger.name):
+        answer = await register(world)
+    assert (answer.status_code, answer.json()["error"]) == (400, "invalid_client_metadata")
+    assert "a bug of ours" in caplog.text
+    assert not await world.shop.store.records("public_client")
+
+
+@pytest.mark.asyncio
+async def test_a_document_of_any_shape_is_refused_not_raised() -> None:
+    nothing: Any = None
+    for changes in (
+        {"redirect_uris": "https://client.example/callback"},
+        {"redirect_uris": [7, nothing, {}]},
+        {"redirect_uris": []},
+        {"client_name": 7},
+        {"client_name": nothing},
+        {"client_id": 7},
+        {"grant_types": "authorization_code"},
+        {"grant_types": [{}]},
+        {"response_types": [[]]},
+        {"token_endpoint_auth_method": ["none"]},
+        {"logo_uri": 7},
+    ):
+        with pytest.raises(ValidationError):
+            PublicClientMetadata.model_validate(document(**changes))
+        world = public_world(site=document(**changes))
+        page = await authorize(world, VERIFIED, VERIFIED_REDIRECT)
+        assert page.status_code == 400 and "location" not in page.headers, changes
+    for site in ([], "text", 7, nothing, [document()]):
+        world = public_world()
+        world.network.add("client.example", json_site({"/oauth/client.json": site}))
+        assert (await authorize(world, VERIFIED, VERIFIED_REDIRECT)).status_code == 400, site
+        assert (await refresh(world, VERIFIED, "rt_x")).status_code == 401, site
 
 
 @pytest.mark.asyncio

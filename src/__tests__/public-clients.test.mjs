@@ -796,6 +796,54 @@ test("a refresh token is its client's and lasts thirty days", async () => {
   assert.equal((await w.refresh(clientId, kept.body.refresh_token)).body.error, "invalid_grant");
 });
 
+test("no token of a sign-in outlives it", async () => {
+  // Thirty days from the consent, exactly: refreshed a minute before they end, the access
+  // token ends with them. Once the sign-in is over its owner can no longer list or revoke it.
+  const w = await world();
+  const clientId = await w.registered();
+  const tokens = await w.signIn(clientId, LOOPBACK, { resource: ELSEWHERE });
+  assert.equal(tokens.expires_in, 3600);
+  w.clock.advance(30 * DAY - 60);
+  const last = await w.refresh(clientId, tokens.refresh_token, { resource: ELSEWHERE });
+  assert.equal(last.status, 200);
+  assert.ok(last.body.expires_in > 0 && last.body.expires_in <= 60);
+  const late = last.body.access_token;
+  const record = await w.shop.accessTokenFor(late, ELSEWHERE);
+  assert.equal(record.expiresAt, (await w.shop.publicClientSignIns())[0].expiresAt);
+  w.clock.advance(59);
+  assert.ok(await w.shop.accessTokenFor(late, ELSEWHERE));
+  // The deadline: refused at the resource server, and nothing is left to list.
+  w.clock.advance(1);
+  assert.equal(await w.shop.accessTokenFor(late, ELSEWHERE), undefined);
+  assert.deepEqual(await w.shop.publicClientSignIns(), []);
+  const after = await w.refresh(clientId, last.body.refresh_token, { resource: ELSEWHERE });
+  assert.equal(after.body.error, "invalid_grant");
+  // The same at the company's own MCP server.
+  const own = await w.signIn(clientId);
+  w.clock.advance(30 * DAY - 60);
+  const lastOwn = (await w.refresh(clientId, own.refresh_token)).body;
+  assert.ok(lastOwn.expires_in > 0 && lastOwn.expires_in <= 60);
+  assert.equal((await w.mcp(lastOwn.access_token, LIST_TOOLS)).status, 200);
+  w.clock.advance(60);
+  assert.equal((await w.mcp(lastOwn.access_token, LIST_TOOLS)).status, 401);
+});
+
+test("a token whose sign-in record is gone is refused", async () => {
+  // Whatever the token's own record says: it is held to its sign-in, which the owner lists
+  // and revokes.
+  for (const kind of ["refresh_token", "account_family"]) {
+    const w = await world();
+    const clientId = await w.registered();
+    const elsewhere = await w.signIn(clientId, LOOPBACK, { resource: ELSEWHERE });
+    const own = await w.signIn(clientId);
+    assert.ok(await w.shop.accessTokenFor(elsewhere.access_token, ELSEWHERE));
+    assert.equal((await w.mcp(own.access_token, LIST_TOOLS)).status, 200);
+    for (const entry of await w.shop.publicClientSignIns()) await w.shop.store.delete(kind, entry.signInId);
+    assert.equal(await w.shop.accessTokenFor(elsewhere.access_token, ELSEWHERE), undefined, kind);
+    assert.equal((await w.mcp(own.access_token, LIST_TOOLS)).status, 401, kind);
+  }
+});
+
 test("a public client revokes its own sign-in", async () => {
   const w = await world();
   const clientId = await w.registered();
@@ -842,7 +890,13 @@ test("only a public client registers", async () => {
       { grant_types: ["authorization_code", "urn:ietf:params:oauth:grant-type:device_code"] },
       "invalid_client_metadata",
     ],
+    [{ grant_types: ["authorization_code", {}] }, "invalid_client_metadata"],
+    [{ grant_types: ["authorization_code", ["refresh_token"]] }, "invalid_client_metadata"],
+    [{ grant_types: { authorization_code: 1 } }, "invalid_client_metadata"],
     [{ response_types: ["token"] }, "invalid_client_metadata"],
+    [{ response_types: [{}] }, "invalid_client_metadata"],
+    [{ redirect_uris: [{}] }, "invalid_redirect_uri"],
+    [{ redirect_uris: [[LOOPBACK]] }, "invalid_redirect_uri"],
     [{ client_name: "" }, "invalid_client_metadata"],
     [{ client_name: "x".repeat(101) }, "invalid_client_metadata"],
     [{ client_name: "Claude‮ (verified)" }, "invalid_client_metadata"],
@@ -865,6 +919,113 @@ test("only a public client registers", async () => {
   for (const raw of ["[]", "not json", '{"a": 1, "a": 2}', " ".repeat(16 * 1024 + 1)]) {
     const refused = await w.call("POST", "/oauth/register", { raw });
     assert.equal(refused.status, 400, raw.slice(0, 10));
+  }
+});
+
+test("a malformed registration is the caller's mistake, never an error of ours", async () => {
+  // Nobody signed the body: whatever is in it, the answer is 400 and says so.
+  const w = await world({ clientRegistrationsPerHour: 1000 });
+  const odd = [null, true, 7, 1.5, "text", [], {}, [[]], [{}], { a: { b: [] } }, [null]];
+  for (const member of [
+    "token_endpoint_auth_method",
+    "grant_types",
+    "response_types",
+    "redirect_uris",
+    "client_name",
+    "scope",
+    "jwks",
+    "jwks_uri",
+    "client_secret",
+  ]) {
+    for (const value of odd) {
+      if (value === "text" && (member === "scope" || member === "client_name")) continue;
+      const answer = await w.register({ [member]: value });
+      assert.equal(answer.status, 400, `${member} ${JSON.stringify(value)}`);
+      assert.ok(["invalid_client_metadata", "invalid_redirect_uri"].includes(answer.body.error), member);
+    }
+  }
+  // Members a public client may send and the company does not read: taken, whatever they are.
+  for (const member of ["contacts", "client_uri", "logo_uri", "tos_uri", "software_id", "unknown"]) {
+    for (const value of odd) {
+      assert.equal((await w.register({ [member]: value })).status, 201, `${member} ${JSON.stringify(value)}`);
+    }
+  }
+  // Entries of the wrong type, too many, too long.
+  for (const changes of [
+    { redirect_uris: [LOOPBACK, null] },
+    { redirect_uris: [LOOPBACK, { uri: LOOPBACK }] },
+    { redirect_uris: [LOOPBACK, LOOPBACK] },
+    { redirect_uris: [`https://pocket.example/${"a".repeat(2000)}`] },
+    { redirect_uris: { 0: LOOPBACK } },
+    { grant_types: ["authorization_code", null] },
+    { grant_types: [["authorization_code"]] },
+    { response_types: ["code", "code"] },
+    { response_types: [null] },
+    { client_name: ["Pocket"] },
+  ]) {
+    assert.equal((await w.register(changes)).status, 400, JSON.stringify(changes));
+  }
+  // Bodies that are no registration, nested deeper than anything reads.
+  const deep = "[".repeat(8000) + "]".repeat(8000);
+  for (const raw of [
+    "",
+    "null",
+    "7",
+    '"text"',
+    "[]",
+    "{",
+    '{"token_endpoint_auth_method": "none", "token_endpoint_auth_method": "none"}',
+    '{"redirect_uris": NaN}',
+    deep,
+    `{"redirect_uris": ${deep}, "token_endpoint_auth_method": "none"}`,
+    " ".repeat(16 * 1024 + 1),
+    new Uint8Array([0xff, 0xfe]),
+  ]) {
+    const answer = await w.call("POST", "/oauth/register", { raw });
+    assert.equal(answer.status, 400, String(raw).slice(0, 20));
+    assert.equal(answer.body.error, "invalid_client_metadata", String(raw).slice(0, 20));
+  }
+});
+
+test("what no check foresaw is refused and logged", async (t) => {
+  const w = await world();
+  const logged = [];
+  t.mock.method(console, "error", (...said) => logged.push(said));
+  // A store that fails where the registration is kept: a bug, or an outage, of ours.
+  const put = w.shop.store.put.bind(w.shop.store);
+  w.shop.store.put = async (kind, ...rest) => {
+    if (kind === "public_client") throw new TypeError("a bug of ours");
+    return put(kind, ...rest);
+  };
+  const answer = await w.register();
+  assert.deepEqual([answer.status, answer.body.error], [400, "invalid_client_metadata"]);
+  assert.equal(logged.length, 1);
+  assert.match(String(logged[0][1]), /a bug of ours/);
+});
+
+test("a document of any shape is refused, not thrown", async () => {
+  for (const changes of [
+    { redirect_uris: "https://client.example/callback" },
+    { redirect_uris: [7, null, {}] },
+    { redirect_uris: [] },
+    { client_name: 7 },
+    { client_name: null },
+    { client_id: 7 },
+    { grant_types: "authorization_code" },
+    { grant_types: [{}] },
+    { response_types: [[]] },
+    { token_endpoint_auth_method: ["none"] },
+    { logo_uri: 7 },
+  ]) {
+    assert.throws(() => parsePublicClientMetadata(document(changes)), JSON.stringify(changes));
+    const w = await world({ site: document(changes) });
+    assert.ok(refusedPage(await w.authorize(VERIFIED, VERIFIED_REDIRECT)), JSON.stringify(changes));
+  }
+  for (const site of [[], "text", 7, null, [document()]]) {
+    const w = await world();
+    w.sites["client.example"] = { "/oauth/client.json": site };
+    assert.ok(refusedPage(await w.authorize(VERIFIED, VERIFIED_REDIRECT)), JSON.stringify(site));
+    assert.equal((await w.refresh(VERIFIED, "rt_x")).status, 401, JSON.stringify(site));
   }
 });
 

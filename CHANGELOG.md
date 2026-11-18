@@ -29,7 +29,8 @@ company that turns nothing on behaves exactly as before.
   `public_client_scopes` (`publicClientScopes`), never `poppy:browser-sign-in`.
 - **Refresh tokens** of a public client are rotated at every use and one used twice ends the
   sign-in whole, whatever `refresh_reuse_revokes` says; a sign-in lasts
-  `public_client_refresh_lifetime` (`publicClientRefreshLifetimeSeconds`, 30 days).
+  `public_client_refresh_lifetime` (`publicClientRefreshLifetimeSeconds`, 30 days) from the
+  consent, and no access token of it outlives it.
 - **Redirect URIs** of a public client are loopback or HTTPS, written without user
   information, fragment, backslash or space, compared as text, exactly but for a loopback
   port (`public_redirect_uri`, `public_redirect_uri_matches`). An unverified client's errors

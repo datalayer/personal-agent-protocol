@@ -3009,6 +3009,22 @@ export class CompanyService {
    */
   async #register(request: CompanyRequest): Promise<CompanyResponse> {
     await this.#registrationAdmitted(request.clientAddress);
+    try {
+      return await this.#registered(request);
+    } catch (error) {
+      if (error instanceof Refused) throw error;
+      // Whatever a body nobody signed made go wrong (nesting too deep to read, a member of a
+      // type no check foresaw) is the caller's mistake to them, never a 500; and a bug of ours
+      // to us, so it is logged whole.
+      console.error("A client registration was refused for a reason no check names", error);
+      throw new Refused(400, "invalid_client_metadata", {
+        error_description: "the registration could not be read",
+      });
+    }
+  }
+
+  /** The registration itself, once the address was admitted (`#register`). */
+  async #registered(request: CompanyRequest): Promise<CompanyResponse> {
     const invalid = (description: string, error = "invalid_client_metadata"): Refused =>
       new Refused(400, error, { error_description: description });
     const raw = request.body ?? "";
@@ -3031,11 +3047,13 @@ export class CompanyService {
     const grants = Object.hasOwn(body, "grant_types") ? body.grant_types : [AUTHORIZATION_CODE_GRANT];
     if (
       !Array.isArray(grants) ||
+      !grants.every((grant) => typeof grant === "string") ||
       !grants.includes(AUTHORIZATION_CODE_GRANT) ||
       grants.some((grant) => grant !== AUTHORIZATION_CODE_GRANT && grant !== REFRESH_TOKEN_GRANT)
     ) {
       throw invalid("grant_types are authorization_code and refresh_token");
     }
+    if (Object.hasOwn(body, "scope") && typeof body.scope !== "string") throw invalid("scope is text");
     const responses = Object.hasOwn(body, "response_types") ? body.response_types : ["code"];
     if (!Array.isArray(responses) || responses.length !== 1 || responses[0] !== "code") {
       throw invalid("response_types is code");
@@ -3443,7 +3461,15 @@ export class CompanyService {
     const jkt = resource !== undefined && !this.#takesDpop(resource) ? undefined : options.jkt;
     const accessToken = this.#id("at");
     const key = digest(accessToken);
-    const expiresAt = this.#later(this.config.accessTokenLifetimeSeconds);
+    let expiresAt = this.#later(this.config.accessTokenLifetimeSeconds);
+    if (options.isPublic === true) {
+      // Never past its sign-in: once that has ended its owner can no longer list or revoke it,
+      // so no token of it works any more.
+      const signedIn = await this.#read<AccountGrant>(RecordKinds.refreshToken, family);
+      if (signedIn === undefined || this.#passed(signedIn.expiresAt)) throw new Refused(400, "invalid_grant");
+      const ends = new Date(signedIn.expiresAt);
+      if (ends.getTime() < expiresAt.getTime()) expiresAt = ends;
+    }
     const issued: IssuedAccessToken = {
       clientId,
       accountId,
@@ -3462,7 +3488,7 @@ export class CompanyService {
     const body: Record<string, unknown> = {
       access_token: accessToken,
       token_type: jkt === undefined ? "Bearer" : "DPoP",
-      expires_in: Math.trunc(this.config.accessTokenLifetimeSeconds),
+      expires_in: Math.max(1, Math.trunc((expiresAt.getTime() - this.#now().getTime()) / 1000)),
     };
     const asked = new Set(requested);
     const granted = new Set(scopes);
@@ -3478,6 +3504,14 @@ export class CompanyService {
     const issued = await this.#read<IssuedAccessToken>(RecordKinds.accessToken, digest(token));
     if (issued === undefined || this.#passed(issued.expiresAt)) return undefined;
     const grant = await this.#read<AccountGrant>(RecordKinds.refreshToken, issued.family);
+    // A public client's token is held to its sign-in, which its owner lists and revokes: one
+    // whose sign-in is gone, over or ended works no more.
+    if (issued.public === true) {
+      const family = await this.#read<AccountFamily>(RecordKinds.accountFamily, issued.family);
+      if (grant === undefined || this.#passed(grant.expiresAt) || family === undefined || family.revoked) {
+        return undefined;
+      }
+    }
     if (grant === undefined) {
       // Its sign-in's records are gone (expired, deleted): nothing to hold it to.
       if ((await this.#signedOutBefore(issued.accountId)) !== undefined) return undefined;

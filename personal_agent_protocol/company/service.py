@@ -71,6 +71,7 @@ import hashlib
 import hmac
 import html
 import json
+import logging
 import math
 import re
 import time
@@ -282,6 +283,8 @@ from .verify import (
     verify_dpop_proof,
     verify_session_jwt,
 )
+
+logger = logging.getLogger(__name__)
 
 _PAGE = 50
 #: How often a compare-and-set is retried against concurrent writers before giving up.
@@ -2266,7 +2269,8 @@ class CompanyService:
             return None
         try:
             metadata = await resolver.resolve_public(client_id)
-        except (PersonalAgentProtocolError, ValueError):
+        except (PersonalAgentProtocolError, ValueError, TypeError, RecursionError):
+            # Not a document a public client's metadata can be read from.
             return None
         if not isinstance(metadata, PublicClientMetadata) or metadata.client_id != client_id:
             return None
@@ -3040,6 +3044,13 @@ class CompanyService:
         access_token = self._id("at")
         digest = _digest(access_token)
         expires_at = self._now() + self.config.access_token_lifetime
+        if public:
+            # Never past its sign-in: once that has ended its owner can no longer list
+            # or revoke it, so no token of it works any more.
+            signed_in = await self._read(REFRESH_TOKEN, family, AccountGrant.from_json)
+            if signed_in is None or self._now() >= signed_in.expires_at:
+                raise _RefusedError(400, "invalid_grant")
+            expires_at = min(expires_at, signed_in.expires_at)
         await self.store.put(
             ACCESS_TOKEN,
             digest,
@@ -3061,7 +3072,7 @@ class CompanyService:
         body: dict[str, object] = {
             "access_token": access_token,
             "token_type": "Bearer" if jkt is None else "DPoP",
-            "expires_in": int(self.config.access_token_lifetime.total_seconds()),
+            "expires_in": max(1, int((expires_at - self._now()).total_seconds())),
         }
         if set(scopes) != set(requested):
             body["scope"] = " ".join(scopes)
@@ -3088,6 +3099,12 @@ class CompanyService:
         if issued is None or self._now() >= issued.expires_at:
             return None
         grant = await self._read(REFRESH_TOKEN, issued.family, AccountGrant.from_json)
+        if issued.public:
+            # A public client's token is held to its sign-in, which its owner lists and
+            # revokes: one whose sign-in is gone, over or ended works no more.
+            family = await self._read(ACCOUNT_FAMILY, issued.family, AccountFamily.from_json)
+            if grant is None or self._now() >= grant.expires_at or family is None or family.revoked:
+                return None
         if grant is None:
             # Its sign-in's records are gone (expired, deleted): nothing to hold it to.
             if await self._signed_out_before(issued.account_id) is not None:
@@ -3153,9 +3170,7 @@ class CompanyService:
 
     # Public clients: registration, and the owner's list -------------------------------
 
-    async def _register(  # noqa: C901 - one check per member of the registration
-        self, request: CompanyRequest
-    ) -> CompanyResponse:
+    async def _register(self, request: CompanyRequest) -> CompanyResponse:
         """`POST /oauth/register` (RFC 7591): a public client registers itself.
 
         Rate-limited by address before anything is read. Only a public client: its
@@ -3166,6 +3181,25 @@ class CompanyService:
         """
 
         await self._registration_admitted(request.client_address)
+        try:
+            return await self._registered(request)
+        except _RefusedError:
+            raise
+        except Exception:
+            # Whatever a body nobody signed made go wrong (nesting too deep to read,
+            # a member of a type no check foresaw) is the caller's mistake to them,
+            # never a 500; and a bug of ours to us, so it is logged whole.
+            logger.exception("A client registration was refused for a reason no check names")
+            raise _RefusedError(
+                400,
+                "invalid_client_metadata",
+                error_description="the registration could not be read",
+            ) from None
+
+    async def _registered(  # noqa: C901 - one check per member of the registration
+        self, request: CompanyRequest
+    ) -> CompanyResponse:
+        """The registration itself, once the address was admitted (`_register`)."""
 
         def invalid(description: str, error: str = "invalid_client_metadata") -> _RefusedError:
             return _RefusedError(400, error, error_description=description)
@@ -3185,10 +3219,14 @@ class CompanyService:
         grants = body.get("grant_types", [AUTHORIZATION_CODE_GRANT])
         if (
             not isinstance(grants, list)
+            # Each a string, before any is looked up: what is not one is no grant.
+            or not all(isinstance(grant, str) for grant in grants)
             or AUTHORIZATION_CODE_GRANT not in grants
             or any(grant not in {AUTHORIZATION_CODE_GRANT, REFRESH_TOKEN_GRANT} for grant in grants)
         ):
             raise invalid("grant_types are authorization_code and refresh_token")
+        if "scope" in body and not isinstance(body["scope"], str):
+            raise invalid("scope is text")
         if body.get("response_types", ["code"]) != ["code"]:
             raise invalid("response_types is code")
         redirects = body.get("redirect_uris")

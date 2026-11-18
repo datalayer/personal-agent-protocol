@@ -774,7 +774,9 @@ redirector. Every answer carries `iss` (RFC 9207) and the request's `state`.
 the whole sign-in, whatever `refresh_reuse_revokes` says for personal agents. A sign-in
 lasts `public_client_refresh_lifetime` (`publicClientRefreshLifetimeSeconds`, 30 days)
 from the moment the person allowed it, however often it refreshes; then they sign in
-again. A public client ends
+again. No token outlives it: an access token issued near the end expires with the
+sign-in (`expires_in` says so), and a public client's token whose sign-in is over,
+ended or no longer on record is refused wherever it is read. A public client ends
 its own sign-in at the revocation endpoint with its `client_id` and the refresh token.
 
 **The client policy** is asked as for a personal agent: `allows` before anything is

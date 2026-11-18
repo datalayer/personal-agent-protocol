@@ -1084,9 +1084,12 @@ async def test_a_secret_sent_at_the_token_endpoint_is_refused_never_taken() -> N
         "resource": MCP,
     }
     basic = {"authorization": "Basic " + base64.b64encode(f"{client_id}:guess".encode()).decode()}
+    # Its `client_id` as HTTP Basic with an empty password, as some libraries send it.
+    empty = {"Authorization": "Basic " + base64.b64encode(f"{client_id}:".encode()).decode()}
     for refused in (
         await token(world, **form, **{"client_secret": "guess"}),
         await world.http.post(f"{SHOP}/oauth/token", data=form, headers=basic),
+        await world.http.post(f"{SHOP}/oauth/token", data=form, headers=empty),
     ):
         assert (refused.status_code, refused.json()["error"]) == (401, "invalid_client")
         assert "no secret" in refused.json()["error_description"]

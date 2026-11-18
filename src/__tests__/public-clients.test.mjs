@@ -972,9 +972,12 @@ test("a secret sent at the token endpoint is refused, never taken", async () => 
     resource: MCP,
   };
   const basic = { authorization: `Basic ${Buffer.from(`${clientId}:guess`).toString("base64")}` };
+  // Its `client_id` as HTTP Basic with an empty password, as some libraries send it.
+  const empty = { authorization: `Basic ${Buffer.from(`${clientId}:`).toString("base64")}` };
   for (const refused of [
     await w.token({ ...form, client_secret: "guess" }),
     await w.call("POST", "/oauth/token", { form, headers: basic }),
+    await w.call("POST", "/oauth/token", { form, headers: empty }),
   ]) {
     assert.deepEqual([refused.status, refused.body.error], [401, "invalid_client"]);
     assert.match(refused.body.error_description, /no secret/);

@@ -2235,6 +2235,11 @@ class CompanyService:
         No client here has a secret, and none is ever checked: a request that sends one
         is refused, never served as if the secret had been right. A client that
         registered asking for a secret was told `none`, and uses what it was told.
+        HTTP Basic is refused whatever its password, an empty one too: some libraries
+        send a public client's `client_id` that way, and it goes in the form here.
+
+        The 401 carries no `WWW-Authenticate` (RFC 6749 §5.2 asks for one naming the
+        scheme the client used): naming `Basic` would say Basic works, which it never does.
         """
 
         scheme = request.headers.get("authorization", "").partition(" ")[0].lower()

@@ -742,6 +742,8 @@ company that leaves it off behaves exactly as before.
   `error_description` saying what to send: a personal agent can't register as a public
   client. A token or revocation request that carries a `client_secret`, in its form or
   as HTTP Basic, is `invalid_client`: no secret is ever issued, checked or ignored.
+  That includes a library that sends a public client's `client_id` as HTTP Basic with
+  an empty password: the `client_id` goes in the form, and no `Authorization` header.
   Nothing verifies what a registered client says of itself, its name least of all.
 
 **Redirect URIs** of a public client are `http` to the loopback (`127.0.0.1`, `[::1]`,

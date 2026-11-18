@@ -46,7 +46,14 @@ from typing import Any, Literal, Protocol, runtime_checkable
 from pydantic import SecretStr
 from reactor import define_contribution_point  # type: ignore[import-untyped]
 
-from ..models import Approval, ClientMetadata, JsonWebKeySet, Link, Operation
+from ..models import (
+    Approval,
+    ClientMetadata,
+    JsonWebKeySet,
+    Link,
+    Operation,
+    PublicClientMetadata,
+)
 from ..reactor import Clock, SystemClock
 from .store import (
     REPLAY,
@@ -325,6 +332,20 @@ class ClientResolver(Protocol):
 
 
 @runtime_checkable
+class PublicClientResolver(Protocol):
+    """What a `ClientResolver` adds to verify a public client by its domain.
+
+    `resolve_public` reads the client ID metadata document of a client that is no
+    personal agent (an MCP client): one that says `token_endpoint_auth_method` is `none`
+    and names no key. It fetches as `resolve` does, never a private address. A resolver
+    without it verifies no public client: with `public_clients`, only those that
+    registered themselves sign in.
+    """
+
+    async def resolve_public(self, client_id: str) -> PublicClientMetadata: ...
+
+
+@runtime_checkable
 class OperatorDirectory(Protocol):
     """The keys an operator publishes at a `Signature-Agent` URL (§5.3).
 
@@ -567,6 +588,7 @@ __all__ = [
     "PendingDevice",
     "PendingMediated",
     "ProposedOperation",
+    "PublicClientResolver",
     "ReplayCache",
     "Reply",
     "SignInContext",

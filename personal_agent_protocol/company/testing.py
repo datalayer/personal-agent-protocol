@@ -58,10 +58,12 @@ from .store import (
     MEDIATED,
     OPERATION,
     PROPOSAL,
+    PUBLIC_CLIENT,
     PUSHED_REQUEST,
     RECORD_KINDS,
     RECORD_TYPES,
     REFRESH_TOKEN,
+    REGISTRATION_COUNT,
     REPLAY,
     REQUEST_ID,
     SESSION,
@@ -86,6 +88,8 @@ from .store import (
     PendingDevice,
     PendingMediated,
     PushedAuthorization,
+    RegisteredClient,
+    RegistrationCount,
     ReplayMark,
     RequestReceipt,
     SignInAttempts,
@@ -222,6 +226,13 @@ def record_samples(now: datetime) -> dict[str, Any]:
         ),
         IDEMPOTENCY: IdempotencyRecord("digest", 200, {"summary": "Exchanged."}),
         DELEGATED_KEY: DelegatedKeyUse("usr_1"),
+        PUBLIC_CLIENT: RegisteredClient(
+            client_id="mcpc_Yx2b7Qd_Kp8mR3vT1nWc4A",
+            client_name="An MCP client",
+            redirect_uris=("http://127.0.0.1/callback", "https://client.example/callback"),
+            registered_at=now,
+        ),
+        REGISTRATION_COUNT: RegistrationCount(count=3),
     }
 
 

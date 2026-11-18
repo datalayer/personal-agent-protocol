@@ -72,6 +72,11 @@ IDEMPOTENCY = "idempotency"
 #: The User ID a delegated key signed for, by agent and key thumbprint, while its delegation
 #: lasts: a key that signs for another User ID is refused (§5.2).
 DELEGATED_KEY = "delegated_key"
+#: A public client that registered itself (RFC 7591), by the `client_id` it was given: its
+#: name and redirect URIs, as it stated them. Nothing verifies them.
+PUBLIC_CLIENT = "public_client"
+#: How many clients one address registered in the current window (RFC 7591 §5).
+REGISTRATION_COUNT = "registration_count"
 
 RECORD_KINDS = (
     SESSION,
@@ -99,6 +104,8 @@ RECORD_KINDS = (
     DPOP_NONCE,
     IDEMPOTENCY,
     DELEGATED_KEY,
+    PUBLIC_CLIENT,
+    REGISTRATION_COUNT,
 )
 
 
@@ -277,6 +284,96 @@ def _maybe_parse(value: str | None) -> datetime | None:
 
 
 @dataclass(frozen=True)
+class PublicClient:
+    """What a sign-in by a public client carries, from its request to its tokens.
+
+    A public client is another client than a personal agent (an MCP client): it
+    authenticates with nothing but PKCE, and its tokens work at one service and never
+    at the protocol's own endpoints. `verified` says its `client_id` is a client ID
+    metadata document read from its own domain; a client that registered itself
+    (RFC 7591) is not, and its `name` is only what it said. `resource` is the one
+    service the sign-in is for; `redirect_host` where the person's browser was sent back.
+    """
+
+    name: str
+    verified: bool
+    resource: str
+    redirect_host: str
+
+    def to_json(self) -> JsonObject:
+        return {
+            "name": self.name,
+            "verified": self.verified,
+            "resource": self.resource,
+            "redirect_host": self.redirect_host,
+        }
+
+    @classmethod
+    def from_json(cls, value: JsonObject) -> PublicClient:
+        return cls(
+            name=value["name"],
+            verified=value["verified"],
+            resource=value["resource"],
+            redirect_host=value["redirect_host"],
+        )
+
+
+def _maybe_public(value: JsonObject) -> PublicClient | None:
+    public = value.get("public")
+    return None if public is None else PublicClient.from_json(public)
+
+
+def _with_public(record: JsonObject, public: PublicClient | None) -> JsonObject:
+    """`record`, naming its public client when it has one: a personal agent's record is
+    written exactly as before."""
+
+    if public is not None:
+        record["public"] = public.to_json()
+    return record
+
+
+@dataclass(frozen=True)
+class RegisteredClient:
+    """A public client that registered itself (RFC 7591): what it said, never verified."""
+
+    client_id: str
+    client_name: str
+    redirect_uris: tuple[str, ...]
+    registered_at: datetime
+
+    def to_json(self) -> JsonObject:
+        return {
+            "client_id": self.client_id,
+            "client_name": self.client_name,
+            "redirect_uris": list(self.redirect_uris),
+            "registered_at": _time(self.registered_at),
+        }
+
+    @classmethod
+    def from_json(cls, value: JsonObject) -> RegisteredClient:
+        return cls(
+            client_id=value["client_id"],
+            client_name=value["client_name"],
+            redirect_uris=tuple(value["redirect_uris"]),
+            registered_at=_parse(value["registered_at"]),
+        )
+
+
+@dataclass(frozen=True)
+class RegistrationCount:
+    """The clients one address registered in the window its record lasts."""
+
+    count: int
+
+    def to_json(self) -> JsonObject:
+        return {"count": self.count}
+
+    @classmethod
+    def from_json(cls, value: JsonObject) -> RegistrationCount:
+        return cls(count=value["count"])
+
+
+@dataclass(frozen=True)
 class IssuedAccessToken:
     """An access token the company issued: for whom, which account, which service (§4.5).
 
@@ -293,9 +390,12 @@ class IssuedAccessToken:
     family: str
     resource: str | None = None
     dpop_jkt: str | None = None
+    #: Issued to a public client (an MCP client), never a personal agent: it works at
+    #: its `resource` alone, and belongs to no Session.
+    public: bool = False
 
     def to_json(self) -> JsonObject:
-        return {
+        record: JsonObject = {
             "client_id": self.client_id,
             "account_id": self.account_id,
             "scopes": list(self.scopes),
@@ -304,6 +404,9 @@ class IssuedAccessToken:
             "resource": self.resource,
             "dpop_jkt": self.dpop_jkt,
         }
+        if self.public:
+            record["public"] = True
+        return record
 
     @classmethod
     def from_json(cls, value: JsonObject) -> IssuedAccessToken:
@@ -315,6 +418,7 @@ class IssuedAccessToken:
             family=value["family"],
             resource=value["resource"],
             dpop_jkt=value["dpop_jkt"],
+            public=value.get("public") is True,
         )
 
 
@@ -380,18 +484,24 @@ class AccountGrant:
     #: issued it, carried by every token rotated from it: a refresh proves with that
     #: key, or is `invalid_grant` (§4.4). `None`: not bound.
     dpop_jkt: str | None = None
+    #: The public client the sign-in is of, carried by every token rotated from it;
+    #: `None` for a personal agent's.
+    public: PublicClient | None = None
 
     def to_json(self) -> JsonObject:
-        return {
-            "account_id": self.account_id,
-            "client_id": self.client_id,
-            "scopes": list(self.scopes),
-            "expires_at": _time(self.expires_at),
-            "revoked": self.revoked,
-            "family": self.family,
-            "signed_in_at": _maybe_time(self.signed_in_at),
-            "dpop_jkt": self.dpop_jkt,
-        }
+        return _with_public(
+            {
+                "account_id": self.account_id,
+                "client_id": self.client_id,
+                "scopes": list(self.scopes),
+                "expires_at": _time(self.expires_at),
+                "revoked": self.revoked,
+                "family": self.family,
+                "signed_in_at": _maybe_time(self.signed_in_at),
+                "dpop_jkt": self.dpop_jkt,
+            },
+            self.public,
+        )
 
     @classmethod
     def from_json(cls, value: JsonObject) -> AccountGrant:
@@ -404,6 +514,7 @@ class AccountGrant:
             family=value["family"],
             signed_in_at=_maybe_parse(value.get("signed_in_at")),
             dpop_jkt=value.get("dpop_jkt"),
+            public=_maybe_public(value),
         )
 
 
@@ -417,15 +528,25 @@ class AccountFamily:
     access_tokens: tuple[str, ...] = ()
     #: Revoked (§4.6) or disconnected: no token joins it any more.
     revoked: bool = False
+    #: The public client the sign-in is of; `None` for a personal agent's.
+    public: PublicClient | None = None
+    #: When a public client's sign-in last got tokens: at the sign-in, then each refresh.
+    last_used_at: datetime | None = None
 
     def to_json(self) -> JsonObject:
-        return {
-            "client_id": self.client_id,
-            "account_id": self.account_id,
-            "tokens": list(self.tokens),
-            "access_tokens": list(self.access_tokens),
-            "revoked": self.revoked,
-        }
+        record = _with_public(
+            {
+                "client_id": self.client_id,
+                "account_id": self.account_id,
+                "tokens": list(self.tokens),
+                "access_tokens": list(self.access_tokens),
+                "revoked": self.revoked,
+            },
+            self.public,
+        )
+        if self.last_used_at is not None:
+            record["last_used_at"] = _time(self.last_used_at)
+        return record
 
     @classmethod
     def from_json(cls, value: JsonObject) -> AccountFamily:
@@ -435,6 +556,8 @@ class AccountFamily:
             tokens=tuple(value["tokens"]),
             access_tokens=tuple(value["access_tokens"]),
             revoked=value["revoked"],
+            public=_maybe_public(value),
+            last_used_at=_maybe_parse(value.get("last_used_at")),
         )
 
 
@@ -539,21 +662,27 @@ class PendingAuthorization:
     #: The thumbprint of the DPoP key that pushed the request (RFC 9449 §10.1): the code is
     #: exchanged only with a proof by that key.
     dpop_jkt: str | None = None
+    #: The public client that asks, with whether it is verified and where the browser
+    #: goes back, for the consent page to show; `None` when a personal agent asks.
+    public: PublicClient | None = None
 
     def to_json(self) -> JsonObject:
-        return {
-            "client_id": self.client_id,
-            "redirect_uri": self.redirect_uri,
-            "scopes": list(self.scopes),
-            "state": self.state,
-            "code_challenge": self.code_challenge,
-            "expires_at": _time(self.expires_at),
-            "client_name": self.client_name,
-            "browser_binding": self.browser_binding,
-            "requested": None if self.requested is None else list(self.requested),
-            "prompt": self.prompt,
-            "dpop_jkt": self.dpop_jkt,
-        }
+        return _with_public(
+            {
+                "client_id": self.client_id,
+                "redirect_uri": self.redirect_uri,
+                "scopes": list(self.scopes),
+                "state": self.state,
+                "code_challenge": self.code_challenge,
+                "expires_at": _time(self.expires_at),
+                "client_name": self.client_name,
+                "browser_binding": self.browser_binding,
+                "requested": None if self.requested is None else list(self.requested),
+                "prompt": self.prompt,
+                "dpop_jkt": self.dpop_jkt,
+            },
+            self.public,
+        )
 
     @classmethod
     def from_json(cls, value: JsonObject) -> PendingAuthorization:
@@ -569,6 +698,7 @@ class PendingAuthorization:
             requested=None if value.get("requested") is None else tuple(value["requested"]),
             prompt=value.get("prompt"),
             dpop_jkt=value.get("dpop_jkt"),
+            public=_maybe_public(value),
         )
 
 
@@ -628,18 +758,24 @@ class IssuedCode:
     expires_at: datetime
     #: The DPoP key that pushed the request (RFC 9449 §10.1): the exchange proves with it.
     dpop_jkt: str | None = None
+    #: The public client the code was issued to; `None` for a personal agent's. A code
+    #: is exchanged only by the class of client it was issued to.
+    public: PublicClient | None = None
 
     def to_json(self) -> JsonObject:
-        return {
-            "requested": list(self.requested),
-            "client_id": self.client_id,
-            "redirect_uri": self.redirect_uri,
-            "code_challenge": self.code_challenge,
-            "account_id": self.account_id,
-            "scopes": list(self.scopes),
-            "expires_at": _time(self.expires_at),
-            "dpop_jkt": self.dpop_jkt,
-        }
+        return _with_public(
+            {
+                "requested": list(self.requested),
+                "client_id": self.client_id,
+                "redirect_uri": self.redirect_uri,
+                "code_challenge": self.code_challenge,
+                "account_id": self.account_id,
+                "scopes": list(self.scopes),
+                "expires_at": _time(self.expires_at),
+                "dpop_jkt": self.dpop_jkt,
+            },
+            self.public,
+        )
 
     @classmethod
     def from_json(cls, value: JsonObject) -> IssuedCode:
@@ -652,6 +788,7 @@ class IssuedCode:
             scopes=tuple(value["scopes"]),
             expires_at=_parse(value["expires_at"]),
             dpop_jkt=value.get("dpop_jkt"),
+            public=_maybe_public(value),
         )
 
 
@@ -1202,4 +1339,6 @@ RECORD_TYPES: dict[str, Callable[[JsonObject], Any]] = {
     DPOP_NONCE: IssuedNonce.from_json,
     IDEMPOTENCY: IdempotencyRecord.from_json,
     DELEGATED_KEY: DelegatedKeyUse.from_json,
+    PUBLIC_CLIENT: RegisteredClient.from_json,
+    REGISTRATION_COUNT: RegistrationCount.from_json,
 }

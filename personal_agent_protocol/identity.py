@@ -23,7 +23,7 @@ from .errors import (
     ProtocolValidationError,
 )
 from .json import loads_strict
-from .models import ClientMetadata, JsonWebKeySet
+from .models import ClientMetadata, JsonWebKeySet, PublicClientMetadata
 from .operator_signatures import OPERATOR_DIRECTORY_MEDIA_TYPE
 from .reactor import (
     DISCOVERY_TRANSPORTS,
@@ -141,18 +141,7 @@ class AgentIdentityClient:
     async def fetch_metadata(self, client_id: str) -> ClientMetadata:
         """Fetch client metadata without redirects and bind it to ``client_id``."""
 
-        requested = self._fetchable_url(client_id)
-        now = self._cache.now()
-        remembered = self._unfetchable.get(requested)
-        if remembered is not None and now < remembered[0]:
-            raise type(remembered[1])(remembered[1].code, "Client metadata could not be fetched")
-        try:
-            data = await self._cached_json(
-                f"pap.client-metadata:{requested}", requested, max_redirects=0, required_host=None
-            )
-        except (DiscoveryError, IdentityError) as error:
-            _remember(self._unfetchable, requested, (now + self._unfetchable_for, error), now)
-            raise
+        requested, data = await self._client_document(client_id)
         try:
             metadata = ClientMetadata.model_validate(data)
         except ValidationError as exc:
@@ -165,6 +154,48 @@ class AgentIdentityClient:
                 "Client metadata client_id does not match the URL that was fetched",
             )
         return metadata
+
+    async def fetch_public_metadata(self, client_id: str) -> PublicClientMetadata:
+        """Fetch a public client's client ID metadata document, bound to ``client_id``.
+
+        The document a personal agent's metadata is read from, fetched the same way:
+        HTTPS, no redirect, bounded, and only at an address `pap.urlSafetyPolicy` approves,
+        so a `client_id` naming a private address is never fetched. It is a public
+        client's only when it says `token_endpoint_auth_method` is `none` and names no
+        key; a personal agent's document is refused here, as a public client's is by
+        `fetch_metadata`.
+        """
+
+        requested, data = await self._client_document(client_id)
+        try:
+            metadata = PublicClientMetadata.model_validate(data)
+        except ValidationError as exc:
+            raise ProtocolValidationError(
+                "invalid_client_metadata", "Client metadata is not a public client's"
+            ) from exc
+        if metadata.client_id != requested:
+            raise IdentityError(
+                "client_id_mismatch",
+                "Client metadata client_id does not match the URL that was fetched",
+            )
+        return metadata
+
+    async def _client_document(self, client_id: str) -> tuple[str, object]:
+        """The document at a `client_id`, cached, and the URL it was fetched at."""
+
+        requested = self._fetchable_url(client_id)
+        now = self._cache.now()
+        remembered = self._unfetchable.get(requested)
+        if remembered is not None and now < remembered[0]:
+            raise type(remembered[1])(remembered[1].code, "Client metadata could not be fetched")
+        try:
+            data = await self._cached_json(
+                f"pap.client-metadata:{requested}", requested, max_redirects=0, required_host=None
+            )
+        except (DiscoveryError, IdentityError) as error:
+            _remember(self._unfetchable, requested, (now + self._unfetchable_for, error), now)
+            raise
+        return requested, data
 
     async def fetch_jwks(self, client_id: str, *, kid: str | None = None) -> JsonWebKeySet:
         """Fetch a verified client's bounded, public-only signing key set.

@@ -120,8 +120,15 @@ async def test_authorize_redirects_to_the_hosted_consent_page_which_reads_the_re
     # What the page starts with and says before the person goes on (spec 10.8).
     assert summary["heading"] == "Atlas wants to connect to your Manzanita Outfitters account"
     assert summary["caution"] == "Only continue if you asked Atlas to do this just now."
+    # Who asks, as a class of client, and where the browser goes back to.
+    assert summary["client_class"] == "personal_agent"
+    assert summary["verified"] is True
+    assert summary["redirect_host"] == "atlas.example"
     assert set(summary) == {
         "request_id",
+        "client_class",
+        "verified",
+        "redirect_host",
         "client_name",
         "client_domain",
         "heading",

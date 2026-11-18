@@ -90,7 +90,15 @@ def company_app(service: CompanyService) -> Callable[[Scope, Receive, Send], Awa
             return
         headers = _headers(scope["headers"])
         response = await service.handle(
-            CompanyRequest(method=scope["method"], url=url, headers=headers, body=body)
+            CompanyRequest(
+                method=scope["method"],
+                url=url,
+                headers=headers,
+                body=body,
+                # The peer's address, as the server saw it: what client registration is
+                # rate-limited by. Behind a proxy it is the proxy's, one count for all.
+                client_address=(scope.get("client") or (None,))[0],
+            )
         )
         if response.stream is not None:
             await send(

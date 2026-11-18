@@ -199,6 +199,120 @@ def redirect_uri_matches(registered: str, given: str) -> bool:
     return (one.hostname, one.path, one.query) == (other.hostname, other.path, other.query)
 
 
+#: An HTTPS redirect URI's authority for a public client: DNS labels in small ASCII
+#: letters (an internationalized name as its A-labels), and a port when it is not 443.
+_PUBLIC_REDIRECT_AUTHORITY = re.compile(
+    r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:[0-9]{1,5})?"
+)
+#: A loopback redirect URI's authority: `127.0.0.1`, `[::1]` or `localhost`, any port.
+_PUBLIC_LOOPBACK_AUTHORITY = re.compile(r"(127\.0\.0\.1|\[::1\]|localhost)(:[0-9]{1,5})?")
+#: The longest redirect URI a public client names, and the longest name it shows.
+PUBLIC_REDIRECT_URI_MAX = 2000
+PUBLIC_CLIENT_NAME_MAX = 100
+#: Characters a client's name never holds: controls, and the marks that reorder or hide
+#: text on the consent page (bidirectional overrides and isolates, zero-width marks).
+_UNSHOWABLE = re.compile(
+    "[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]"
+)
+
+
+def _port_of(authority: str) -> bool:
+    """Whether the authority's port, if it names one, is a port (1 to 65535)."""
+
+    _, colon, port = authority.rpartition(":")
+    if not colon or authority.endswith("]"):
+        return True
+    return port.isdigit() and 0 < int(port) <= 65535
+
+
+def is_public_loopback_redirect(value: str) -> bool:
+    """A public client's loopback redirect URI (RFC 8252 §7.3, §8.3): `http` to
+    `127.0.0.1`, `[::1]` or `localhost`, any port, no user information, no fragment.
+
+    `localhost` is taken here, though a personal agent's loopback redirect is an IP
+    literal (`is_loopback_redirect`): the apps that are MCP clients name it.
+    """
+
+    if "#" in value or "\\" in value:
+        return False
+    parsed = urlsplit(value)
+    return (
+        parsed.scheme == "http"
+        and _PUBLIC_LOOPBACK_AUTHORITY.fullmatch(parsed.netloc) is not None
+        and _port_of(parsed.netloc)
+    )
+
+
+def public_redirect_uri(value: str) -> str:
+    """A redirect URI a public client may name: loopback, or HTTPS (`ValueError` otherwise).
+
+    HTTPS to a host in small ASCII letters, a port allowed; or `http` to the User's own
+    computer (`is_public_loopback_redirect`). Never user information, a fragment, a
+    backslash, a space or a control character, each a way to make two readers of one URL
+    see two hosts; never another scheme.
+    """
+
+    if (
+        not value
+        or len(value) > PUBLIC_REDIRECT_URI_MAX
+        or any(ord(character) <= 0x20 or 0x7F <= ord(character) <= 0x9F for character in value)
+        or "\\" in value
+        or "#" in value
+    ):
+        raise ValueError("a redirect URI is a URL without spaces, backslashes or a fragment")
+    if is_public_loopback_redirect(value):
+        return value
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme != "https"
+        or not _PUBLIC_REDIRECT_AUTHORITY.fullmatch(parsed.netloc)
+        or not _port_of(parsed.netloc)
+    ):
+        raise ValueError(
+            "a redirect URI is HTTPS to a host in small letters, or http to the loopback"
+        )
+    return value
+
+
+def public_redirect_uri_matches(registered: str, given: str) -> bool:
+    """Whether `given` is the redirect URI a public client `registered`.
+
+    Exactly, except that a loopback redirect URI matches with any port (RFC 8252 §7.3):
+    an app listens on whichever port is free. Nothing else is compared loosely: no
+    prefix, no other path, no added query, no other host.
+    """
+
+    try:
+        public_redirect_uri(given)
+    except ValueError:
+        return False
+    if registered == given:
+        return True
+    if not (is_public_loopback_redirect(registered) and is_public_loopback_redirect(given)):
+        return False
+    one, other = urlsplit(registered), urlsplit(given)
+    return (one.hostname, one.path, one.query) == (other.hostname, other.path, other.query)
+
+
+def redirect_host(redirect_uri: str) -> str:
+    """Where a redirect URI sends the browser back, for a consent page to show: its host,
+    with its port when it names one."""
+
+    return urlsplit(redirect_uri).netloc.rpartition("@")[2]
+
+
+def public_client_name(value: object) -> str:
+    """A public client's name as a consent page shows it (`ValueError` otherwise): text of
+    1 to 100 characters, with no control character and none that reorders or hides text."""
+
+    if not isinstance(value, str):
+        raise ValueError("client_name is text")
+    name = value.strip()
+    if not name or len(name) > PUBLIC_CLIENT_NAME_MAX or _UNSHOWABLE.search(name):
+        raise ValueError("client_name is 1 to 100 characters, none of them a control character")
+    return name
+
+
 def _domain(value: str) -> str:
     normalized = value.lower()
     host, port = split_domain(normalized)
@@ -869,6 +983,71 @@ class ClientMetadata(ProtocolModel):
         if any(urlsplit(url).hostname != domain for url in urls):
             raise ValueError("jwks_uri and HTTPS redirect_uris must use the client_id domain")
         return self
+
+
+#: What a client's metadata holds when it authenticates with something: never a public
+#: client's.
+_CONFIDENTIAL_MEMBERS = frozenset({"jwks_uri", "jwks", "client_secret"})
+
+
+class PublicClientMetadata(ProtocolModel):
+    """The client ID metadata document of a public client: an MCP client, never a
+    personal agent.
+
+    It says `token_endpoint_auth_method` is `none`, and names no key: a document with a
+    `jwks_uri` is a personal agent's (`ClientMetadata`), and no document is both. Its
+    redirect URIs a company uses are the loopback ones and the HTTPS ones on the
+    `client_id`'s own host (`usable_redirect_uris`); any other it names is never matched.
+    """
+
+    client_id: str
+    client_name: str
+    logo_uri: str | None = None
+    redirect_uris: list[str] = Field(min_length=1)
+    token_endpoint_auth_method: Literal["none"]
+    grant_types: list[str] | None = None
+    response_types: list[str] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_confidential_members(cls, value: Any) -> Any:
+        if isinstance(value, dict) and _CONFIDENTIAL_MEMBERS.intersection(value):
+            raise ValueError("a public client's metadata names no key and no secret")
+        return value
+
+    @field_validator("client_id")
+    @classmethod
+    def validate_client_id(cls, value: str) -> str:
+        return _https_url(value, "client_id")
+
+    @field_validator("client_name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        return public_client_name(value)
+
+    @model_validator(mode="after")
+    def validate_grants(self) -> PublicClientMetadata:
+        if self.grant_types is not None and AUTHORIZATION_CODE_GRANT not in self.grant_types:
+            raise ValueError("a public client signs in with the authorization code grant")
+        if self.response_types is not None and "code" not in self.response_types:
+            raise ValueError("a public client asks for response_type code")
+        return self
+
+    @property
+    def usable_redirect_uris(self) -> tuple[str, ...]:
+        """The redirect URIs a company sends this client's answers to: loopback, or HTTPS
+        on the `client_id`'s own host."""
+
+        host = urlsplit(self.client_id).hostname
+        usable = []
+        for uri in self.redirect_uris:
+            try:
+                public_redirect_uri(uri)
+            except ValueError:
+                continue
+            if is_public_loopback_redirect(uri) or urlsplit(uri).hostname == host:
+                usable.append(uri)
+        return tuple(usable)
 
 
 _PRIVATE_JWK_MEMBERS = frozenset({"d", "p", "q", "dp", "dq", "qi", "oth", "k"})

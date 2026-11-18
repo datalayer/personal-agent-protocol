@@ -313,6 +313,9 @@ _REGISTRATION_MAX_BYTES = 16 * 1024
 _REGISTRATION_MAX_REDIRECTS = 10
 #: The window `client_registrations_per_hour` counts in.
 _REGISTRATION_WINDOW = timedelta(hours=1)
+#: How long a registration is kept before its client first signs in: long enough to
+#: register and then ask the person, short enough that clients nobody used don't pile up.
+_REGISTRATION_UNUSED = timedelta(hours=1)
 #: What a public client asking for an action that needs approval is told: operations are
 #: approved by a personal agent in its Session, and a public client has neither.
 _PUBLIC_NEEDS_APPROVAL = (
@@ -666,7 +669,8 @@ class CompanyConfig:
     #: The scopes a public client may be granted, some of `scopes`; None, all of them.
     #: Never `poppy:browser-sign-in`, which is a personal agent's.
     public_client_scopes: tuple[str, ...] | None = None
-    #: How long a self-registered client is kept after it registered or last signed in.
+    #: How long a self-registered client is kept after it last signed in. One that never
+    #: signed in is forgotten an hour after it registered.
     client_registration_lifetime: timedelta = timedelta(days=90)
     #: How many clients one address registers in an hour, whatever the host's own
     #: `pap.company.rateLimit` allows besides (RFC 7591 §5).
@@ -2114,7 +2118,7 @@ class CompanyService:
         form = dict(parse_qsl(request.body.decode()))
         grant = form.get("grant_type")
         if self._unauthenticated(form):
-            return await self._public_token(form)
+            return await self._public_token(request, form)
         if grant == REFRESH_TOKEN_GRANT and await self._never_issued():
             # No tokens to protect: every refresh is `invalid_grant`, the client assertion
             # unverified (§3.2).
@@ -2149,15 +2153,20 @@ class CompanyService:
             and "client_assertion_type" not in form
         )
 
-    async def _public_token(self, form: Mapping[str, str]) -> CompanyResponse:
+    async def _public_token(
+        self, request: CompanyRequest, form: Mapping[str, str]
+    ) -> CompanyResponse:
         """The token endpoint for a public client: the code and refresh grants, for the
         one service its sign-in names, never bound, never the default token.
 
-        In order: the client (the policy, then that it is a public client still: its
-        registration, or its document read again), the grant type, the `resource`, and
-        only then the grant itself, so a refused request spends no code.
+        In order: the host's rate limit, the client (the policy, then that it is a
+        public client still: its registration, or its document read again), the grant
+        type, the `resource`, and only then the grant itself. A request refused by one
+        of those spends nothing. Once the code is taken it is spent, whatever is wrong
+        with the rest of the request: a code is used once (RFC 6749 §4.1.2).
         """
 
+        await self._public_admitted(request)
         client_id = form.get("client_id", "")
         client = await self._public_client(client_id)
         grant = form.get("grant_type")
@@ -2178,6 +2187,24 @@ class CompanyService:
         if grant == REFRESH_TOKEN_GRANT:
             return await self._refresh_grant(form, client_id, None, resource, public=True)
         return await self._public_code_grant(form, client_id, client, resource)
+
+    async def _public_admitted(self, request: CompanyRequest) -> None:
+        """The host's rate limit on requests that carry no client assertion, or HTTP 429.
+
+        Asked with `public:{address}` where it is asked a `client_id`, before the
+        client is looked at: such a request names any `client_id` it likes, and each
+        may make the company read a document from the network. Counted by address, so
+        the names a caller invents cost the limiter nothing. None contributed: no limit.
+        """
+
+        limit = optional_contribution(self.reactor, COMPANY_RATE_LIMITS, "rate limit")
+        if limit is None:
+            return
+        wait = await cast(RateLimit, limit).admit(
+            f"public:{request.client_address or 'unknown'}", None
+        )
+        if wait is not None:
+            raise _RateLimitedError(max(1, int(wait)))
 
     def _public_resources(self) -> tuple[str, ...]:
         """The services a public client gets tokens for: `resource_servers`, and the MCP
@@ -2209,7 +2236,7 @@ class CompanyService:
         became a personal agent's, gets nothing more.
         """
 
-        if not client_id or not await self._allowed(client_id):
+        if not client_id or not await self._public_allowed(client_id):
             raise _RefusedError(401, "invalid_client")
         client = (
             await self._verified_public_client(client_id)
@@ -2258,6 +2285,18 @@ class CompanyService:
             verified=False,
         )
 
+    async def _public_allowed(self, client_id: str) -> bool:
+        """The company's policy on this public client, asked before anything is fetched
+        or read for it: `allows_public`, when the policy has it, so a company that lists
+        the personal agents it serves can still take public clients, or none; `allows`
+        otherwise, one answer for both classes."""
+
+        policy = first_contribution(self.reactor, CLIENT_POLICIES, "policy")
+        decide = getattr(policy, "allows_public", None)
+        if decide is None:
+            return await self._allowed(client_id)
+        return bool(await decide(client_id))
+
     async def _public_sign_in_allowed(self, client_id: str) -> bool:
         """Whether the client policy lets this public client sign in (`allows_sign_in`).
         `sign_in_disabled` is about personal agents, and is not asked here."""
@@ -2271,7 +2310,12 @@ class CompanyService:
     ) -> CompanyResponse:
         """A public client's code for its tokens: PKCE is its only proof, so the verifier
         is checked as RFC 7636 writes it, and the code is the one issued to this client,
-        for this redirect and this service."""
+        for this redirect and this service.
+
+        The code is taken first, and so spent, whatever the request then gets wrong:
+        another client, redirect, service or verifier gets `invalid_grant` or
+        `invalid_target`, and the code gives nothing to anyone after it.
+        """
 
         taken = await self.store.take(CODE, _digest(form.get("code", "")))
         issued = None if taken is None else IssuedCode.from_json(taken)
@@ -2755,6 +2799,7 @@ class CompanyService:
         form = dict(parse_qsl(request.body.decode()))
         if self._unauthenticated(form):
             # A public client revokes its own sign-in with the refresh token it holds.
+            await self._public_admitted(request)
             client_id = form.get("client_id", "")
             await self._public_client(client_id)
             public = True
@@ -3071,9 +3116,12 @@ class CompanyService:
         # The client policy, asked now and not only when the token was issued: a blocked
         # agent's tokens stop working at once, and so does one for a service the policy
         # has since left out for this agent (§4.5).
-        if not await self._allowed(issued.client_id) or not await self._resource_allowed(
-            issued.client_id, resource
-        ):
+        allowed = (
+            await self._public_allowed(issued.client_id)
+            if issued.public
+            else await self._allowed(issued.client_id)
+        )
+        if not allowed or not await self._resource_allowed(issued.client_id, resource):
             return None
         return issued
 
@@ -3167,7 +3215,9 @@ class CompanyService:
             PUBLIC_CLIENT,
             client_id,
             record.to_json(),
-            expires_at=now + self.config.client_registration_lifetime,
+            # Kept briefly until its first sign-in, which keeps it for long
+            # (`_keep_registration`): registering alone costs the company an hour's record.
+            expires_at=now + _REGISTRATION_UNUSED,
         )
         return CompanyResponse(
             201,
@@ -3231,6 +3281,9 @@ class CompanyService:
         client, verified by its domain or not, where the browser went back, for which
         service and account, with which scopes, since when, when it last got tokens,
         and until when. Each is ended whole by `revoke_public_client_sign_in`.
+
+        Read from every sign-in the company keeps, a personal agent's among them
+        (`store.records`): a company with very many reads them all each time.
         """
 
         now = self._now()
@@ -3370,7 +3423,7 @@ class CompanyService:
             return self._page(400, "This sign-in request is not valid.")
         client_id = query.get("client_id", "")
         redirect_uri = query.get("redirect_uri", "")
-        if not client_id or not await self._allowed(client_id):
+        if not client_id:
             return self._page(400, "This sign-in request is not valid.")
         client = await self._authorizing_client(client_id)
         if client is None:
@@ -3525,15 +3578,26 @@ class CompanyService:
         """
 
         if not client_id.startswith("https://"):
+            if not self.config.client_registration or not await self._public_allowed(client_id):
+                return None
             return await self._registered_client(client_id)
-        resolver = cast(
-            ClientResolver, first_contribution(self.reactor, CLIENT_RESOLVERS, "client")
-        )
-        try:
-            metadata, _ = await resolver.resolve(client_id)
-        except (PersonalAgentProtocolError, ValueError):
-            return await self._verified_public_client(client_id)
-        return _Client(name=metadata.client_name, redirect_uris=tuple(metadata.redirect_uris))
+        # The policy before anything is fetched: as a personal agent, then as a public
+        # client. A `client_id` neither allows is never resolved.
+        if await self._allowed(client_id):
+            resolver = cast(
+                ClientResolver, first_contribution(self.reactor, CLIENT_RESOLVERS, "client")
+            )
+            try:
+                metadata, _ = await resolver.resolve(client_id)
+            except (PersonalAgentProtocolError, ValueError):
+                pass
+            else:
+                return _Client(
+                    name=metadata.client_name, redirect_uris=tuple(metadata.redirect_uris)
+                )
+        if not self.config.public_clients or not await self._public_allowed(client_id):
+            return None
+        return await self._verified_public_client(client_id)
 
     async def consent_decision(self, request: CompanyRequest) -> ConsentDecision:
         """The decision the company's own consent form posted, once it is shown to be the user's.
@@ -5773,7 +5837,7 @@ class CompanyService:
             issued.resource != self.config.mcp_url
             or not self._offers(issued.scopes)
             or not self._public_token_within(issued)
-            or not await self._allowed(issued.client_id)
+            or not await self._public_allowed(issued.client_id)
             or not await self._resource_allowed(issued.client_id, self.config.mcp_url)
         ):
             return self._mcp_refusal(401, "invalid_token")

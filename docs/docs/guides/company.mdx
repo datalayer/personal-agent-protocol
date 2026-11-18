@@ -770,7 +770,8 @@ redirector. Every answer carries `iss` (RFC 9207) and the request's `state`.
 **Refresh tokens** of a public client are rotated at every use, and one used twice ends
 the whole sign-in, whatever `refresh_reuse_revokes` says for personal agents. A sign-in
 lasts `public_client_refresh_lifetime` (`publicClientRefreshLifetimeSeconds`, 30 days)
-from the moment the person allowed it; then they sign in again. A public client ends
+from the moment the person allowed it, however often it refreshes; then they sign in
+again. A public client ends
 its own sign-in at the revocation endpoint with its `client_id` and the refresh token.
 
 **The client policy** is asked as for a personal agent: `allows` before anything is
@@ -780,6 +781,17 @@ request and each time `access_token_for` reads a token. A service at a URL of it
 reads `public` on the record `access_token_for` returns: true for a public client's
 token, to which it gives no Session and from which it takes no approval.
 
+A policy may answer for public clients apart, with `allows_public(client_id)`
+(`allowsPublic`): a company that lists the personal agents it serves takes public
+clients all the same, or none. Without the method, `allows` answers for both classes.
+`sign_in_disabled` is about personal agents only: it neither stops nor allows public
+clients, which `public_clients` alone decides.
+
+A client verified by its domain is read again at each token request, so a document that
+went away or became a personal agent's gets nothing more. The resolver's cache decides
+how often that is a fetch: the default one keeps a document as its `Cache-Control` says,
+and remembers for 30 seconds that one could not be read.
+
 **Registration is bounded.** The host's `pap.company.rateLimit` is asked first, with
 `registration:{address}` where it is asked a `client_id`; then the company counts
 `client_registrations_per_hour` (`clientRegistrationsPerHour`, 10) for each address.
@@ -787,8 +799,10 @@ The address is the request's `client_address` (`clientAddress`): the peer's, whi
 ASGI and Node adapters fill in. Behind a proxy that is the proxy's, one count for
 everyone, unless the host passes the address its proxy vouches for. A registration is at
 most 16 KiB, names at most 10 redirect URIs and a name of at most 100 characters with
-no control or direction mark, and is forgotten `client_registration_lifetime` (90 days)
-after it was made or last signed in.
+no control or direction mark. A client that never signs in is forgotten an hour after
+it registered; one that signs in is kept `client_registration_lifetime` (90 days) from
+its last sign-in. A token or revocation request without a client assertion asks the
+host's rate limit too, with `public:{address}`, before the client it names is looked at.
 
 **For the company's owner.** `await service.public_client_sign_ins()`
 (`publicClientSignIns`) lists the sign-ins that have not ended: the client, its name,

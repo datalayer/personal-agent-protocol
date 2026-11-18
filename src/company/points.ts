@@ -249,6 +249,12 @@ export interface ClientPolicy {
    */
   allowsSignIn?(clientId: string, grantType: string): Promise<boolean>;
   /**
+   * With `publicClients`, a policy may answer for clients that are no personal agents apart: a
+   * company that lists the personal agents it serves takes public clients all the same, or
+   * none. Without the method, `allows` answers for both classes.
+   */
+  allowsPublic?(clientId: string): Promise<boolean>;
+  /**
    * A sign-in covers every resource the company offers personal agents (§4.5): with this method
    * a policy may leave a service out, for every agent or by `clientId`, and a token request for
    * it is `invalid_target`. `resource` is the service's (the MCP server's `url`, the conversation

@@ -539,7 +539,10 @@ export interface CompanyConfigOptions {
    * `poppy:browser-sign-in`, which is a personal agent's.
    */
   readonly publicClientScopes?: readonly string[];
-  /** How long a self-registered client is kept after it registered or last signed in (default 90 days). */
+  /**
+   * How long a self-registered client is kept after it last signed in (default 90 days). One
+   * that never signed in is forgotten an hour after it registered.
+   */
   readonly clientRegistrationLifetimeSeconds?: number;
   /**
    * How many clients one address registers in an hour (default 10), whatever the host's own
@@ -1488,6 +1491,11 @@ const REGISTRATION_MAX_REDIRECTS = 10;
 /** The window `clientRegistrationsPerHour` counts in. */
 const REGISTRATION_WINDOW_SECONDS = 60 * 60;
 /**
+ * How long a registration is kept before its client first signs in: long enough to register and
+ * then ask the person, short enough that clients nobody used don't pile up.
+ */
+const REGISTRATION_UNUSED_SECONDS = 60 * 60;
+/**
  * What a public client asking for an action that needs approval is told: operations are
  * approved by a personal agent in its Session, and a public client has neither.
  */
@@ -2350,7 +2358,7 @@ export class CompanyService {
   async #token(request: CompanyRequest): Promise<CompanyResponse> {
     const form = pairs(text(request.body));
     const grant = form.grant_type;
-    if (this.#unauthenticated(form)) return this.#publicToken(form);
+    if (this.#unauthenticated(form)) return this.#publicToken(request, form);
     // No tokens to protect: every refresh is `invalid_grant`, the client assertion unverified (§3.2).
     if (grant === REFRESH_TOKEN_GRANT && (await this.#neverIssued())) throw new Refused(400, "invalid_grant");
     const clientId = await this.#client(form);
@@ -2389,11 +2397,14 @@ export class CompanyService {
    * The token endpoint for a public client: the code and refresh grants, for the one service its
    * sign-in names, never bound, never the default token.
    *
-   * In order: the client (the policy, then that it is a public client still: its registration,
-   * or its document read again), the grant type, the `resource`, and only then the grant itself,
-   * so a refused request spends no code.
+   * In order: the host's rate limit, the client (the policy, then that it is a public client
+   * still: its registration, or its document read again), the grant type, the `resource`, and
+   * only then the grant itself. A request refused by one of those spends nothing. Once the code
+   * is taken it is spent, whatever is wrong with the rest of the request: a code is used once
+   * (RFC 6749 §4.1.2).
    */
-  async #publicToken(form: Readonly<Record<string, string>>): Promise<CompanyResponse> {
+  async #publicToken(request: CompanyRequest, form: Readonly<Record<string, string>>): Promise<CompanyResponse> {
+    await this.#publicAdmitted(request);
     const clientId = form.client_id ?? "";
     const client = await this.#publicClient(clientId);
     const grant = form.grant_type;
@@ -2416,6 +2427,32 @@ export class CompanyService {
     }
     if (grant === REFRESH_TOKEN_GRANT) return this.#refreshGrant(form, clientId, undefined, resource, true);
     return this.#publicCodeGrant(form, clientId, client, resource);
+  }
+
+  /**
+   * The host's rate limit on requests that carry no client assertion, or HTTP 429.
+   *
+   * Asked with `public:{address}` where it is asked a `client_id`, before the client is looked
+   * at: such a request names any `client_id` it likes, and each may make the company read a
+   * document from the network. Counted by address, so the names a caller invents cost the
+   * limiter nothing. None contributed: no limit.
+   */
+  async #publicAdmitted(request: CompanyRequest): Promise<void> {
+    const limit = optionalContribution(this.reactor, CompanyRateLimits, "rate limit");
+    if (limit === undefined) return;
+    const wait = await limit.admit(`public:${request.clientAddress || "unknown"}`, undefined);
+    if (wait !== undefined) throw new RateLimitedRefusal(Math.max(1, Math.trunc(wait)));
+  }
+
+  /**
+   * The company's policy on this public client, asked before anything is fetched or read for
+   * it: `allowsPublic`, when the policy has it, so a company that lists the personal agents it
+   * serves can still take public clients, or none; `allows` otherwise, one answer for both
+   * classes.
+   */
+  async #publicAllowed(clientId: string): Promise<boolean> {
+    const policy = firstContribution(this.reactor, ClientPolicies, "policy");
+    return policy.allowsPublic === undefined ? policy.allows(clientId) : policy.allowsPublic(clientId);
   }
 
   /**
@@ -2448,7 +2485,7 @@ export class CompanyService {
    * gets nothing more.
    */
   async #publicClient(clientId: string): Promise<AuthorizingClient> {
-    if (!clientId || !(await this.#allowed(clientId))) throw new Refused(401, "invalid_client");
+    if (!clientId || !(await this.#publicAllowed(clientId))) throw new Refused(401, "invalid_client");
     const client = clientId.startsWith("https://")
       ? await this.#verifiedPublicClient(clientId)
       : await this.#registeredClient(clientId);
@@ -2502,6 +2539,10 @@ export class CompanyService {
    * A public client's code for its tokens: PKCE is its only proof, so the verifier is checked as
    * RFC 7636 writes it, and the code is the one issued to this client, for this redirect and
    * this service.
+   *
+   * The code is taken first, and so spent, whatever the request then gets wrong: another client,
+   * redirect, service or verifier gets `invalid_grant` or `invalid_target`, and the code gives
+   * nothing to anyone after it.
    */
   async #publicCodeGrant(
     form: Readonly<Record<string, string>>,
@@ -3028,7 +3069,9 @@ export class CompanyService {
       RecordKinds.publicClient,
       clientId,
       json(record),
-      expiry(this.#later(this.config.clientRegistrationLifetimeSeconds)),
+      // Kept briefly until its first sign-in, which keeps it for long (`#keepRegistration`):
+      // registering alone costs the company an hour's record.
+      expiry(this.#later(REGISTRATION_UNUSED_SECONDS)),
     );
     return {
       status: 201,
@@ -3089,6 +3132,9 @@ export class CompanyService {
    * by its domain or not, where the browser went back, for which service and account, with
    * which scopes, since when, when it last got tokens, and until when. Each is ended whole by
    * `revokePublicClientSignIn`.
+   *
+   * Read from every sign-in the company keeps, a personal agent's among them (`store.records`):
+   * a company with very many reads them all each time.
    */
   async publicClientSignIns(): Promise<readonly PublicClientSignIn[]> {
     const signIns: PublicClientSignIn[] = [];
@@ -3166,6 +3212,7 @@ export class CompanyService {
     const isPublic = this.#unauthenticated(form);
     if (isPublic) {
       // A public client revokes its own sign-in with the refresh token it holds.
+      await this.#publicAdmitted(request);
       clientId = form.client_id ?? "";
       await this.#publicClient(clientId);
     } else {
@@ -3460,9 +3507,9 @@ export class CompanyService {
     // The client policy, asked now and not only when the token was issued: a blocked agent's
     // tokens stop working at once, and so does one for a service the policy has since left out
     // for this agent (§4.5).
-    if (!(await this.#allowed(issued.clientId)) || !(await this.#resourceAllowed(issued.clientId, resource))) {
-      return undefined;
-    }
+    const allowed =
+      issued.public === true ? await this.#publicAllowed(issued.clientId) : await this.#allowed(issued.clientId);
+    if (!allowed || !(await this.#resourceAllowed(issued.clientId, resource))) return undefined;
     return issued;
   }
 
@@ -3573,9 +3620,7 @@ export class CompanyService {
     }
     const clientId = query.client_id ?? "";
     const redirectUri = query.redirect_uri ?? "";
-    if (!clientId || !(await this.#allowed(clientId))) {
-      return page(400, "This sign-in request is not valid.");
-    }
+    if (!clientId) return page(400, "This sign-in request is not valid.");
     const client = await this.#authorizingClient(clientId);
     if (client === undefined) return page(400, "This agent could not be verified.");
     // An unknown client or redirect is never redirected to: that would be an open redirector.
@@ -3716,15 +3761,23 @@ export class CompanyService {
    * never the request's. Anything else is the `client_id` of a client that registered itself.
    */
   async #authorizingClient(clientId: string): Promise<AuthorizingClient | undefined> {
-    if (!clientId.startsWith("https://")) return this.#registeredClient(clientId);
-    const resolver = firstContribution(this.reactor, ClientResolvers, "client");
-    let metadata: ClientMetadata;
-    try {
-      [metadata] = await resolver.resolve(clientId);
-    } catch {
-      return this.#verifiedPublicClient(clientId);
+    if (!clientId.startsWith("https://")) {
+      if (!this.config.clientRegistration || !(await this.#publicAllowed(clientId))) return undefined;
+      return this.#registeredClient(clientId);
     }
-    return { name: metadata.client_name, redirectUris: metadata.redirect_uris, public: false, verified: true };
+    // The policy before anything is fetched: as a personal agent, then as a public client. A
+    // `client_id` neither allows is never resolved.
+    if (await this.#allowed(clientId)) {
+      const resolver = firstContribution(this.reactor, ClientResolvers, "client");
+      try {
+        const [metadata] = await resolver.resolve(clientId);
+        return { name: metadata.client_name, redirectUris: metadata.redirect_uris, public: false, verified: true };
+      } catch {
+        // No personal agent's document there: a public client's, perhaps.
+      }
+    }
+    if (!this.config.publicClients || !(await this.#publicAllowed(clientId))) return undefined;
+    return this.#verifiedPublicClient(clientId);
   }
 
   /**
@@ -4217,7 +4270,7 @@ export class CompanyService {
       issued.resource !== this.config.mcpUrl ||
       !this.#offers(issued.scopes) ||
       !this.#publicTokenWithin(issued.resource, issued.scopes) ||
-      !(await this.#allowed(issued.clientId)) ||
+      !(await this.#publicAllowed(issued.clientId)) ||
       !(await this.#resourceAllowed(issued.clientId, this.config.mcpUrl))
     ) {
       return this.#mcpRefusal(401, "invalid_token");

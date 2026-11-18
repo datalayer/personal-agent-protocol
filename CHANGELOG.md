@@ -39,8 +39,13 @@ company that turns nothing on behaves exactly as before.
   public client. The company's own page says when a client is unverified and where the
   browser goes back to.
 - **Registration is bounded**: the host's rate limit is asked with `registration:{address}`,
-  then `client_registrations_per_hour` (10) for each address. `CompanyRequest` has an optional
-  `client_address` (`clientAddress`), which the ASGI and Node adapters fill with the peer's.
+  then `client_registrations_per_hour` (10) for each address; a client that never signs in is
+  forgotten after an hour. A token or revocation request without an assertion asks the host's
+  rate limit with `public:{address}` before its client is looked at. `CompanyRequest` has an
+  optional `client_address` (`clientAddress`), which the ASGI and Node adapters fill with the
+  peer's.
+- **The client policy** may answer for public clients apart, with an optional
+  `allows_public(client_id)` (`allowsPublic`); without it, `allows` answers for both classes.
 - **For the company's owner**: `public_client_sign_ins` (`publicClientSignIns`) and
   `revoke_public_client_sign_in` (`revokePublicClientSignIn`).
 - The issuer's metadata gains `none` in `token_endpoint_auth_methods_supported` and

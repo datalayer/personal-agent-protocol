@@ -30,6 +30,7 @@ import {
   publicClientName,
   publicRedirectUri,
   publicRedirectUriMatches,
+  redirectHost,
 } from "../../lib/models.js";
 import { ClientPolicies, ClientResolvers, CompanyConfig, CompanyRateLimits } from "../../lib/server.js";
 import { CONFIG_OPTIONS, manzanita } from "../../lib/demo/manzanita.js";
@@ -485,6 +486,17 @@ test("a personal agent cannot become a public client", async () => {
     assert.ok(["invalid_client", "invalid_grant"].includes(refused.body.error));
   }
 
+  // Someone who only intercepted the code and posts it without an assertion gets nothing, and
+  // spent it: the agent's own exchange finds it used.
+  const owned = await w.token({
+    grant_type: "authorization_code",
+    code: agentCode,
+    redirect_uri: "https://atlas.example/oauth/callback",
+    code_verifier: VERIFIER,
+    ...(await agent.sessions.clientAuthentication({ clientId: w.identity.clientId, issuer: SHOP })),
+  });
+  assert.deepEqual([owned.status, owned.body.error], [400, "invalid_grant"]);
+
   // And a public client's code is nothing to a personal agent with a valid assertion.
   const publicCode = await w.codeFor(clientId, LOOPBACK);
   const crossed = await w.token({
@@ -887,19 +899,66 @@ test("the host's rate limit is asked by address before anything is read", async 
   assert.deepEqual(await w.shop.store.records("public_client"), []);
 });
 
-test("a registration lasts while it is used", async () => {
+test("a registration is kept briefly until it is used, and long after", async () => {
   const w = await world();
+  // Never used: gone an hour after it registered, so registering alone fills nothing.
+  const unused = await w.registered({ client_name: "Never used" });
+  w.clock.advance(3599);
+  assert.equal((await w.authorize(unused, LOOPBACK)).status, 200);
+  w.clock.advance(2);
+  assert.ok(refusedPage(await w.authorize(unused, LOOPBACK)));
+  assert.deepEqual(await w.shop.store.records("public_client"), []);
+
+  // Signed in within the hour: kept ninety days from then, outliving the sign-in it gave.
   const clientId = await w.registered();
-  w.clock.advance(80 * DAY);
+  w.clock.advance(1800);
   const tokens = await w.signIn(clientId);
-  // Signing in kept it ninety days more: it outlives the sign-in it gave.
   w.clock.advance(20 * DAY);
   assert.equal((await w.refresh(clientId, tokens.refresh_token)).status, 200);
-  w.clock.advance(71 * DAY);
-  assert.ok(refusedPage(await w.authorize(clientId, LOOPBACK)));
-  const forgotten = await w.registered({ client_name: "Short-lived" });
+  w.clock.advance(69 * DAY);
+  assert.ok((await w.signIn(clientId)).access_token);
   w.clock.advance(91 * DAY);
-  assert.ok(refusedPage(await w.authorize(forgotten, LOOPBACK)));
+  assert.ok(refusedPage(await w.authorize(clientId, LOOPBACK)));
+});
+
+test("requests without an assertion are limited by address", async () => {
+  // Each may make the company read a client's document: the host's limit is asked first, by
+  // address, never by the `client_id` the request invents.
+  const asked = [];
+  let refusing = true;
+  const limit = {
+    admit: async (clientId, accountId) => {
+      asked.push([clientId, accountId]);
+      return refusing && clientId.startsWith("public:") ? 30 : undefined;
+    },
+  };
+  const w = await world({
+    plugins: [{ name: "limit", version: "1", contributes: [{ point: CompanyRateLimits, value: limit }] }],
+  });
+  const fetched = [];
+  const site = w.sites["client.example"];
+  w.sites["client.example"] = new Proxy(site, {
+    get: (target, path) => {
+      fetched.push(path);
+      return target[path];
+    },
+  });
+  const limited = await w.refresh(VERIFIED, "rt_x");
+  assert.equal(limited.status, 429);
+  assert.equal(limited.headers["Retry-After"], "30");
+  const revoked = await w.call("POST", "/oauth/revoke", {
+    form: { client_id: "https://anything.example/c", token: "rt_x" },
+  });
+  assert.equal(revoked.status, 429);
+  assert.deepEqual(asked, [
+    ["public:127.0.0.1", undefined],
+    ["public:127.0.0.1", undefined],
+  ]);
+  // Refused before the client was looked at: nothing was fetched for it.
+  assert.deepEqual(fetched, []);
+  refusing = false;
+  assert.equal((await w.refresh(VERIFIED, "rt_x")).body.error, "invalid_grant");
+  assert.ok(fetched.includes("/oauth/client.json"));
 });
 
 // The client policy, and what the company gives now -------------------------------------------
@@ -1064,6 +1123,41 @@ test("the owner lists and revokes public clients' sign-ins", async () => {
   assert.ok((await agent.refreshed()).token);
   // A personal agent's records name no public client.
   assert.ok(!("public" in personal) && !("lastUsedAt" in personal));
+});
+
+test("a policy may answer for public clients apart", async () => {
+  // A company that lists the personal agents it serves takes public clients all the same, or
+  // none: `allowsPublic`, where `allows` answers for personal agents.
+  const w = await world();
+  const policy = firstContribution(w.shop.reactor, ClientPolicies, "policy");
+  let takesPublic = true;
+  policy.allows = async (clientId) => clientId === w.identity.clientId;
+  policy.allowsPublic = async () => takesPublic;
+  const clientId = await w.registered();
+  const tokens = await w.signIn(clientId);
+  const verified = await w.signIn(VERIFIED, VERIFIED_REDIRECT, { resource: ELSEWHERE });
+  assert.equal((await w.mcp(tokens.access_token, LIST_TOOLS)).status, 200);
+  assert.ok(await w.shop.accessTokenFor(verified.access_token, ELSEWHERE));
+  // The listed personal agent is one still.
+  const shown = await w.authorize(w.identity.clientId, "https://atlas.example/oauth/callback", { resource: null });
+  assert.equal((await w.shop.authorizationRequest(requestIdOf(shown))).client_class, "personal_agent");
+  // Public clients turned away: their tokens stop at once, the personal agent goes on.
+  takesPublic = false;
+  assert.equal((await w.mcp(tokens.access_token, LIST_TOOLS)).status, 401);
+  assert.equal(await w.shop.accessTokenFor(verified.access_token, ELSEWHERE), undefined);
+  assert.equal((await w.refresh(clientId, tokens.refresh_token)).status, 401);
+  assert.ok(refusedPage(await w.authorize(clientId, LOOPBACK)));
+  assert.ok(refusedPage(await w.authorize(VERIFIED, VERIFIED_REDIRECT)));
+  const again = await w.authorize(w.identity.clientId, "https://atlas.example/oauth/callback", { resource: null });
+  assert.equal(again.status, 200);
+});
+
+test("the return host is shown with its port", () => {
+  assert.equal(redirectHost("https://client.example/callback"), "client.example");
+  assert.equal(redirectHost("https://client.example:8443/callback?x=1"), "client.example:8443");
+  assert.equal(redirectHost("http://127.0.0.1:49152/callback"), "127.0.0.1:49152");
+  assert.equal(redirectHost("http://[::1]:49152/callback"), "[::1]:49152");
+  assert.equal(redirectHost("http://localhost/callback"), "localhost");
 });
 
 test("a name holds nothing that hides or reorders text", () => {

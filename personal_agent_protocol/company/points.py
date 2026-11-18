@@ -286,6 +286,11 @@ class ClientPolicy(Protocol):
     agent or by `client_id`, and a token request for it is `invalid_target`. `resource`
     is the service's (the MCP server's `url`, the conversation endpoint), never the
     default token's. Without the method, every agent gets a token for every service.
+
+    With `public_clients`, a policy may answer for clients that are no personal agents
+    apart, with `allows_public(client_id)`: a company that lists the personal agents it
+    serves takes public clients all the same, or none. Without the method, `allows`
+    answers for both classes.
     """
 
     async def allows(self, client_id: str) -> bool: ...

@@ -545,6 +545,20 @@ async def test_a_personal_agent_cannot_become_a_public_client() -> None:
         assert refused.status_code in {400, 401}
         assert refused.json()["error"] in {"invalid_client", "invalid_grant"}
 
+    # Someone who only intercepted the code and posts it without an assertion gets
+    # nothing, and spent it: the agent's own exchange finds it used.
+    owned = await token(
+        world,
+        grant_type="authorization_code",
+        code=agent_code,
+        redirect_uri="https://atlas.example/oauth/callback",
+        code_verifier=pkce()[0],
+        **await SessionClient(reactor=world.reactor, http_client=world.http).client_authentication(
+            client_id=world.atlas.client_id, issuer=SHOP
+        ),
+    )
+    assert (owned.status_code, owned.json()["error"]) == (400, "invalid_grant")
+
     # And a public client's code is nothing to a personal agent with a valid assertion.
     public_code = await code_for(world, client_id, LOOPBACK)
     assertion = await SessionClient(
@@ -1007,20 +1021,70 @@ async def test_the_hosts_rate_limit_is_asked_by_address_before_anything_is_read(
 
 
 @pytest.mark.asyncio
-async def test_a_registration_lasts_while_it_is_used() -> None:
+async def test_a_registration_is_kept_briefly_until_it_is_used_and_long_after() -> None:
     world = public_world()
+    # Never used: gone an hour after it registered, so registering alone fills nothing.
+    unused = await registered(world, client_name="Never used")
+    world.clock.advance(3599)
+    assert (await authorize(world, unused, LOOPBACK)).status_code == 200
+    world.clock.advance(2)
+    assert (await authorize(world, unused, LOOPBACK)).status_code == 400
+    assert not await world.shop.store.records("public_client")
+
+    # Signed in within the hour: kept ninety days from then, outliving the sign-in it gave.
     client_id = await registered(world)
-    world.clock.advance(80 * 24 * 3600)
+    world.clock.advance(1800)
     tokens = await sign_in(world, client_id)
-    # Signing in kept it ninety days more: it outlives the sign-in it gave.
     world.clock.advance(20 * 24 * 3600)
     assert (await refresh(world, client_id, tokens["refresh_token"])).status_code == 200
-    world.clock.advance(71 * 24 * 3600)
-    gone = await authorize(world, client_id, LOOPBACK)
-    assert gone.status_code == 400
-    forgotten = await registered(world, client_name="Short-lived")
+    world.clock.advance(69 * 24 * 3600)
+    again = await sign_in(world, client_id)
+    assert again["access_token"]
     world.clock.advance(91 * 24 * 3600)
-    assert (await authorize(world, forgotten, LOOPBACK)).status_code == 400
+    assert (await authorize(world, client_id, LOOPBACK)).status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_requests_without_an_assertion_are_limited_by_address() -> None:
+    """Each may make the company read a client's document: the host's limit is asked
+    first, by address, never by the `client_id` the request invents."""
+
+    asked: list[tuple[str, str | None]] = []
+    refusing = False
+
+    class Limited:
+        async def admit(self, client_id: str, account_id: str | None) -> int | None:
+            asked.append((client_id, account_id))
+            return 30 if refusing and client_id.startswith("public:") else None
+
+    class Plugin:
+        @hookimpl
+        def provide_contributions(self, contributions: object) -> None:
+            contributions.contribute(COMPANY_RATE_LIMITS, Limited(), contribution_id="limit")  # type: ignore[attr-defined]
+
+    fetched: list[str] = []
+    site = json_site({"/oauth/client.json": document()})
+
+    async def watched(scope: Any, receive: Any, send: Any) -> None:
+        fetched.append(scope["path"])
+        await site(scope, receive, send)
+
+    world = public_world()
+    world.network.add("client.example", watched)
+    world.shop.reactor.register_plugin(PluginManifest(name="limit", version="1"), Plugin())
+    refusing = True
+    limited = await refresh(world, VERIFIED, "rt_x")
+    assert limited.status_code == 429 and limited.headers["retry-after"] == "30"
+    revoked = await world.http.post(
+        f"{SHOP}/oauth/revoke", data={"client_id": "https://anything.example/c", "token": "rt_x"}
+    )
+    assert revoked.status_code == 429
+    assert asked == [("public:127.0.0.1", None), ("public:127.0.0.1", None)]
+    # Refused before the client was looked at: nothing was fetched for it.
+    assert fetched == []
+    refusing = False
+    assert (await refresh(world, VERIFIED, "rt_x")).json()["error"] == "invalid_grant"
+    assert fetched == ["/oauth/client.json"]
 
 
 # The client policy, and what the company gives now -------------------------------------------
@@ -1237,6 +1301,63 @@ async def test_the_owner_lists_and_revokes_public_clients_sign_ins() -> None:
     personal = next(family for family in families if family.public is None)
     assert await world.shop.revoke_public_client_sign_in(personal.tokens[0]) is False
     assert (await world.refreshed()).access_token
+
+
+@pytest.mark.asyncio
+async def test_a_policy_may_answer_for_public_clients_apart() -> None:
+    """A company that lists the personal agents it serves takes public clients all the
+    same, or none: `allows_public`, where `allows` answers for personal agents."""
+
+    class Listed:
+        public = True
+
+        async def allows(self, client_id: str) -> bool:
+            return client_id == "https://atlas.example/agent.json"
+
+        async def allows_public(self, client_id: str) -> bool:
+            return self.public
+
+    listed = Listed()
+
+    class Plugin:
+        @hookimpl
+        def provide_contributions(self, contributions: object) -> None:
+            contributions.contribute(CLIENT_POLICIES, listed, contribution_id="p", order=-10)  # type: ignore[attr-defined]
+
+    world = public_world()
+    world.shop.reactor.register_plugin(PluginManifest(name="listed", version="1"), Plugin())
+    client_id = await registered(world)
+    tokens = await sign_in(world, client_id)
+    verified = await sign_in(world, VERIFIED, VERIFIED_REDIRECT, resource=ELSEWHERE)
+    assert (await mcp(world, tokens["access_token"], LIST_TOOLS)).status_code == 200
+    assert await world.shop.access_token_for(verified["access_token"], ELSEWHERE) is not None
+    # The listed personal agent is one still; an unlisted one is not let in as one.
+    page = await authorize(
+        world, world.atlas.client_id, "https://atlas.example/oauth/callback", resource=None
+    )
+    summary = await world.shop.authorization_request(request_id_of(page))
+    assert summary["client_class"] == "personal_agent"
+    # Public clients turned away: their tokens stop at once, the personal agent goes on.
+    listed.public = False
+    assert (await mcp(world, tokens["access_token"], LIST_TOOLS)).status_code == 401
+    assert await world.shop.access_token_for(verified["access_token"], ELSEWHERE) is None
+    assert (await refresh(world, client_id, tokens["refresh_token"])).status_code == 401
+    assert (await authorize(world, client_id, LOOPBACK)).status_code == 400
+    assert (await authorize(world, VERIFIED, VERIFIED_REDIRECT)).status_code == 400
+    again = await authorize(
+        world, world.atlas.client_id, "https://atlas.example/oauth/callback", resource=None
+    )
+    assert again.status_code == 200
+
+
+def test_the_return_host_is_shown_with_its_port() -> None:
+    from personal_agent_protocol.models import redirect_host
+
+    assert redirect_host("https://client.example/callback") == "client.example"
+    assert redirect_host("https://client.example:8443/callback?x=1") == "client.example:8443"
+    assert redirect_host("http://127.0.0.1:49152/callback") == "127.0.0.1:49152"
+    assert redirect_host("http://[::1]:49152/callback") == "[::1]:49152"
+    assert redirect_host("http://localhost/callback") == "localhost"
 
 
 # Records and names ----------------------------------------------------------------------------

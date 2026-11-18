@@ -6,6 +6,42 @@
 
 # Changelog
 
+## 0.37.3 (2026-11-18)
+
+A company's services at URLs of their own. In both SDKs; additive API only, and a company that
+names none behaves exactly as before.
+
+- **`resource_servers` (`resourceServers`) on `CompanyConfig`** (spec 3.2, 4.5, 7). The SDK's
+  company issued a token for one MCP `resource`, its own `https://{domain}/mcp`, and listed only
+  that in `protected_resources`. A company whose MCP server answers on another host than its
+  issuer's (`https://mcp.example.com/mcp`) had no way to offer it signed in: a Personal Agent
+  that asked for a token with `resource` set to the server's `url`, as section 7 requires, got
+  `invalid_target`. Each URL named here is listed in the issuer's `protected_resources` and gets
+  Bearer tokens issued for it, at the request that completes a sign-in or at refresh (RFC 8707),
+  subject to the client policy's `allows_resource` like every other service. A sign-in that
+  named no `resource` covers them, those added after it too (4.5).
+- **`CompanyService.access_token_for(token, resource)` (`accessTokenFor`)**: for such a service
+  to verify what it is sent. The token's record when it was issued for that service, is
+  unexpired, its sign-in has not ended, its scopes are still offered and the client policy
+  still allows its agent and this service for it (asked when the token is presented, so a
+  blocked agent's token stops working at once); nothing otherwise, the
+  default token and a token for another service among them (4.5: a token issued for a
+  `resource` is accepted only at that service). The service enforces the record's `scopes`.
+- **`resource_metadata_url(resource)` (`resourceMetadataUrl`)**: where a service's protected
+  resource metadata is (RFC 9728 §3.1), for the `resource_metadata` of its challenges (7). It
+  is the helper discovery reads the metadata at (`protected_resource_metadata_url`,
+  `protectedResourceMetadataUrl`), so what a service publishes and what a Personal Agent fetches
+  agree, a trailing slash on the `url` included.
+- Each resource server is checked when the company is configured, with the rule the issuer's
+  metadata is read with (HTTPS, a host, no user information), since each is published in
+  `protected_resources` and one entry a Personal Agent refuses would fail discovery for the
+  whole company. Narrowed to what names one service: a well-formed host in small ASCII letters
+  (an internationalized name as its A-labels, a port allowed), no query, no fragment, named
+  once, and not one of the company's own (`https://{domain}`, an alias, its `/mcp`, its
+  conversation endpoint); a company with no issuer has none. A service named here gets Bearer
+  tokens even from an issuer that binds its own with DPoP (7: a company whose MCP server
+  doesn't accept DPoP returns Bearer tokens for it).
+
 ## 0.37.2 (2026-11-17)
 
 Fixes from the review of 0.37.1, and what a host needs to push a Direct Sign-In whose redirect

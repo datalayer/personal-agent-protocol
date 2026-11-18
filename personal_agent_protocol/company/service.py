@@ -121,11 +121,13 @@ from ..models import (
     LinksContent,
     Message,
     Operation,
+    _https_url,
     compatible_versions,
     domain_host,
     effective_context,
     operations_content,
     parse_version,
+    protected_resource_metadata_url,
     redirect_uri_matches,
     split_domain,
 )
@@ -357,6 +359,63 @@ class ConsentDecision:
     allow: bool
 
 
+def resource_metadata_url(resource: str) -> str:
+    """Where a service's protected resource metadata is (RFC 9728 §3.1): the well-known
+    path between its host and its own path.
+
+    The URL discovery reads it at (`models.protected_resource_metadata_url`, which this
+    is): what a service publishes and what a Personal Agent fetches cannot differ, a
+    trailing slash on the service's `url` included.
+    """
+
+    return protected_resource_metadata_url(resource)
+
+
+#: A resource server's authority: DNS labels in small ASCII letters (an
+#: internationalized name as its A-labels), and a port when it is not 443.
+_RESOURCE_AUTHORITY = re.compile(
+    r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:[0-9]{1,5})?"
+)
+
+
+def _check_resource_servers(config: CompanyConfig) -> None:
+    """Each of `resource_servers` is an HTTPS URL of its own, named once (§4.5).
+
+    Checked with the rule the issuer's metadata is read with (`models._https_url`: HTTPS,
+    a host, no user information), since each is published in `protected_resources` and
+    one entry a Personal Agent refuses fails discovery for the whole company; then
+    narrowed to what names one service: a well-formed host in small letters, no query,
+    no fragment.
+    """
+
+    servers = config.resource_servers
+    if not servers:
+        return
+    if not config.oauth:
+        raise ValueError(
+            "resource_servers take the issuer's tokens: a company with no issuer has none"
+        )
+    own = {f"https://{domain}" for domain in (config.domain, *config.aliases)}
+    own |= {f"https://{config.domain}/mcp", f"https://{config.domain}/poppy/conversations"}
+    for server in servers:
+        _https_url(server, "a resource server")
+        parts = urlsplit(server)
+        # Read, so a port that is no port (above 65535) is refused here: `urlsplit`
+        # checks it only when asked, and a URL parser that checks at once would refuse
+        # the issuer's whole metadata over it.
+        _ = parts.port
+        if not _RESOURCE_AUTHORITY.fullmatch(parts.netloc):
+            raise ValueError(
+                "a resource server names a host in small letters, and no user information"
+            )
+        if parts.query or parts.fragment or "?" in server or "#" in server:
+            raise ValueError("a resource server is an HTTPS URL, without query or fragment")
+        if server in own:
+            raise ValueError("a resource server is another service than the company's own")
+    if len(set(servers)) != len(servers):
+        raise ValueError("each resource server is named once")
+
+
 def _check_aliases(domain: str, aliases: tuple[str, ...]) -> None:
     """Each alias a DNS name in small letters, another than `domain`, named once."""
     for alias in aliases:
@@ -475,6 +534,13 @@ class CompanyConfig:
     #: metadata naming itself as `resource`, with this company's issuer, the issuer lists
     #: it in `protected_resources` and issues tokens for it, and it takes only those.
     conversation_resource: bool = False
+    #: Services of this company at URLs of their own that take its access tokens (§4.5, §7):
+    #: an MCP server on another host than the issuer's, each named by its `url` as
+    #: `poppy.json` lists it. The issuer lists each in `protected_resources` (§3.2) and
+    #: issues Bearer tokens for it, at the request that completes a sign-in or at refresh
+    #: (RFC 8707); each publishes its own protected resource metadata naming this issuer,
+    #: and takes only the tokens issued for it (`CompanyService.access_token_for`).
+    resource_servers: tuple[str, ...] = ()
     web: bool = False
     #: Whether the website returns operations to a joined browser (Operations 2, 4): the
     #: `operations` entry lists `endpoint` (`/poppy/operations`), beside the browser-session
@@ -552,6 +618,7 @@ class CompanyConfig:
 
     def __post_init__(self) -> None:  # noqa: C901 - one branch per protocol rule
         _check_aliases(self.domain, self.aliases)
+        _check_resource_servers(self)
         if not self.protocol_versions or len(set(self.protocol_versions)) != len(
             self.protocol_versions
         ):
@@ -1784,6 +1851,7 @@ class CompanyService:
             metadata["protected_resources"].append(config.mcp_url)
         if config.conversation_resource:
             metadata["protected_resources"].append(config.conversations_endpoint)
+        metadata["protected_resources"].extend(config.resource_servers)
         if config.direct:
             grants.append(AUTHORIZATION_CODE_GRANT)
             metadata["authorization_endpoint"] = config.authorization_endpoint
@@ -2032,6 +2100,8 @@ class CompanyService:
         if self._mcp() is not None and resource == self.config.mcp_url:
             return resource
         if self.config.conversation_resource and resource == self.config.conversations_endpoint:
+            return resource
+        if resource in self.config.resource_servers:
             return resource
         raise _RefusedError(400, "invalid_target")
 
@@ -2580,6 +2650,9 @@ class CompanyService:
         if self._mcp() is not None and resource == self.config.mcp_url:
             listed = self.protected_resource_metadata().get("dpop_signing_alg_values_supported")
             return DPOP_ALGORITHM in (listed or ())
+        if resource in self.config.resource_servers:
+            # A service of its own verifies no proof here: it gets Bearer tokens (§7).
+            return False
         return True
 
     async def _access_token(self, token: str) -> IssuedAccessToken | None:
@@ -2594,6 +2667,33 @@ class CompanyService:
             if await self._signed_out_before(issued.account_id) is not None:
                 return None
         elif await self._sign_in_ended(grant):
+            return None
+        return issued
+
+    async def access_token_for(self, token: str, resource: str) -> IssuedAccessToken | None:
+        """The record of an access token presented at one of `resource_servers`, or `None`.
+
+        For the service at `resource` to verify what it is sent (§4.5, §7): the token
+        was issued here **for that service**, is unexpired, its sign-in has not ended,
+        every scope it holds is still offered, and the client policy still allows its
+        agent, and this service for it. A token for another resource, the
+        default token among them, is `None`: the service answers `invalid_token` with
+        its `resource_metadata` (`resource_metadata_url`). The record says whose it is
+        (`account_id`), which agent holds it (`client_id`) and its `scopes`, which the
+        service enforces.
+        """
+
+        if resource not in self.config.resource_servers:
+            raise ValueError(f"{resource} is not one of this company's resource_servers")
+        issued = await self._access_token(token)
+        if issued is None or issued.resource != resource or not self._offers(issued.scopes):
+            return None
+        # The client policy, asked now and not only when the token was issued: a blocked
+        # agent's tokens stop working at once, and so does one for a service the policy
+        # has since left out for this agent (§4.5).
+        if not await self._allowed(issued.client_id) or not await self._resource_allowed(
+            issued.client_id, resource
+        ):
             return None
         return issued
 
@@ -3305,6 +3405,8 @@ class CompanyService:
             return self.config.mcp_resource_metadata
         if resource == self.config.conversations_endpoint:
             return self.config.conversation_resource_metadata
+        if resource in self.config.resource_servers:
+            return resource_metadata_url(resource)
         return f"{self.config.base}/.well-known/oauth-protected-resource"
 
     async def _session(self, verified: Any) -> str:

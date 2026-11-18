@@ -227,8 +227,9 @@ Each open or partial requirement is listed with its reason in
   recovery fixture across the four pairings (a Python or TypeScript personal
   agent against a Python or TypeScript reference company), over real TCP and
   TLS: [Compatibility and conformance report](https://personal-agent-protocol.datalayer.tech/protocol/conformance-report/).
-- **An independent study**: in November 2026 an independent tester ran the
-  Python SDK 0.35.0, self-hosted and unmodified, through Poppy 1.0's Operations
+- **An independent study**: in November 2026
+  [Kai Karlstrom](https://github.com/kkrlstrm/kirkaldy-conformance-kit) (Kirkaldy, independent testing of agent infrastructure)
+  ran the Python SDK 0.35.0, self-hosted and unmodified, through Poppy 1.0's Operations
   extension and sign-out tests, with effects counted by a separate recorder.
   Everything passed: a retry after a lost response returned the original
   response and performed the action once (3 of 3 trials; a deliberately broken
@@ -239,7 +240,9 @@ Each open or partial requirement is listed with its reason in
   user's approval, instruction coverage). One finding is about the protocol, not
   the SDK: an operation already performing at sign-out completed and reported
   success, which Poppy leaves unspecified (raised on the Poppy tracker, #84).
-  0.36.x was not tested. The write-up, evidence and harness:
+  0.36.x and later versions were not tested; a re-run on the current release
+  is planned, and its result will be published. The write-up, evidence and
+  harness:
   [studies/poppy-1.0](https://github.com/kkrlstrm/kirkaldy-conformance-kit/tree/main/studies/poppy-1.0).
 - **The official company kit**: validate a company implementation, on these
   SDKs or any other, with the protocol's

@@ -788,6 +788,25 @@ async def _aliases(docs: Docs) -> tuple[dict[str, Any], Check]:
     return {"CompanyConfig": CompanyConfig}, check
 
 
+@case("docs/docs/guides/company.mdx#4")
+async def _resource_servers(docs: Docs) -> tuple[dict[str, Any], Check]:
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        import httpx
+
+        from personal_agent_protocol.company import build_company
+
+        config = namespace["config"]
+        assert out.strip() == "https://mcp.example.com/.well-known/oauth-protected-resource/mcp"
+        async with httpx.AsyncClient() as http:
+            service = build_company(config, http_client=http)
+            assert service.oauth_metadata()["protected_resources"] == [
+                "https://example.com",
+                "https://mcp.example.com/mcp",
+            ]
+
+    return {"CompanyConfig": CompanyConfig}, check
+
+
 # CLI and extensions -----------------------------------------------------------------------
 
 

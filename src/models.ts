@@ -1176,7 +1176,8 @@ export function companyExtension(
   return (document.extensions[name] ?? []).find((entry) => entry.version === version);
 }
 
-function httpsUrl(value: unknown, label: string): string {
+/** An HTTPS URL without user information, as given: the rule every published URL is read with. */
+export function httpsUrl(value: unknown, label: string): string {
   const result = string(value, label);
   let parsed: URL;
   try {

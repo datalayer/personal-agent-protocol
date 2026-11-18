@@ -1327,7 +1327,9 @@ test("authorize redirects to the hosted consent page, which reads the request ba
   // What the page starts with and says before the person goes on (§10.8).
   assert.equal(summary.heading, "Atlas wants to connect to your Manzanita Outfitters account");
   assert.equal(summary.caution, "Only continue if you asked Atlas to do this just now.");
-  assert.deepEqual(Object.keys(summary).sort(), ["caution", "client_domain", "client_name", "expires_at", "heading", "prompt", "request_id", "scopes"]);
+  // Who asks, as a class of client, and where the browser goes back to.
+  assert.deepEqual([summary.client_class, summary.verified, summary.redirect_host], ["personal_agent", true, "atlas.example"]);
+  assert.deepEqual(Object.keys(summary).sort(), ["caution", "client_class", "client_domain", "client_name", "expires_at", "heading", "prompt", "redirect_host", "request_id", "scopes", "verified"]);
   // The agent asked for the consent page whatever the account granted before (spec 4.2).
   assert.equal(summary.prompt, "consent");
   const callbackUrl = await w.shop.approveAuthorization(requestId, { accountId: "acct_ada" });

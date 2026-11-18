@@ -807,6 +807,24 @@ async def _resource_servers(docs: Docs) -> tuple[dict[str, Any], Check]:
     return {"CompanyConfig": CompanyConfig}, check
 
 
+@case("docs/docs/guides/company.mdx#5")
+async def _public_clients(docs: Docs) -> tuple[dict[str, Any], Check]:
+    async def check(namespace: dict[str, Any], out: str) -> None:
+        import httpx
+
+        from personal_agent_protocol.company import build_company
+
+        config = namespace["config"]
+        assert out.strip() == "https://example.com/oauth/register"
+        assert config.public_scopes == ("orders:read",)
+        async with httpx.AsyncClient() as http:
+            metadata = build_company(config, http_client=http).oauth_metadata()
+        assert metadata["token_endpoint_auth_methods_supported"] == ["private_key_jwt", "none"]
+        assert metadata["registration_endpoint"] == "https://example.com/oauth/register"
+
+    return {"CompanyConfig": CompanyConfig}, check
+
+
 # CLI and extensions -----------------------------------------------------------------------
 
 

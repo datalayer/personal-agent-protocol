@@ -211,6 +211,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`isPapReplies`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Function; entry `.`. Whether a display is what a company answered, of the version this SDK reads.
 - [`isPapRepliesData`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Function; entry `.`. Whether a value is the `data` of what a company answered, as `PapReplies`
 - [`isPapSessionShown`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/ui.ts) — Function; entry `.`. Whether a value is a `PapSessionShown`: a 12-hex-digit reference and `signed_in`, nothing else.
+- [`isPublicLoopbackRedirect`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Function; entry `.`. A public client's loopback redirect URI (RFC 8252 §7.3, §8.3): `http` to `127.0.0.1`,
 - [`JOSE_ALGORITHMS`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Const; entry `.`. The algorithms a key in `jwks_uri` signs client assertions and delegations with (§4.1, §5.2).
 - [`JoseAlgorithm`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Type; entry `.`. Public TypeScript type `JoseAlgorithm`.
 - [`JoseDpopProver`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Class; entry `.`. `pap.dpopProver`: a fresh proof for each request, by the Company's DPoP key (§4.5).
@@ -366,6 +367,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`parseOperationHeader`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/operations.ts) — Function; entry `.`. The reference a `Poppy-Operation` value states, or `undefined`.
 - [`parseOperationsContent`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Function; entry `.`. Public TypeScript function `parseOperationsContent`.
 - [`parseProtectedResourceMetadata`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Function; entry `.`. Public TypeScript function `parseProtectedResourceMetadata`.
+- [`parsePublicClientMetadata`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Function; entry `.`. Public TypeScript function `parsePublicClientMetadata`.
 - [`parseRetryAfter`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/limits.ts) — Function; entry `.`. `Retry-After` in seconds (delta-seconds or an HTTP date), or `undefined`.
 - [`parseTasksResponse`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Function; entry `.`. Public TypeScript function `parseTasksResponse`.
 - [`parseTokenResponse`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/sessions.ts) — Function; entry `.`. A token endpoint's JSON answer (§4.7).
@@ -384,7 +386,11 @@ Unknown or internal symbols are deliberately excluded.
 - [`PROTOCOL_REVISION`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/profile.ts) — Const; entry `.`. The upstream specification revision implemented: the day 0.4 was published (commit 4803900).
 - [`ProtocolCache`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Interface; entry `.`. Public TypeScript interface `ProtocolCache`.
 - [`ProtocolValidationError`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/errors.ts) — Class; entry `.`. Public TypeScript class `ProtocolValidationError`.
+- [`PublicClientMetadata`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Interface; entry `.`. The client ID metadata document of a public client: an MCP client, never a personal agent.
+- [`publicClientName`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Function; entry `.`. A public client's name as a consent page shows it (`RangeError` otherwise): text of 1 to 100
 - [`publicJwk`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/crypto.ts) — Function; entry `.`. A public JWK with no private member: refused otherwise (§5.2).
+- [`publicRedirectUri`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Function; entry `.`. A redirect URI a public client may name: loopback, or HTTPS (`RangeError` otherwise).
+- [`publicRedirectUriMatches`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Function; entry `.`. Whether `given` is the redirect URI a public client `registered`.
 - [`RandomBytes`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/sessions.ts) — Type; entry `.`. Public TypeScript type `RandomBytes`.
 - [`RandomSource`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Interface; entry `.`. Public TypeScript interface `RandomSource`.
 - [`RandomSources`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Const; entry `.`. Public TypeScript const `RandomSources`.
@@ -514,6 +520,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`urlDomain`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Function; entry `.`. The domain an HTTPS URL is on, as `organization.domain` names it (§3.1): its host, lowercase,
 - [`UrlSafetyPolicies`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Const; entry `.`. Public TypeScript const `UrlSafetyPolicies`.
 - [`UrlSafetyPolicy`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/reactor.ts) — Interface; entry `.`. Public TypeScript interface `UrlSafetyPolicy`.
+- [`usableRedirectUris`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Function; entry `.`. The redirect URIs a company sends a public client's answers to: loopback, or HTTPS on the
 - [`usableReferences`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Function; entry `.`. The references an agent may follow (§8.2).
 - [`usableSkills`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/models.ts) — Function; entry `.`. The skills of a tasks response's `skill_index` this SDK can use (§9.4), each `url` resolved.
 - [`USER_STEP_ATTRIBUTE`](https://github.com/datalayer/personal-agent-protocol/blob/main/src/browser-control.ts) — Const; entry `.`. The attribute that marks a step for the User (Browser Control 4).

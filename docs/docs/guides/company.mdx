@@ -692,6 +692,142 @@ enforces the scopes on every call.
 
 A company that names no resource server behaves as before.
 
+### Other clients than personal agents
+
+An MCP client that is no personal agent, such as a desktop assistant or an IDE, has no
+key and no Session: it signs in with MCP's own OAuth flow, the authorization code grant
+with PKCE and nothing else. The protocol leaves such clients outside (§7), and the
+reference company refuses them unless it is told otherwise:
+
+```python
+config = CompanyConfig(
+    name="Example",
+    domain="example.com",
+    scopes=("orders:read", "orders:write"),
+    agent_description="Your orders",
+    scope_descriptions={"orders:read": "See your orders", "orders:write": "Change your orders"},
+    write_scopes=("orders:write",),
+    resource_servers=("https://mcp.example.com/mcp",),
+    public_clients=True,
+    client_registration=True,
+    public_client_scopes=("orders:read",),
+)
+print(config.registration_endpoint)
+```
+
+`public_clients` (`publicClients`) lets public clients sign in at Direct Sign-In's
+authorization endpoint, so it needs `direct`. Everything below is off without it, and a
+company that leaves it off behaves exactly as before.
+
+**Two ways to be a public client.** Which one a client is, is never the request's to say.
+
+- **Verified by its domain.** Its `client_id` is the URL of a client ID metadata
+  document that says `token_endpoint_auth_method` is `none` and names no `jwks_uri`,
+  `jwks` or `client_secret`. A document that names a key is a personal agent's, and no
+  document is both: a personal agent can't present itself as a public client to skip its
+  assertion. The document is read by the `pap.company.clientResolver` contribution's
+  `resolve_public` (`resolvePublic`), as a personal agent's is: HTTPS, no redirect,
+  bounded, and never at a private address. A resolver without the method verifies none.
+  The redirect URIs used from it are the loopback ones and the HTTPS ones on the
+  `client_id`'s own host.
+- **Registered itself**, with `client_registration` (`clientRegistration`): `POST
+  /oauth/register` (RFC 7591) gives it a `client_id` that is no URL, and no secret.
+  Every client registered is a public client, whatever it asked for:
+  `token_endpoint_auth_method` left out, `none`, `client_secret_post` or
+  `client_secret_basic` is registered the same way, and the response says
+  `"token_endpoint_auth_method": "none"` with no `client_secret` (RFC 7591 §3.2.1: the
+  server may replace what was requested, and the client uses what is returned). A
+  registration that names a `client_secret`, `jwks` or `jwks_uri` of its own, or any
+  other method (`private_key_jwt` among them), is `invalid_client_metadata`, with an
+  `error_description` saying what to send: a personal agent can't register as a public
+  client. A token or revocation request that carries a `client_secret`, in its form or
+  as HTTP Basic, is `invalid_client`: no secret is ever issued, checked or ignored.
+  That includes a library that sends a public client's `client_id` as HTTP Basic with
+  an empty password: the `client_id` goes in the form, and no `Authorization` header.
+  Nothing verifies what a registered client says of itself, its name least of all.
+
+**Redirect URIs** of a public client are `http` to the loopback (`127.0.0.1`, `[::1]`,
+`localhost`) or HTTPS to a host written in small letters, with no user information,
+fragment, backslash or space, and are compared as text. A request's `redirect_uri`
+matches a registered one exactly; only a loopback one may differ by its port
+(RFC 8252 §7.3). Any other scheme is refused.
+
+**The consent page** is shown for every request. `authorization_request` says who asks:
+`client_class` is `public_client` (`personal_agent` otherwise), `verified` is false for
+a client that registered itself, `redirect_host` is where the browser goes back to and
+`resource` the service the sign-in is for. A hosted consent page shows the return host
+prominently, marks an unverified client as such, keeps `caution` (§10.8), and is never
+framed (`frame-ancestors 'none'`), as the company's own page does. An error of a request
+from an unverified client is a page, never a redirect: anyone can register any HTTPS
+redirect, and answering it without anyone's consent would make the endpoint an open
+redirector. Every answer carries `iss` (RFC 9207) and the request's `state`.
+
+**What a public client gets**, and what it never gets:
+
+- a Bearer token for one service, which every request names as `resource`: the
+  authorization request, the code exchange and each refresh, always the same one. The
+  services are `resource_servers` and the company's own MCP server. Never the default
+  token, never the conversation endpoint;
+- the scopes of `public_client_scopes` (`publicClientScopes`), or every scope of the
+  company's own when it names none; never `poppy:browser-sign-in`;
+- the code and refresh grants only. The device and mediated grants answer
+  `unauthorized_client`, and it can't push an authorization request;
+- no Session. Its token is refused at every endpoint of the protocol (conversations,
+  operations, tasks, feedback, the browser session, the APIs), with or without a
+  Session header, and at the MCP server once a Session header comes with it;
+- no operation. At the company's own MCP server a tool that needs the person's approval
+  answers an error and returns no operation: only a personal agent approves one.
+
+**Refresh tokens** of a public client are rotated at every use, and one used twice ends
+the whole sign-in, whatever `refresh_reuse_revokes` says for personal agents. A sign-in
+lasts `public_client_refresh_lifetime` (`publicClientRefreshLifetimeSeconds`, 30 days)
+from the moment the person allowed it, however often it refreshes; then they sign in
+again. No token outlives it: an access token issued near the end expires with the
+sign-in (`expires_in` says so), and a public client's token whose sign-in is over,
+ended or no longer on record is refused wherever it is read. A public client ends
+its own sign-in at the revocation endpoint with its `client_id` and the refresh token.
+
+**The client policy** is asked as for a personal agent: `allows` before anything is
+fetched or read for a `client_id`, `allows_sign_in` at the authorization endpoint and
+again when the code is exchanged, `allows_resource` for the service, at each token
+request and each time `access_token_for` reads a token. A service at a URL of its own
+reads `public` on the record `access_token_for` returns: true for a public client's
+token, to which it gives no Session and from which it takes no approval.
+
+A policy may answer for public clients apart, with `allows_public(client_id)`
+(`allowsPublic`): a company that lists the personal agents it serves takes public
+clients all the same, or none. Without the method, `allows` answers for both classes.
+`sign_in_disabled` is about personal agents only: it neither stops nor allows public
+clients, which `public_clients` alone decides.
+
+A client verified by its domain is read again at each token request, so a document that
+went away or became a personal agent's gets nothing more. The resolver's cache decides
+how often that is a fetch: the default one keeps a document as its `Cache-Control` says,
+and remembers for 30 seconds that one could not be read.
+
+**Registration is bounded.** The host's `pap.company.rateLimit` is asked first, with
+`registration:{address}` where it is asked a `client_id`; then the company counts
+`client_registrations_per_hour` (`clientRegistrationsPerHour`, 10) for each address.
+The address is the request's `client_address` (`clientAddress`): the peer's, which the
+ASGI and Node adapters fill in. Behind a proxy that is the proxy's, one count for
+everyone, unless the host passes the address its proxy vouches for. A registration is at
+most 16 KiB, names at most 10 redirect URIs and a name of at most 100 characters with
+no control or direction mark. A client that never signs in is forgotten an hour after
+it registered; one that signs in is kept `client_registration_lifetime` (90 days) from
+its last sign-in. A token or revocation request without a client assertion asks the
+host's rate limit too, with `public:{address}`, before the client it names is looked at.
+
+**For the company's owner.** `await service.public_client_sign_ins()`
+(`publicClientSignIns`) lists the sign-ins that have not ended: the client, its name,
+whether it is verified, the return host, the service, the account, the scopes, when it
+signed in and last got tokens, and when it ends.
+`revoke_public_client_sign_in(sign_in_id)` (`revokePublicClientSignIn`) ends one: its
+refresh and access tokens stop working at once.
+
+The issuer's metadata says `none` in `token_endpoint_auth_methods_supported` and
+`authorization_response_iss_parameter_supported` only with `public_clients`, and
+`registration_endpoint` only with `client_registration`.
+
 ### Before production
 
 The defaults keep state in one process. A deployment contributes a durable

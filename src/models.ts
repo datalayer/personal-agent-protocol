@@ -468,6 +468,208 @@ export function listsResource(metadata: OAuthServerMetadata, domain: string): bo
   });
 }
 
+/**
+ * A public client's HTTPS redirect URI: a host of DNS labels in small ASCII letters (an
+ * internationalized name as its A-labels), a port when it is not 443, then a path or a query.
+ * Read as text, never through a URL parser: what is compared is what was written.
+ */
+const PUBLIC_HTTPS_REDIRECT =
+  /^https:\/\/([a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:[0-9]{1,5})?)([/?].*)?$/su;
+/** A public client's loopback redirect URI: `127.0.0.1`, `[::1]` or `localhost`, any port. */
+const PUBLIC_LOOPBACK_REDIRECT = /^http:\/\/((127\.0\.0\.1|\[::1\]|localhost)(:[0-9]{1,5})?)([/?].*)?$/su;
+/** The longest redirect URI a public client names, and the longest name it shows. */
+export const PUBLIC_REDIRECT_URI_MAX = 2000;
+export const PUBLIC_CLIENT_NAME_MAX = 100;
+/**
+ * Characters a client's name never holds: controls, and the marks that reorder or hide text on
+ * the consent page (bidirectional overrides and isolates, zero-width marks).
+ */
+const UNSHOWABLE = /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/u;
+/** What no redirect URI holds: a space, a control character, a backslash, a fragment. */
+const UNSAFE_IN_REDIRECT = /[\u0000-\u0020\u007f-\u009f\\#]/u;
+
+function portIsAPort(authority: string): boolean {
+  if (authority.endsWith("]") || !authority.includes(":")) return true;
+  const port = authority.slice(authority.lastIndexOf(":") + 1);
+  return /^[0-9]+$/.test(port) && Number(port) > 0 && Number(port) <= 65535;
+}
+
+interface PublicRedirect {
+  readonly loopback: boolean;
+  readonly authority: string;
+  readonly host: string;
+  readonly rest: string;
+}
+
+/** A public client's redirect URI, taken apart; `undefined` for anything else. */
+function publicRedirect(value: unknown): PublicRedirect | undefined {
+  if (typeof value !== "string" || !value) return undefined;
+  // Counted in code points, as the Python SDK counts them.
+  if ([...value].length > PUBLIC_REDIRECT_URI_MAX || UNSAFE_IN_REDIRECT.test(value)) return undefined;
+  const loopback = PUBLIC_LOOPBACK_REDIRECT.exec(value);
+  if (loopback !== null && portIsAPort(loopback[1] as string)) {
+    return {
+      loopback: true,
+      authority: loopback[1] as string,
+      host: loopback[2] as string,
+      rest: loopback[4] ?? "",
+    };
+  }
+  const https = PUBLIC_HTTPS_REDIRECT.exec(value);
+  if (https !== null && portIsAPort(https[1] as string)) {
+    const authority = https[1] as string;
+    return { loopback: false, authority, host: authority.split(":")[0] as string, rest: https[6] ?? "" };
+  }
+  return undefined;
+}
+
+/**
+ * A public client's loopback redirect URI (RFC 8252 §7.3, §8.3): `http` to `127.0.0.1`,
+ * `[::1]` or `localhost`, any port, no user information, no fragment.
+ *
+ * `localhost` is taken here, though a personal agent's loopback redirect is an IP literal
+ * (`isLoopbackRedirect`): the apps that are MCP clients name it.
+ */
+export function isPublicLoopbackRedirect(value: string): boolean {
+  return publicRedirect(value)?.loopback === true;
+}
+
+/**
+ * A redirect URI a public client may name: loopback, or HTTPS (`RangeError` otherwise).
+ *
+ * HTTPS to a host in small ASCII letters, a port allowed; or `http` to the User's own computer
+ * (`isPublicLoopbackRedirect`). Never user information, a fragment, a backslash, a space or a
+ * control character, each a way to make two readers of one URL see two hosts; never another
+ * scheme. Read as text, as written: nothing is normalized.
+ */
+export function publicRedirectUri(value: unknown): string {
+  if (typeof value !== "string" || publicRedirect(value) === undefined) {
+    throw new RangeError(
+      "a redirect URI is HTTPS to a host in small letters, or http to the loopback, " +
+        "with no user information, fragment, backslash or space",
+    );
+  }
+  return value;
+}
+
+/**
+ * Whether `given` is the redirect URI a public client `registered`.
+ *
+ * Exactly, except that a loopback redirect URI matches with any port (RFC 8252 §7.3): an app
+ * listens on whichever port is free. Nothing else is compared loosely: no prefix, no other
+ * path, no added query, no other host.
+ */
+export function publicRedirectUriMatches(registered: string, given: string): boolean {
+  const one = publicRedirect(registered);
+  const other = publicRedirect(given);
+  if (one === undefined || other === undefined) return false;
+  if (registered === given) return true;
+  return one.loopback && other.loopback && one.host === other.host && one.rest === other.rest;
+}
+
+/**
+ * Where a redirect URI sends the browser back, for a consent page to show: its host, with its
+ * port when it names one.
+ */
+export function redirectHost(redirectUri: string): string {
+  const authority = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/([^/?#]*)/u.exec(redirectUri)?.[1] ?? "";
+  return authority.slice(authority.lastIndexOf("@") + 1);
+}
+
+/**
+ * A public client's name as a consent page shows it (`RangeError` otherwise): text of 1 to 100
+ * characters, with no control character and none that reorders or hides text.
+ */
+export function publicClientName(value: unknown): string {
+  if (typeof value !== "string") throw new RangeError("client_name is text");
+  const name = value.trim();
+  if (!name || [...name].length > PUBLIC_CLIENT_NAME_MAX || UNSHOWABLE.test(name)) {
+    throw new RangeError("client_name is 1 to 100 characters, none of them a control character");
+  }
+  return name;
+}
+
+/**
+ * The client ID metadata document of a public client: an MCP client, never a personal agent.
+ *
+ * It says `token_endpoint_auth_method` is `none`, and names no key: a document with a
+ * `jwks_uri` is a personal agent's (`ClientMetadata`), and no document is both. Its redirect
+ * URIs a company uses are the loopback ones and the HTTPS ones on the `client_id`'s own host
+ * (`usableRedirectUris`); any other it names is never matched.
+ */
+export interface PublicClientMetadata extends UnknownFields {
+  readonly client_id: string;
+  readonly client_name: string;
+  readonly logo_uri?: string;
+  readonly redirect_uris: readonly string[];
+  readonly token_endpoint_auth_method: "none";
+}
+
+/** What a client's metadata holds when it authenticates with something: never a public client's. */
+const CONFIDENTIAL_MEMBERS = ["jwks_uri", "jwks", "client_secret"] as const;
+
+export function parsePublicClientMetadata(value: unknown): PublicClientMetadata {
+  const source = record(value, "client metadata");
+  if (CONFIDENTIAL_MEMBERS.some((member) => Object.hasOwn(source, member))) {
+    throw new ProtocolValidationError(
+      "invalid_client_metadata",
+      "a public client's metadata names no key and no secret",
+    );
+  }
+  if (source.token_endpoint_auth_method !== "none") {
+    throw new ProtocolValidationError(
+      "invalid_client_auth_method",
+      "a public client's token_endpoint_auth_method is none",
+    );
+  }
+  const clientId = httpsUrl(source.client_id, "client_id");
+  let name: string;
+  try {
+    name = publicClientName(source.client_name);
+  } catch (cause) {
+    throw new ProtocolValidationError("invalid_client_metadata", "client_name can't be shown", { cause });
+  }
+  const redirectUris = array(source.redirect_uris, "redirect_uris").map((item) => string(item, "redirect URI"));
+  if (redirectUris.length === 0) {
+    throw new ProtocolValidationError("invalid_client_metadata", "redirect_uris names at least one");
+  }
+  if (source.grant_types !== undefined && source.grant_types !== null) {
+    if (!array(source.grant_types, "grant_types").includes(AUTHORIZATION_CODE_GRANT)) {
+      throw new ProtocolValidationError(
+        "invalid_client_metadata",
+        "a public client signs in with the authorization code grant",
+      );
+    }
+  }
+  if (source.response_types !== undefined && source.response_types !== null) {
+    if (!array(source.response_types, "response_types").includes("code")) {
+      throw new ProtocolValidationError("invalid_client_metadata", "a public client asks for response_type code");
+    }
+  }
+  return {
+    ...source,
+    client_id: clientId,
+    client_name: name,
+    ...(source.logo_uri === undefined || source.logo_uri === null
+      ? {}
+      : { logo_uri: httpsUrl(source.logo_uri, "logo_uri") }),
+    redirect_uris: redirectUris,
+    token_endpoint_auth_method: "none",
+  } as PublicClientMetadata;
+}
+
+/**
+ * The redirect URIs a company sends a public client's answers to: loopback, or HTTPS on the
+ * `client_id`'s own host.
+ */
+export function usableRedirectUris(metadata: PublicClientMetadata): readonly string[] {
+  const host = new URL(metadata.client_id).hostname;
+  return metadata.redirect_uris.filter((uri) => {
+    const parsed = publicRedirect(uri);
+    return parsed !== undefined && (parsed.loopback || parsed.host === host);
+  });
+}
+
 export interface ClientMetadata extends UnknownFields {
   readonly client_id: string;
   readonly client_name: string;

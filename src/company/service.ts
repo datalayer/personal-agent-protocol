@@ -94,6 +94,12 @@ import {
   REFRESH_TOKEN_GRANT,
   parseMessage,
   redirectUriMatches,
+  parsePublicClientMetadata,
+  publicClientName,
+  publicRedirectUri,
+  publicRedirectUriMatches,
+  redirectHost,
+  usableRedirectUris,
   messageApproval,
   operationsContent,
   DISCLOSURES_EXTENSION,
@@ -111,6 +117,7 @@ import {
   type JsonWebKeySet,
   type Message,
   type Operation,
+  type PublicClientMetadata,
   compatibleVersions,
   domainHost,
   effectiveContext,
@@ -189,7 +196,10 @@ import {
   type PendingAuthorization,
   type PendingDevice,
   type PendingMediated,
+  type PublicClient,
   type PushedAuthorization,
+  type RegisteredClient,
+  type RegistrationCount,
   type Acceptance,
   type SignInAttempts,
   type StoreWriteOptions,
@@ -502,6 +512,43 @@ export interface CompanyConfigOptions {
   readonly operatorSignatures?: OperatorSignatures;
   /** How far in the future an operator signature's `created` may be, in seconds (default a minute). */
   readonly operatorSignatureWindowSeconds?: number;
+  /**
+   * Whether clients that are no personal agents sign in: public clients, such as MCP clients,
+   * which authenticate with nothing but PKCE (S256), by Direct Sign-In's authorization endpoint.
+   * A client ID metadata document that names no key and says `token_endpoint_auth_method` is
+   * `none` is one, verified by its domain. Their tokens are for one service (`resourceServers`,
+   * the MCP server), never the default token: they have no Session, and every endpoint of the
+   * protocol refuses them. Off by default; needs an issuer and `direct`.
+   */
+  readonly publicClients?: boolean;
+  /**
+   * Whether a public client may register itself (RFC 7591) at `/oauth/register`, for one that
+   * has no client ID metadata document: what it says of itself is never verified, its redirect
+   * URIs are loopback or HTTPS, and its consent page says so. Off by default; needs
+   * `publicClients`.
+   */
+  readonly clientRegistration?: boolean;
+  /**
+   * How long a public client's sign-in lasts, in seconds (default 30 days): its refresh tokens
+   * are rotated at every use, one used twice ends the sign-in whole whatever
+   * `refreshReuseRevokes` says, and after this long the person signs in again.
+   */
+  readonly publicClientRefreshLifetimeSeconds?: number;
+  /**
+   * The scopes a public client may be granted, some of `scopes`; absent, all of them. Never
+   * `poppy:browser-sign-in`, which is a personal agent's.
+   */
+  readonly publicClientScopes?: readonly string[];
+  /**
+   * How long a self-registered client is kept after it last signed in (default 90 days). One
+   * that never signed in is forgotten an hour after it registered.
+   */
+  readonly clientRegistrationLifetimeSeconds?: number;
+  /**
+   * How many clients one address registers in an hour (default 10), whatever the host's own
+   * `pap.company.rateLimit` allows besides (RFC 7591 §5).
+   */
+  readonly clientRegistrationsPerHour?: number;
 }
 
 function hostedPage(name: string, value: string | undefined): string | undefined {
@@ -582,6 +629,12 @@ export class CompanyConfig {
   readonly dpopProofWindowSeconds: number;
   readonly operatorSignatures: OperatorSignatures;
   readonly operatorSignatureWindowSeconds: number;
+  readonly publicClients: boolean;
+  readonly clientRegistration: boolean;
+  readonly publicClientRefreshLifetimeSeconds: number;
+  readonly publicClientScopes: readonly string[] | undefined;
+  readonly clientRegistrationLifetimeSeconds: number;
+  readonly clientRegistrationsPerHour: number;
 
   constructor(options: CompanyConfigOptions) {
     this.name = options.name;
@@ -680,6 +733,13 @@ export class CompanyConfig {
     this.dpopProofWindowSeconds = options.dpopProofWindowSeconds ?? 60;
     this.operatorSignatures = options.operatorSignatures ?? "off";
     this.operatorSignatureWindowSeconds = options.operatorSignatureWindowSeconds ?? 60;
+    this.publicClients = options.publicClients ?? false;
+    this.clientRegistration = options.clientRegistration ?? false;
+    this.publicClientRefreshLifetimeSeconds = options.publicClientRefreshLifetimeSeconds ?? 30 * 24 * 60 * 60;
+    this.publicClientScopes =
+      options.publicClientScopes === undefined ? undefined : [...options.publicClientScopes];
+    this.clientRegistrationLifetimeSeconds = options.clientRegistrationLifetimeSeconds ?? 90 * 24 * 60 * 60;
+    this.clientRegistrationsPerHour = options.clientRegistrationsPerHour ?? 10;
     for (const [name, lifetime] of Object.entries({
       idempotencyLifetimeSeconds: this.idempotencyLifetimeSeconds,
       sessionLifetimeSeconds: this.sessionLifetimeSeconds,
@@ -690,8 +750,30 @@ export class CompanyConfig {
       dpopProofWindowSeconds: this.dpopProofWindowSeconds,
       operatorSignatureWindowSeconds: this.operatorSignatureWindowSeconds,
       pushedRequestLifetimeSeconds: this.pushedRequestLifetimeSeconds,
+      publicClientRefreshLifetimeSeconds: this.publicClientRefreshLifetimeSeconds,
+      clientRegistrationLifetimeSeconds: this.clientRegistrationLifetimeSeconds,
     })) {
       if (!(lifetime > 0)) throw new RangeError(`${name} must be positive`);
+    }
+    if (this.publicClients && !(this.oauth && this.direct)) {
+      throw new RangeError("publicClients sign in at the authorization endpoint: direct is on");
+    }
+    if (this.publicClients && this.pushedAuthorizationRequests === "required") {
+      // A pushed request carries a client assertion, which a public client has not.
+      throw new RangeError("publicClients can't push requests: they are not required");
+    }
+    if (this.clientRegistration && !this.publicClients) {
+      throw new RangeError("clientRegistration registers public clients: publicClients is on");
+    }
+    if (
+      this.publicClientScopes !== undefined &&
+      (this.publicClientScopes.length === 0 ||
+        this.publicClientScopes.some((scope) => !this.scopes.includes(scope)))
+    ) {
+      throw new RangeError("publicClientScopes are some of scopes");
+    }
+    if (!(this.clientRegistrationsPerHour >= 1)) {
+      throw new RangeError("clientRegistrationsPerHour is at least 1");
     }
     if (!["off", "offered", "required"].includes(this.pushedAuthorizationRequests)) {
       throw new RangeError("pushedAuthorizationRequests is off, offered or required");
@@ -846,6 +928,16 @@ export class CompanyConfig {
   get revocationEndpoint(): string {
     return `${this.base}/oauth/revoke`;
   }
+  get registrationEndpoint(): string {
+    return `${this.base}/oauth/register`;
+  }
+  /**
+   * The scopes a public client may be granted: `publicClientScopes`, or every one of the
+   * company's own. Never the protocol's `poppy:browser-sign-in`.
+   */
+  get publicScopes(): readonly string[] {
+    return this.publicClientScopes ?? this.scopes;
+  }
   /** The extension's `scopes`: what Mediated Sign-In can grant. */
   get mediatedGrantScopes(): readonly string[] {
     return this.mediatedScopes.length ? this.mediatedScopes : this.scopes;
@@ -954,6 +1046,12 @@ export interface CompanyRequest {
   readonly url: string;
   readonly headers: Readonly<Record<string, string>>;
   readonly body?: Uint8Array | string;
+  /**
+   * The address the request came from, when the host knows it: what client registration is
+   * rate-limited by. A host behind a proxy names the address its proxy vouches for, never a
+   * header anyone can set.
+   */
+  readonly clientAddress?: string;
 }
 
 /**
@@ -1049,6 +1147,7 @@ const NAMED_ROUTES = new Set([
   "oauth_authorize",
   "oauth_device",
   "oauth_revoke",
+  "oauth_register",
   "poppy_browser_session",
   "poppy_conversations",
   "poppy_feedback",
@@ -1377,6 +1476,91 @@ function plain(message: Message): Record<string, unknown> {
 
 /** How often a compare-and-set is retried against concurrent writers before giving up. */
 const CAS_ATTEMPTS = 32;
+/**
+ * The `client_id` a public client gets when it registers itself (RFC 7591): never a URL, so it
+ * is never taken for a client ID metadata document, or a personal agent.
+ */
+const REGISTERED_CLIENT_ID = /^mcpc_[A-Za-z0-9_-]{22}$/u;
+/** A PKCE S256 challenge: the 43 characters a SHA-256 digest encodes to (RFC 7636 §4.2). */
+const CODE_CHALLENGE = /^[A-Za-z0-9_-]{43}$/u;
+/** A PKCE verifier (RFC 7636 §4.1). */
+const CODE_VERIFIER = /^[A-Za-z0-9._~-]{43,128}$/u;
+/** The largest registration request read (RFC 7591), and the most redirect URIs it names. */
+const REGISTRATION_MAX_BYTES = 16 * 1024;
+const REGISTRATION_MAX_REDIRECTS = 10;
+/** The window `clientRegistrationsPerHour` counts in. */
+const REGISTRATION_WINDOW_SECONDS = 60 * 60;
+/**
+ * How long a registration is kept before its client first signs in: long enough to register and
+ * then ask the person, short enough that clients nobody used don't pile up.
+ */
+const REGISTRATION_UNUSED_SECONDS = 60 * 60;
+/**
+ * The methods a registration may ask for: each is registered as a public client, and the
+ * response says so (RFC 7591 §3.2.1: the server may replace what was requested, and the client
+ * uses what is returned). Left out, the same.
+ */
+const REGISTERED_AS_PUBLIC = new Set(["none", "client_secret_post", "client_secret_basic"]);
+/** What a registration that can't be a public client's is told: exactly what to send. */
+const REGISTER_AS_PUBLIC =
+  "Every client registered here is a public client: it gets no secret, whatever " +
+  'method it asked for, and the response says "token_endpoint_auth_method": "none". ' +
+  'Leave the method out or send "none", with no "client_secret", "jwks" or ' +
+  '"jwks_uri"; sign in with the authorization code grant and PKCE (S256).';
+/** What a request that carries a client secret is told: no client here has one. */
+const NO_CLIENT_SECRET =
+  "This client has no secret: it was registered as a public client " +
+  '("token_endpoint_auth_method": "none"). Send its client_id and no client_secret, ' +
+  "with PKCE.";
+/**
+ * What a public client asking for an action that needs approval is told: operations are
+ * approved by a personal agent in its Session, and a public client has neither.
+ */
+const PUBLIC_NEEDS_APPROVAL =
+  "Not done. This needs the person's approval, which only a personal agent can ask for: " +
+  "this client can't do it.";
+
+/**
+ * Who asks at the authorization endpoint: a personal agent, or a public client that is verified
+ * by its domain or registered itself.
+ */
+interface AuthorizingClient {
+  readonly name: string;
+  readonly redirectUris: readonly string[];
+  readonly public: boolean;
+  readonly verified: boolean;
+}
+
+/** The domain a `client_id` that is a URL names; nothing for a registered client's. */
+function clientDomain(clientId: string): string {
+  try {
+    return new URL(clientId).hostname;
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * One sign-in of a public client that has not ended, for the company's owner to list and revoke
+ * (`CompanyService.publicClientSignIns`, `revokePublicClientSignIn`).
+ *
+ * `signInId` names it. `verified` says the client's `client_id` is a client ID metadata document
+ * read from its own domain; otherwise it registered itself, and `clientName` is only what it
+ * said. `lastUsedAt` is when it last got tokens.
+ */
+export interface PublicClientSignIn {
+  readonly signInId: string;
+  readonly clientId: string;
+  readonly clientName: string;
+  readonly verified: boolean;
+  readonly redirectHost: string;
+  readonly resource: string;
+  readonly accountId: string;
+  readonly scopes: readonly string[];
+  readonly signedInAt?: string;
+  readonly lastUsedAt?: string;
+  readonly expiresAt: string;
+}
 
 /** How long an expired device or Mediated sign-in is kept, to answer that it expired. */
 const KEPT_EXPIRED_MS = 10 * 60 * 1000;
@@ -1695,6 +1879,9 @@ export class CompanyService {
         return await this.#device(request);
       }
       if (method === "POST" && path === "/oauth/revoke") return await this.#revoke(request);
+      if (method === "POST" && path === "/oauth/register" && this.config.clientRegistration) {
+        return await this.#register(request);
+      }
       if (path === "/poppy/conversations" && method === "POST") {
         return await this.#startConversation(request);
       }
@@ -2073,6 +2260,13 @@ export class CompanyService {
     // The issuer reads client ID metadata documents (§4.1): said for other clients, such as
     // MCP clients, as the CIMD draft's §8 defines (guides).
     metadata.client_id_metadata_document_supported = true;
+    if (config.publicClients) {
+      // Public clients authenticate with nothing but PKCE; every answer of the authorization
+      // endpoint names the issuer (RFC 9207), said for them.
+      metadata.token_endpoint_auth_methods_supported = ["private_key_jwt", "none"];
+      metadata.authorization_response_iss_parameter_supported = true;
+    }
+    if (config.clientRegistration) metadata.registration_endpoint = config.registrationEndpoint;
     return metadata;
   }
 
@@ -2181,6 +2375,7 @@ export class CompanyService {
   async #token(request: CompanyRequest): Promise<CompanyResponse> {
     const form = pairs(text(request.body));
     const grant = form.grant_type;
+    if (this.#unauthenticated(form)) return this.#publicToken(request, form);
     // No tokens to protect: every refresh is `invalid_grant`, the client assertion unverified (§3.2).
     if (grant === REFRESH_TOKEN_GRANT && (await this.#neverIssued())) throw new Refused(400, "invalid_grant");
     const clientId = await this.#client(form);
@@ -2191,7 +2386,7 @@ export class CompanyService {
     }
     // Before any grant is used: a proof refused spends no code.
     const jkt = await this.#tokenBinding(request, resource);
-    if (grant === REFRESH_TOKEN_GRANT) return this.#refreshGrant(form, clientId, jkt);
+    if (grant === REFRESH_TOKEN_GRANT) return this.#refreshGrant(form, clientId, jkt, resource, false);
     if (grant === AUTHORIZATION_CODE_GRANT && this.config.direct) return this.#codeGrant(form, clientId, jkt);
     if (grant === DEVICE_CODE_GRANT && this.config.device) return this.#deviceGrant(form, clientId, jkt);
     if (grant === MEDIATED_GRANT && this.config.mediatedFields.length) {
@@ -2200,6 +2395,235 @@ export class CompanyService {
       return this.#mediatedGrant(form, clientId, jkt);
     }
     throw new Refused(400, "unsupported_grant_type");
+  }
+
+  /**
+   * Whether a token or revocation request is a public client's: the company takes them, and the
+   * request carries no client assertion at all. One that carries any is a personal agent's, and
+   * is verified as one.
+   */
+  #unauthenticated(form: Readonly<Record<string, string>>): boolean {
+    return (
+      this.config.publicClients &&
+      !Object.hasOwn(form, "client_assertion") &&
+      !Object.hasOwn(form, "client_assertion_type")
+    );
+  }
+
+  /**
+   * The token endpoint for a public client: the code and refresh grants, for the one service its
+   * sign-in names, never bound, never the default token.
+   *
+   * In order: the host's rate limit, the client (the policy, then that it is a public client
+   * still: its registration, or its document read again), the grant type, the `resource`, and
+   * only then the grant itself. A request refused by one of those spends nothing. Once the code
+   * is taken it is spent, whatever is wrong with the rest of the request: a code is used once
+   * (RFC 6749 §4.1.2).
+   */
+  async #publicToken(request: CompanyRequest, form: Readonly<Record<string, string>>): Promise<CompanyResponse> {
+    await this.#publicAdmitted(request);
+    this.#noClientSecret(request, form);
+    const clientId = form.client_id ?? "";
+    const client = await this.#publicClient(clientId);
+    const grant = form.grant_type;
+    if (grant === DEVICE_CODE_GRANT || grant === MEDIATED_GRANT) {
+      // A personal agent's sign-ins: never a public client's.
+      throw new Refused(400, "unauthorized_client");
+    }
+    if (grant !== AUTHORIZATION_CODE_GRANT && grant !== REFRESH_TOKEN_GRANT) {
+      throw new Refused(400, "unsupported_grant_type");
+    }
+    const resource = Object.hasOwn(form, "resource") ? form.resource : undefined;
+    if (
+      resource === undefined ||
+      !this.#publicResources().includes(resource) ||
+      !(await this.#resourceAllowed(clientId, resource))
+    ) {
+      // Named in every request, and one of the services a public client gets tokens for: never
+      // the default token, which is the protocol's.
+      throw new Refused(400, "invalid_target");
+    }
+    if (grant === REFRESH_TOKEN_GRANT) return this.#refreshGrant(form, clientId, undefined, resource, true);
+    return this.#publicCodeGrant(form, clientId, client, resource);
+  }
+
+  /**
+   * The host's rate limit on requests that carry no client assertion, or HTTP 429.
+   *
+   * Asked with `public:{address}` where it is asked a `client_id`, before the client is looked
+   * at: such a request names any `client_id` it likes, and each may make the company read a
+   * document from the network. Counted by address, so the names a caller invents cost the
+   * limiter nothing. None contributed: no limit.
+   */
+  async #publicAdmitted(request: CompanyRequest): Promise<void> {
+    const limit = optionalContribution(this.reactor, CompanyRateLimits, "rate limit");
+    if (limit === undefined) return;
+    const wait = await limit.admit(`public:${request.clientAddress || "unknown"}`, undefined);
+    if (wait !== undefined) throw new RateLimitedRefusal(Math.max(1, Math.trunc(wait)));
+  }
+
+  /**
+   * Refuse a request without an assertion that carries a client secret, in its form
+   * (`client_secret_post`) or as HTTP Basic (`client_secret_basic`).
+   *
+   * No client here has a secret, and none is ever checked: a request that sends one is refused,
+   * never served as if the secret had been right. A client that registered asking for a secret
+   * was told `none`, and uses what it was told. HTTP Basic is refused whatever its password, an
+   * empty one too: some libraries send a public client's `client_id` that way, and it goes in
+   * the form here.
+   *
+   * The 401 carries no `WWW-Authenticate` (RFC 6749 §5.2 asks for one naming the scheme the
+   * client used): naming `Basic` would say Basic works, which it never does.
+   */
+  #noClientSecret(request: CompanyRequest, form: Readonly<Record<string, string>>): void {
+    const scheme = (request.headers.authorization ?? "").split(" ")[0]?.toLowerCase();
+    if (Object.hasOwn(form, "client_secret") || scheme === "basic") {
+      throw new Refused(401, "invalid_client", { error_description: NO_CLIENT_SECRET });
+    }
+  }
+
+  /**
+   * The company's policy on this public client, asked before anything is fetched or read for
+   * it: `allowsPublic`, when the policy has it, so a company that lists the personal agents it
+   * serves can still take public clients, or none; `allows` otherwise, one answer for both
+   * classes.
+   */
+  async #publicAllowed(clientId: string): Promise<boolean> {
+    const policy = firstContribution(this.reactor, ClientPolicies, "policy");
+    return policy.allowsPublic === undefined ? policy.allows(clientId) : policy.allowsPublic(clientId);
+  }
+
+  /**
+   * The services a public client gets tokens for: `resourceServers`, and the MCP server when the
+   * company has one. Never the default token's, nor the conversation endpoint.
+   */
+  #publicResources(): readonly string[] {
+    return [...(this.#mcp() === undefined ? [] : [this.config.mcpUrl]), ...this.config.resourceServers];
+  }
+
+  /**
+   * Whether a public client's token or sign-in is within what the company gives public clients
+   * now: it still takes them, for that service, with those scopes.
+   */
+  #publicTokenWithin(resource: string | undefined, scopes: readonly string[]): boolean {
+    return (
+      this.config.publicClients &&
+      resource !== undefined &&
+      this.#publicResources().includes(resource) &&
+      scopes.every((scope) => this.config.publicScopes.includes(scope))
+    );
+  }
+
+  /**
+   * The public client a token or revocation request names, or `invalid_client`.
+   *
+   * The company's policy is asked first, so a blocked `client_id` is never fetched; then a
+   * registered client is read from its record and a URL from its document, again at each
+   * request: a client whose registration is gone, or whose document became a personal agent's,
+   * gets nothing more.
+   */
+  async #publicClient(clientId: string): Promise<AuthorizingClient> {
+    if (!clientId || !(await this.#publicAllowed(clientId))) throw new Refused(401, "invalid_client");
+    const client = clientId.startsWith("https://")
+      ? await this.#verifiedPublicClient(clientId)
+      : await this.#registeredClient(clientId);
+    if (client === undefined) throw new Refused(401, "invalid_client");
+    const exchange = exchanges.getStore();
+    if (exchange !== undefined) exchange.clientId = clientId;
+    return client;
+  }
+
+  /**
+   * A public client verified by its domain: its client ID metadata document, read by the
+   * resolver; `undefined` when there is none, or it is not a public client's.
+   */
+  async #verifiedPublicClient(clientId: string): Promise<AuthorizingClient | undefined> {
+    const resolver = firstContribution(this.reactor, ClientResolvers, "client resolver");
+    if (!this.config.publicClients || typeof resolver.resolvePublic !== "function") return undefined;
+    let metadata: PublicClientMetadata;
+    try {
+      // Checked again here: a host's own resolver may hand back anything.
+      metadata = parsePublicClientMetadata(await resolver.resolvePublic(clientId));
+    } catch {
+      return undefined;
+    }
+    if (metadata.client_id !== clientId) return undefined;
+    return {
+      name: metadata.client_name,
+      redirectUris: usableRedirectUris(metadata),
+      public: true,
+      verified: true,
+    };
+  }
+
+  /** A public client that registered itself, by the `client_id` it was given. */
+  async #registeredClient(clientId: string): Promise<AuthorizingClient | undefined> {
+    if (!this.config.clientRegistration || !REGISTERED_CLIENT_ID.test(clientId)) return undefined;
+    const record = await this.#read<RegisteredClient>(RecordKinds.publicClient, clientId);
+    if (record === undefined) return undefined;
+    return { name: record.clientName, redirectUris: record.redirectUris, public: true, verified: false };
+  }
+
+  /**
+   * Whether the client policy lets this public client sign in (`allowsSignIn`). `signInDisabled`
+   * is about personal agents, and is not asked here.
+   */
+  async #publicSignInAllowed(clientId: string): Promise<boolean> {
+    const policy = firstContribution(this.reactor, ClientPolicies, "policy");
+    return policy.allowsSignIn === undefined ? true : policy.allowsSignIn(clientId, AUTHORIZATION_CODE_GRANT);
+  }
+
+  /**
+   * A public client's code for its tokens: PKCE is its only proof, so the verifier is checked as
+   * RFC 7636 writes it, and the code is the one issued to this client, for this redirect and
+   * this service.
+   *
+   * The code is taken first, and so spent, whatever the request then gets wrong: another client,
+   * redirect, service or verifier gets `invalid_grant` or `invalid_target`, and the code gives
+   * nothing to anyone after it.
+   */
+  async #publicCodeGrant(
+    form: Readonly<Record<string, string>>,
+    clientId: string,
+    client: AuthorizingClient,
+    resource: string,
+  ): Promise<CompanyResponse> {
+    const taken = await this.store.take(RecordKinds.code, digest(form.code ?? ""));
+    const issued = taken as unknown as IssuedCode | undefined;
+    if (
+      issued === undefined ||
+      this.#passed(issued.expiresAt) ||
+      issued.public === undefined ||
+      issued.clientId !== clientId ||
+      issued.redirectUri !== form.redirect_uri
+    ) {
+      // Expired, reused, a personal agent's, another client's, or another redirect.
+      throw new Refused(400, "invalid_grant");
+    }
+    if (issued.public.resource !== resource) throw new Refused(400, "invalid_target");
+    const verifier = form.code_verifier ?? "";
+    if (!CODE_VERIFIER.test(verifier)) throw new Refused(400, "invalid_grant");
+    const challenge = createHash("sha256").update(verifier).digest("base64url");
+    if (!sameText(challenge, issued.codeChallenge)) throw new Refused(400, "invalid_grant");
+    if (!this.#offers(issued.scopes) || issued.scopes.some((scope) => !this.config.publicScopes.includes(scope))) {
+      throw new Refused(400, "invalid_scope");
+    }
+    if (!(await this.#publicSignInAllowed(clientId))) throw new Refused(400, "unauthorized_client");
+    if (!client.verified) await this.#keepRegistration(clientId);
+    return this.#signIn(clientId, issued.accountId, issued.scopes, issued.requested, undefined, resource, issued.public);
+  }
+
+  /** A registered client that signs in is kept `clientRegistrationLifetimeSeconds` more. */
+  async #keepRegistration(clientId: string): Promise<void> {
+    const entry = await this.store.get(RecordKinds.publicClient, clientId);
+    if (entry === undefined) return;
+    await this.store.replace(
+      RecordKinds.publicClient,
+      clientId,
+      entry.version,
+      entry.value,
+      expiry(this.#later(this.config.clientRegistrationLifetimeSeconds)),
+    );
   }
 
   /**
@@ -2306,18 +2730,27 @@ export class CompanyService {
    * An access token from a refresh token, which is rotated (§4.4).
    *
    * Narrower scopes only; `resource` for one service. Exactly one refresh claims the
-   * presented token, which stops working the moment it is claimed.
+   * presented token, which stops working the moment it is claimed. `isPublic` says the request
+   * is a public client's: it refreshes only a public client's sign-in, for the service that
+   * sign-in names, and a token used twice ends the sign-in whole, whatever
+   * `refreshReuseRevokes` says for personal agents.
    */
   async #refreshGrant(
     form: Readonly<Record<string, string>>,
     clientId: string,
     jkt: string | undefined,
+    resource: string | undefined,
+    isPublic: boolean,
   ): Promise<CompanyResponse> {
-    const resource = this.#resource(form);
     const presented = digest(form.refresh_token ?? "");
     const entry = await this.store.get(RecordKinds.refreshToken, presented);
     const grant = entry?.value as unknown as AccountGrant | undefined;
-    if (grant?.revoked === true && this.config.refreshReuseRevokes) {
+    if (grant !== undefined && (grant.public !== undefined) !== isPublic) {
+      // A sign-in is refreshed by the class of client it is of: a personal agent's never
+      // without its assertion, a public client's never as a personal agent.
+      throw new Refused(400, "invalid_grant");
+    }
+    if (grant?.revoked === true && (isPublic || this.config.refreshReuseRevokes)) {
       // A rotated-away token used again: whoever holds the other copy loses it too.
       await this.#signOut([grant.family]);
     }
@@ -2331,6 +2764,11 @@ export class CompanyService {
       throw new Refused(400, "invalid_grant");
     }
     if (await this.#signInEnded(grant)) throw new Refused(400, "invalid_grant");
+    if (grant.public !== undefined) {
+      // A public client's sign-in is for one service, for as long as it lasts.
+      if (grant.public.resource !== resource) throw new Refused(400, "invalid_target");
+      if (!this.#publicTokenWithin(grant.public.resource, grant.scopes)) throw new Refused(400, "invalid_scope");
+    }
     if (grant.dpopJkt !== undefined && (jkt === undefined || !sameText(jkt, grant.dpopJkt))) {
       // Bound to the key it was issued with (§4.4): a copied refresh token is useless with any
       // other, and nothing is issued for it.
@@ -2360,7 +2798,11 @@ export class CompanyService {
       json({ ...grant, revoked: false } satisfies AccountGrant),
       expiry(grant.expiresAt),
     );
-    if (!(await this.#joinFamily(grant.family, { refreshToken: digest(rotated) }))) {
+    const joined = await this.#joinFamily(grant.family, {
+      refreshToken: digest(rotated),
+      ...(isPublic ? { usedAt: this.#now().toISOString() } : {}),
+    });
+    if (!joined) {
       // The sign-in was revoked meanwhile: its new token is too.
       await this.#revokeGrants([digest(rotated)]);
       throw new Refused(400, "invalid_grant");
@@ -2375,6 +2817,7 @@ export class CompanyService {
       // A refresh naming no scope gets them in the response: the agent can't know.
       requested,
       jkt,
+      isPublic,
     });
     const family = await this.#read<AccountFamily>(RecordKinds.accountFamily, grant.family);
     if (family === undefined || family.revoked) {
@@ -2586,6 +3029,212 @@ export class CompanyService {
     await this.store.delete(RecordKinds.userCode, pending.userCode);
   }
 
+  // Public clients: registration, and the owner's list -----------------------------------
+
+  /**
+   * `POST /oauth/register` (RFC 7591): a public client registers itself.
+   *
+   * Rate-limited by address before anything is read. Every client registered is a public
+   * client, whatever it asked for: `token_endpoint_auth_method` left out, `none`,
+   * `client_secret_post` or `client_secret_basic` is answered `none`, with no secret (RFC 7591
+   * §3.2.1). One that names a key or a secret of its own, or another method, is refused. Its
+   * redirect URIs are loopback or HTTPS (`publicRedirectUri`). It gets a `client_id`; what it
+   * said of itself is kept, never verified, and shown as such.
+   */
+  async #register(request: CompanyRequest): Promise<CompanyResponse> {
+    await this.#registrationAdmitted(request.clientAddress);
+    try {
+      return await this.#registered(request);
+    } catch (error) {
+      if (error instanceof Refused) throw error;
+      // Whatever a body nobody signed made go wrong (nesting too deep to read, a member of a
+      // type no check foresaw) is the caller's mistake to them, never a 500; and a bug of ours
+      // to us, so it is logged whole.
+      console.error("A client registration was refused for a reason no check names", error);
+      throw new Refused(400, "invalid_client_metadata", {
+        error_description: "the registration could not be read",
+      });
+    }
+  }
+
+  /** The registration itself, once the address was admitted (`#register`). */
+  async #registered(request: CompanyRequest): Promise<CompanyResponse> {
+    const invalid = (description: string, error = "invalid_client_metadata"): Refused =>
+      new Refused(400, error, { error_description: description });
+    const raw = request.body ?? "";
+    const size = typeof raw === "string" ? Buffer.byteLength(raw) : raw.byteLength;
+    if (size > REGISTRATION_MAX_BYTES) throw invalid("the registration is too large");
+    let parsed: unknown;
+    try {
+      parsed = parseJsonStrict(text(request.body));
+    } catch {
+      throw invalid("the registration is a JSON object");
+    }
+    if (!isObject(parsed)) throw invalid("the registration is a JSON object");
+    const body = parsed;
+    // A key or a secret of its own is no public client's: a personal agent can't pass itself
+    // off as one. Any method that only says how a secret would be sent is registered as public
+    // all the same, and told so; any other is refused.
+    const method = Object.hasOwn(body, "token_endpoint_auth_method") ? body.token_endpoint_auth_method : "none";
+    if (
+      ["jwks", "jwks_uri", "client_secret"].some((member) => Object.hasOwn(body, member)) ||
+      typeof method !== "string" ||
+      !REGISTERED_AS_PUBLIC.has(method)
+    ) {
+      throw invalid(REGISTER_AS_PUBLIC);
+    }
+    const grants = Object.hasOwn(body, "grant_types") ? body.grant_types : [AUTHORIZATION_CODE_GRANT];
+    if (
+      !Array.isArray(grants) ||
+      !grants.every((grant) => typeof grant === "string") ||
+      !grants.includes(AUTHORIZATION_CODE_GRANT) ||
+      grants.some((grant) => grant !== AUTHORIZATION_CODE_GRANT && grant !== REFRESH_TOKEN_GRANT)
+    ) {
+      throw invalid("grant_types are authorization_code and refresh_token");
+    }
+    if (Object.hasOwn(body, "scope") && typeof body.scope !== "string") throw invalid("scope is text");
+    const responses = Object.hasOwn(body, "response_types") ? body.response_types : ["code"];
+    if (!Array.isArray(responses) || responses.length !== 1 || responses[0] !== "code") {
+      throw invalid("response_types is code");
+    }
+    const redirects = body.redirect_uris;
+    if (
+      !Array.isArray(redirects) ||
+      redirects.length === 0 ||
+      redirects.length > REGISTRATION_MAX_REDIRECTS ||
+      !redirects.every((uri) => typeof uri === "string") ||
+      new Set(redirects).size !== redirects.length
+    ) {
+      throw invalid("redirect_uris names 1 to 10 redirect URIs", "invalid_redirect_uri");
+    }
+    try {
+      for (const uri of redirects) publicRedirectUri(uri);
+    } catch (error) {
+      throw invalid((error as Error).message, "invalid_redirect_uri");
+    }
+    let name: string;
+    try {
+      name = publicClientName(Object.hasOwn(body, "client_name") ? body.client_name : "MCP client");
+    } catch (error) {
+      throw invalid((error as Error).message);
+    }
+    const now = this.#now();
+    const clientId = this.#id("mcpc");
+    const record: RegisteredClient = {
+      clientId,
+      clientName: name,
+      redirectUris: redirects as string[],
+      registeredAt: now.toISOString(),
+    };
+    await this.store.put(
+      RecordKinds.publicClient,
+      clientId,
+      json(record),
+      // Kept briefly until its first sign-in, which keeps it for long (`#keepRegistration`):
+      // registering alone costs the company an hour's record.
+      expiry(this.#later(REGISTRATION_UNUSED_SECONDS)),
+    );
+    return {
+      status: 201,
+      body: {
+        client_id: clientId,
+        client_id_issued_at: Math.floor(now.getTime() / 1000),
+        client_name: name,
+        redirect_uris: [...redirects],
+        token_endpoint_auth_method: "none",
+        grant_types: [AUTHORIZATION_CODE_GRANT, REFRESH_TOKEN_GRANT],
+        response_types: ["code"],
+      },
+      headers: { ...NO_STORE },
+    };
+  }
+
+  /**
+   * Whether this address may register one more client now, or HTTP 429.
+   *
+   * The host's `pap.company.rateLimit` is asked first, with `registration:{address}` where it
+   * is asked a `client_id` and no account; then the company's own count,
+   * `clientRegistrationsPerHour` for each address. A host that names no address has one count
+   * for everyone, so registration stays bounded.
+   */
+  async #registrationAdmitted(address: string | undefined): Promise<void> {
+    const key = address || "unknown";
+    const limit = optionalContribution(this.reactor, CompanyRateLimits, "rate limit");
+    if (limit !== undefined) {
+      const wait = await limit.admit(`registration:${key}`, undefined);
+      if (wait !== undefined) throw new RateLimitedRefusal(Math.max(1, Math.trunc(wait)));
+    }
+    const now = this.#now().getTime();
+    for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt += 1) {
+      const first: RegistrationCount = { count: 1 };
+      const until = new Date(now + REGISTRATION_WINDOW_SECONDS * 1000);
+      if (await this.store.create(RecordKinds.registrationCount, key, json(first), expiry(until))) return;
+      const entry = await this.store.get(RecordKinds.registrationCount, key);
+      if (entry === undefined) continue;
+      const count = (entry.value as unknown as RegistrationCount).count;
+      if (count >= this.config.clientRegistrationsPerHour) {
+        const ends = entry.expiresAt === undefined ? until.getTime() : new Date(entry.expiresAt).getTime();
+        throw new RateLimitedRefusal(Math.max(1, Math.ceil((ends - now) / 1000)));
+      }
+      const next: RegistrationCount = { count: count + 1 };
+      if (
+        await this.store.replace(RecordKinds.registrationCount, key, entry.version, json(next), expiry(entry.expiresAt))
+      ) {
+        return;
+      }
+    }
+    throw new Refused(503, "temporarily_unavailable");
+  }
+
+  /**
+   * The sign-ins of public clients that have not ended, for the company's owner.
+   *
+   * One for each time a person allowed a public client (an MCP client): which client, verified
+   * by its domain or not, where the browser went back, for which service and account, with
+   * which scopes, since when, when it last got tokens, and until when. Each is ended whole by
+   * `revokePublicClientSignIn`.
+   *
+   * Read from every sign-in the company keeps, a personal agent's among them (`store.records`):
+   * a company with very many reads them all each time.
+   */
+  async publicClientSignIns(): Promise<readonly PublicClientSignIn[]> {
+    const signIns: PublicClientSignIn[] = [];
+    for (const record of await this.store.records(RecordKinds.accountFamily)) {
+      const family = record.value as unknown as AccountFamily;
+      const first = family.tokens[0];
+      if (family.public === undefined || family.revoked || first === undefined) continue;
+      // A sign-in is kept by its first refresh token's digest, which keeps its terms.
+      const grant = await this.#read<AccountGrant>(RecordKinds.refreshToken, first);
+      if (grant === undefined || this.#passed(grant.expiresAt)) continue;
+      signIns.push({
+        signInId: first,
+        clientId: family.clientId,
+        clientName: family.public.name,
+        verified: family.public.verified,
+        redirectHost: family.public.redirectHost,
+        resource: family.public.resource,
+        accountId: family.accountId,
+        scopes: grant.scopes,
+        ...(grant.signedInAt === undefined ? {} : { signedInAt: grant.signedInAt }),
+        ...(family.lastUsedAt === undefined ? {} : { lastUsedAt: family.lastUsedAt }),
+        expiresAt: grant.expiresAt,
+      });
+    }
+    return signIns;
+  }
+
+  /**
+   * The company's owner, or the person, ends one public client's sign-in: its refresh and
+   * access tokens stop working at once. `false` when there is no such sign-in of a public
+   * client, or it had ended.
+   */
+  async revokePublicClientSignIn(signInId: string): Promise<boolean> {
+    const family = await this.#read<AccountFamily>(RecordKinds.accountFamily, signInId);
+    if (family === undefined || family.public === undefined || family.revoked) return false;
+    await this.#signOut([signInId]);
+    return true;
+  }
+
   /**
    * Whether sign-in is off (`auth.disabled`) and no refresh token was ever issued (§3.2).
    *
@@ -2620,10 +3269,20 @@ export class CompanyService {
 
   async #revoke(request: CompanyRequest): Promise<CompanyResponse> {
     const form = pairs(text(request.body));
-    if (await this.#neverIssued()) return { status: 200, body: {}, headers: { ...NO_STORE } };
-    const clientId = await this.#client(form);
+    let clientId: string;
+    const isPublic = this.#unauthenticated(form);
+    if (isPublic) {
+      // A public client revokes its own sign-in with the refresh token it holds.
+      await this.#publicAdmitted(request);
+      this.#noClientSecret(request, form);
+      clientId = form.client_id ?? "";
+      await this.#publicClient(clientId);
+    } else {
+      if (await this.#neverIssued()) return { status: 200, body: {}, headers: { ...NO_STORE } };
+      clientId = await this.#client(form);
+    }
     const grant = await this.#read<AccountGrant>(RecordKinds.refreshToken, digest(form.token ?? ""));
-    if (grant !== undefined && grant.clientId === clientId) {
+    if (grant !== undefined && grant.clientId === clientId && (grant.public !== undefined) === isPublic) {
       // The token and every one rotated from the same sign-in, and the access tokens
       // they gave (RFC 7009 §2.1): the Sessions continue signed out (§5.5).
       await this.#signOut([grant.family]);
@@ -2699,10 +3358,13 @@ export class CompanyService {
     return revoked;
   }
 
-  /** Add a refresh or an access token to a sign-in; `false` once it is revoked. */
+  /**
+   * Add a refresh or an access token to a sign-in; `false` once it is revoked. `usedAt` notes
+   * when a public client's sign-in last got tokens.
+   */
   async #joinFamily(
     familyId: string,
-    added: { readonly refreshToken?: string; readonly accessToken?: string },
+    added: { readonly refreshToken?: string; readonly accessToken?: string; readonly usedAt?: string },
   ): Promise<boolean> {
     const changed = await this.#change<AccountFamily>(
       RecordKinds.accountFamily,
@@ -2714,6 +3376,7 @@ export class CompanyService {
               ...family,
               tokens: withItem(family.tokens, added.refreshToken),
               accessTokens: withItem(family.accessTokens, added.accessToken),
+              ...(added.usedAt === undefined ? {} : { lastUsedAt: added.usedAt }),
             },
     );
     return changed !== undefined && !changed[1].revoked;
@@ -2733,6 +3396,7 @@ export class CompanyService {
     requested: readonly string[],
     jkt: string | undefined,
     resource: string | undefined,
+    publicClient?: PublicClient,
   ): Promise<CompanyResponse> {
     if (!scopes.length) {
       // A sign-in grants at least one scope: approving none is a decline (§4.7).
@@ -2740,7 +3404,11 @@ export class CompanyService {
     }
     const refreshToken = this.#id("rt");
     const family = digest(refreshToken);
-    const expiresAt = this.#later(this.config.refreshTokenLifetimeSeconds);
+    const expiresAt = this.#later(
+      publicClient === undefined
+        ? this.config.refreshTokenLifetimeSeconds
+        : this.config.publicClientRefreshLifetimeSeconds,
+    );
     const grant: AccountGrant = {
       accountId,
       clientId,
@@ -2751,6 +3419,7 @@ export class CompanyService {
       signedInAt: this.#now().toISOString(),
       // Bound to the key of the request that issued it, and every token rotated from it (§4.4).
       ...(this.config.bindRefreshTokens && jkt !== undefined ? { dpopJkt: jkt } : {}),
+      ...(publicClient === undefined ? {} : { public: publicClient }),
     };
     await this.store.put(RecordKinds.refreshToken, family, json(grant), expiry(expiresAt));
     const signIn: AccountFamily = {
@@ -2759,6 +3428,7 @@ export class CompanyService {
       tokens: [family],
       accessTokens: [],
       revoked: false,
+      ...(publicClient === undefined ? {} : { public: publicClient, lastUsedAt: this.#now().toISOString() }),
     };
     await this.store.put(RecordKinds.accountFamily, family, json(signIn), expiry(expiresAt));
     await this.#rememberFamily(clientId, accountId, family);
@@ -2771,6 +3441,7 @@ export class CompanyService {
       refreshToken,
       requested,
       jkt,
+      isPublic: publicClient !== undefined,
     });
   }
 
@@ -2817,14 +3488,28 @@ export class CompanyService {
     readonly refreshToken?: string;
     readonly requested: readonly string[];
     readonly jkt: string | undefined;
+    readonly isPublic?: boolean;
   }): Promise<CompanyResponse> {
     const { clientId, accountId, scopes, family, resource, refreshToken, requested } = options;
+    if (options.isPublic === true && (resource === undefined || options.jkt !== undefined)) {
+      // Never the default token, never bound: a public client has no Session to use the first
+      // in, and no key the company knows for the second.
+      throw new Refused(400, "invalid_target");
+    }
     // A server that takes only Bearer gets a Bearer token, even after a proof that a bound
     // refresh token needed (§4.4, §4.5).
     const jkt = resource !== undefined && !this.#takesDpop(resource) ? undefined : options.jkt;
     const accessToken = this.#id("at");
     const key = digest(accessToken);
-    const expiresAt = this.#later(this.config.accessTokenLifetimeSeconds);
+    let expiresAt = this.#later(this.config.accessTokenLifetimeSeconds);
+    if (options.isPublic === true) {
+      // Never past its sign-in: once that has ended its owner can no longer list or revoke it,
+      // so no token of it works any more.
+      const signedIn = await this.#read<AccountGrant>(RecordKinds.refreshToken, family);
+      if (signedIn === undefined || this.#passed(signedIn.expiresAt)) throw new Refused(400, "invalid_grant");
+      const ends = new Date(signedIn.expiresAt);
+      if (ends.getTime() < expiresAt.getTime()) expiresAt = ends;
+    }
     const issued: IssuedAccessToken = {
       clientId,
       accountId,
@@ -2833,6 +3518,7 @@ export class CompanyService {
       family,
       ...(resource === undefined ? {} : { resource }),
       ...(jkt === undefined ? {} : { dpopJkt: jkt }),
+      ...(options.isPublic === true ? { public: true as const } : {}),
     };
     await this.store.put(RecordKinds.accessToken, key, json(issued), expiry(expiresAt));
     if (!(await this.#joinFamily(family, { accessToken: key }))) {
@@ -2842,7 +3528,7 @@ export class CompanyService {
     const body: Record<string, unknown> = {
       access_token: accessToken,
       token_type: jkt === undefined ? "Bearer" : "DPoP",
-      expires_in: Math.trunc(this.config.accessTokenLifetimeSeconds),
+      expires_in: Math.max(1, Math.trunc((expiresAt.getTime() - this.#now().getTime()) / 1000)),
     };
     const asked = new Set(requested);
     const granted = new Set(scopes);
@@ -2858,6 +3544,14 @@ export class CompanyService {
     const issued = await this.#read<IssuedAccessToken>(RecordKinds.accessToken, digest(token));
     if (issued === undefined || this.#passed(issued.expiresAt)) return undefined;
     const grant = await this.#read<AccountGrant>(RecordKinds.refreshToken, issued.family);
+    // A public client's token is held to its sign-in, which its owner lists and revokes: one
+    // whose sign-in is gone, over or ended works no more.
+    if (issued.public === true) {
+      const family = await this.#read<AccountFamily>(RecordKinds.accountFamily, issued.family);
+      if (grant === undefined || this.#passed(grant.expiresAt) || family === undefined || family.revoked) {
+        return undefined;
+      }
+    }
     if (grant === undefined) {
       // Its sign-in's records are gone (expired, deleted): nothing to hold it to.
       if ((await this.#signedOutBefore(issued.accountId)) !== undefined) return undefined;
@@ -2875,7 +3569,9 @@ export class CompanyService {
    * still offered, and the client policy still allows its agent, and this service for it. A token for another resource, the default token among them, is
    * `undefined`: the service answers `invalid_token` with its `resource_metadata`
    * (`resourceMetadataUrl`). The record says whose it is (`accountId`), which agent holds it
-   * (`clientId`) and its `scopes`, which the service enforces.
+   * (`clientId`) and its `scopes`, which the service enforces. With `publicClients`, the
+   * record's `public` says the token is a public client's (an MCP client's), never a personal
+   * agent's: the service gives it no Session and takes no operation approval from it.
    */
   async accessTokenFor(token: string, resource: string): Promise<IssuedAccessToken | undefined> {
     if (!this.config.resourceServers.includes(resource)) {
@@ -2883,12 +3579,15 @@ export class CompanyService {
     }
     const issued = await this.#accessToken(token);
     if (issued === undefined || issued.resource !== resource || !this.#offers(issued.scopes)) return undefined;
+    // A public client's (`public` on the record): only while the company takes public clients,
+    // for a service and scopes it gives them.
+    if (issued.public === true && !this.#publicTokenWithin(issued.resource, issued.scopes)) return undefined;
     // The client policy, asked now and not only when the token was issued: a blocked agent's
     // tokens stop working at once, and so does one for a service the policy has since left out
     // for this agent (§4.5).
-    if (!(await this.#allowed(issued.clientId)) || !(await this.#resourceAllowed(issued.clientId, resource))) {
-      return undefined;
-    }
+    const allowed =
+      issued.public === true ? await this.#publicAllowed(issued.clientId) : await this.#allowed(issued.clientId);
+    if (!allowed || !(await this.#resourceAllowed(issued.clientId, resource))) return undefined;
     return issued;
   }
 
@@ -2999,41 +3698,60 @@ export class CompanyService {
     }
     const clientId = query.client_id ?? "";
     const redirectUri = query.redirect_uri ?? "";
-    if (!clientId || !(await this.#allowed(clientId))) {
-      return page(400, "This sign-in request is not valid.");
-    }
-    const resolver = firstContribution(this.reactor, ClientResolvers, "client");
-    let metadata: ClientMetadata;
-    try {
-      [metadata] = await resolver.resolve(clientId);
-    } catch {
-      return page(400, "This agent could not be verified.");
-    }
+    if (!clientId) return page(400, "This sign-in request is not valid.");
+    const client = await this.#authorizingClient(clientId);
+    if (client === undefined) return page(400, "This agent could not be verified.");
     // An unknown client or redirect is never redirected to: that would be an open redirector.
     // Exactly, but a loopback redirect URI matches with any port (§4.5, RFC 8252 §7.3).
-    if (!metadata.redirect_uris.some((entry) => redirectUriMatches(entry, redirectUri))) {
+    const matches = client.public ? publicRedirectUriMatches : redirectUriMatches;
+    if (!client.redirectUris.some((entry) => matches(entry, redirectUri))) {
       return page(400, "This sign-in request is not valid.");
     }
     const state = query.state ?? "";
+    const refuse = (error: string): CompanyResponse => {
+      // Anyone registers a client with any HTTPS redirect: answering it an error with no one's
+      // consent would make this endpoint an open redirector (RFC 9700 §4.11.2). The person
+      // sees a page instead.
+      if (!client.verified) return page(400, "This sign-in request is not valid.");
+      return this.#redirect(redirectUri, { error, state });
+    };
     const scopes = words(query.scope);
-    if (query.response_type !== "code") {
-      return this.#redirect(redirectUri, { error: "unsupported_response_type", state });
-    }
-    if (query.code_challenge_method !== "S256" || !query.code_challenge) {
-      return this.#redirect(redirectUri, { error: "invalid_request", state });
-    }
-    if (!scopes.length || scopes.some((scope) => !this.config.offeredScopes.includes(scope))) {
-      return this.#redirect(redirectUri, { error: "invalid_scope", state });
-    }
-    if (!(await this.#signInAllowed(clientId, AUTHORIZATION_CODE_GRANT))) {
-      // Refused sign-in, or this type of it: served signed out (§4.1).
-      return this.#redirect(redirectUri, { error: "unauthorized_client", state });
-    }
-    let granted: readonly string[];
-    try {
-      granted = this.#grantedToAgents(scopes);
-    } catch {
-      return this.#redirect(redirectUri, { error: "invalid_scope", state });
+    if (query.response_type !== "code") return refuse("unsupported_response_type");
+    const codeChallenge = query.code_challenge;
+    if (query.code_challenge_method !== "S256" || !codeChallenge) return refuse("invalid_request");
+    const offered = client.public ? this.config.publicScopes : this.config.offeredScopes;
+    if (!scopes.length || scopes.some((scope) => !offered.includes(scope))) return refuse("invalid_scope");
+    let granted: readonly string[] = scopes;
+    let publicClient: PublicClient | undefined;
+    if (client.public) {
+      if (pushedBy !== undefined || !CODE_CHALLENGE.test(codeChallenge)) return refuse("invalid_request");
+      const resource = Object.hasOwn(query, "resource") ? query.resource : undefined;
+      if (
+        resource === undefined ||
+        !this.#publicResources().includes(resource) ||
+        !(await this.#resourceAllowed(clientId, resource))
+      ) {
+        // The one service the sign-in is for, named here and at the token endpoint (RFC 8707):
+        // never the default token.
+        return refuse("invalid_target");
+      }
+      if (!(await this.#publicSignInAllowed(clientId))) return refuse("unauthorized_client");
+      publicClient = {
+        name: client.name,
+        verified: client.verified,
+        resource,
+        redirectHost: redirectHost(redirectUri),
+      };
+    } else {
+      if (!(await this.#signInAllowed(clientId, AUTHORIZATION_CODE_GRANT))) {
+        // Refused sign-in, or this type of it: served signed out (§4.1).
+        return refuse("unauthorized_client");
+      }
+      try {
+        granted = this.#grantedToAgents(scopes);
+      } catch {
+        return refuse("invalid_scope");
+      }
     }
     const requestId = this.#id("authz");
     const expiresAt = this.#later(10 * 60);
@@ -3047,12 +3765,13 @@ export class CompanyService {
       scopes: granted,
       requested: scopes,
       state,
-      codeChallenge: query.code_challenge,
+      codeChallenge,
       expiresAt: expiresAt.toISOString(),
-      clientName: metadata.client_name,
+      clientName: client.name,
       ...(hosted === undefined ? { browserBinding: digest(browser) } : {}),
       ...(query.prompt === undefined ? {} : { prompt: query.prompt }),
       ...(pushedBy === undefined ? {} : { dpopJkt: pushedBy }),
+      ...(publicClient === undefined ? {} : { public: publicClient }),
     };
     await this.store.put(RecordKinds.authorization, requestId, json(pending), expiry(expiresAt));
     if (hosted !== undefined) {
@@ -3065,12 +3784,34 @@ export class CompanyService {
         },
       };
     }
-    const agent = escapeHtml(metadata.client_name);
-    const agentDomain = escapeHtml(new URL(clientId).hostname);
+    const agent = escapeHtml(client.name);
+    const agentDomain = escapeHtml(clientDomain(clientId));
     const described = scopes
       .map((scope) => `<li>${escapeHtml(this.config.describe(scope))}</li>`)
       .join("");
     const company = escapeHtml(this.config.name);
+    if (publicClient !== undefined) {
+      // A public client: whether its name is verified, and where the browser goes back to, said
+      // before the person decides.
+      const who = publicClient.verified
+        ? `<p><strong>${agent}</strong> (${agentDomain}) asks to:</p>`
+        : `<p><strong>Unverified app.</strong> It calls itself <strong>${agent}</strong>, ` +
+          "and nothing confirms that. It asks to:</p>";
+      return page(
+        200,
+        `<h1>${agent} wants to connect to your ${company} account</h1>` +
+          `<p>Only continue if you asked ${agent} to do this just now.</p>` +
+          `${who}<ul>${described}</ul>` +
+          "<p>If you allow, your browser goes back to " +
+          `<strong>${escapeHtml(publicClient.redirectHost)}</strong>.</p>` +
+          `<form method="post" action="${this.config.authorizationEndpoint}" data-request-id="${requestId}">` +
+          `<input type="hidden" name="request_id" value="${requestId}">` +
+          `<input type="hidden" name="csrf" value="${bound(browser, `consent:${requestId}`)}">` +
+          '<button name="decision" value="allow">Allow</button>' +
+          '<button name="decision" value="deny">Deny</button></form>',
+        `${CONSENT_COOKIE}=${browser}; Path=/; Secure; HttpOnly; SameSite=Strict`,
+      );
+    }
     // The heading names the agent and says it wants to connect, never "Sign in with", and the
     // page says to go on only if the person just asked it to (§10.8; guides, consent pages):
     // anyone can start a sign-in and send someone else the link.
@@ -3086,6 +3827,35 @@ export class CompanyService {
         '<button name="decision" value="deny">Deny</button></form>',
       `${CONSENT_COOKIE}=${browser}; Path=/; Secure; HttpOnly; SameSite=Strict`,
     );
+  }
+
+  /**
+   * Who asks at the authorization endpoint, by its `client_id`; `undefined` when it can't be
+   * verified.
+   *
+   * A URL is a client ID metadata document: a personal agent's when it names its keys, and
+   * otherwise, with `publicClients`, a public client's when it says it authenticates with
+   * nothing. No document is both, so which class a client is of is its own domain's to say, and
+   * never the request's. Anything else is the `client_id` of a client that registered itself.
+   */
+  async #authorizingClient(clientId: string): Promise<AuthorizingClient | undefined> {
+    if (!clientId.startsWith("https://")) {
+      if (!this.config.clientRegistration || !(await this.#publicAllowed(clientId))) return undefined;
+      return this.#registeredClient(clientId);
+    }
+    // The policy before anything is fetched: as a personal agent, then as a public client. A
+    // `client_id` neither allows is never resolved.
+    if (await this.#allowed(clientId)) {
+      const resolver = firstContribution(this.reactor, ClientResolvers, "client");
+      try {
+        const [metadata] = await resolver.resolve(clientId);
+        return { name: metadata.client_name, redirectUris: metadata.redirect_uris, public: false, verified: true };
+      } catch {
+        // No personal agent's document there: a public client's, perhaps.
+      }
+    }
+    if (!this.config.publicClients || !(await this.#publicAllowed(clientId))) return undefined;
+    return this.#verifiedPublicClient(clientId);
   }
 
   /**
@@ -3124,7 +3894,13 @@ export class CompanyService {
    *
    * Who asks (`client_name`, the `client_id` domain), for what (each scope with its
    * `scopeDescriptions` words), until when, and the request's `prompt`; never `state`, PKCE, or
-   * the redirect. Rejects for an unknown, used, or expired request.
+   * the redirect URI. Rejects for an unknown, used, or expired request.
+   *
+   * `client_class` says who asks: a `personal_agent`, or with `publicClients` a `public_client`
+   * (an MCP client). `verified` is false for a public client that registered itself: its
+   * `client_name` is only what it said, and the page says so. `redirect_host` is where the
+   * person's browser goes back to, which the page shows prominently for a public client, with
+   * the `resource` the sign-in is for.
    *
    * The page lists every scope in `scopes`, the ones the account granted this agent before too,
    * and is shown even when it granted them all (§4.2, §10.8): every User of an agent shares its
@@ -3136,6 +3912,10 @@ export class CompanyService {
     options: { readonly accountId?: string } = {},
   ): Promise<{
     readonly request_id: string;
+    readonly client_class: "personal_agent" | "public_client";
+    readonly verified: boolean;
+    readonly redirect_host: string;
+    readonly resource?: string;
     readonly client_name: string;
     readonly client_domain: string;
     readonly heading: string;
@@ -3150,10 +3930,15 @@ export class CompanyService {
     }
     const before =
       options.accountId === undefined ? undefined : await this.#grantedBefore(pending.clientId, options.accountId);
+    const publicClient = pending.public;
     return {
       request_id: requestId,
+      client_class: publicClient === undefined ? "personal_agent" : "public_client",
+      verified: publicClient === undefined || publicClient.verified,
+      redirect_host: redirectHost(pending.redirectUri),
+      ...(publicClient === undefined ? {} : { resource: publicClient.resource }),
       client_name: pending.clientName ?? "",
-      client_domain: new URL(pending.clientId).hostname,
+      client_domain: clientDomain(pending.clientId),
       // What the page starts with and says before the person goes on (§10.8).
       heading: connectHeading(pending.clientName ?? "", this.config.name),
       caution: connectCaution(pending.clientName ?? ""),
@@ -3216,6 +4001,7 @@ export class CompanyService {
       scopes: granted,
       expiresAt: expiresAt.toISOString(),
       ...(pending.dpopJkt === undefined ? {} : { dpopJkt: pending.dpopJkt }),
+      ...(pending.public === undefined ? {} : { public: pending.public }),
     };
     await this.store.put(RecordKinds.code, digest(code), json(issued), expiry(expiresAt));
     return this.#redirectUrl(pending.redirectUri, { code, state: pending.state });
@@ -3252,10 +4038,11 @@ export class CompanyService {
     if (
       issued === undefined ||
       this.#passed(issued.expiresAt) ||
+      issued.public !== undefined ||
       issued.clientId !== clientId ||
       issued.redirectUri !== form.redirect_uri
     ) {
-      // Expired, reused, another agent's, or for another redirect (§4.2).
+      // Expired, reused, a public client's, another agent's, or for another redirect (§4.2).
       throw new Refused(400, "invalid_grant");
     }
     const verifier = createHash("sha256")
@@ -3490,9 +4277,15 @@ export class CompanyService {
   }
 
   async #mcpRoute(request: CompanyRequest, mcp: CompanyMcp): Promise<CompanyResponse> {
-    const session = await this.#mcpCaller(request);
-    // An expired or other-resource token.
-    if (!("sessionKey" in session)) return session;
+    const publicCaller = await this.#publicMcpCaller(request);
+    if (publicCaller !== undefined && "status" in publicCaller) return publicCaller;
+    let session: CallerSession | undefined;
+    if (publicCaller === undefined) {
+      const caller = await this.#mcpCaller(request);
+      // An expired or other-resource token.
+      if (!("sessionKey" in caller)) return caller;
+      session = caller;
+    }
     if (request.method.toUpperCase() !== "POST") {
       return { status: 405, body: { error: "method_not_allowed" }, headers: { Allow: "POST" } };
     }
@@ -3522,13 +4315,94 @@ export class CompanyService {
     } else if (message.method === "tools/list") {
       result = { tools: mcp.tools() };
     } else if (message.method === "tools/call") {
-      const outcome = await this.#mcpTool(session, mcp, params);
+      const outcome =
+        publicCaller !== undefined
+          ? await this.#publicMcpTool(publicCaller, mcp, params)
+          : await this.#mcpTool(session as CallerSession, mcp, params);
       if ("refused" in outcome) return outcome.refused;
       result = outcome.result;
     } else {
       return rpcError(requestId, -32601, "Method not found");
     }
     return { status: 200, body: { jsonrpc: "2.0", id: requestId, result }, headers: {} };
+  }
+
+  /**
+   * A public client at the MCP server: its token alone, and no Session (§7).
+   *
+   * `undefined` for any other request, which is a personal agent's and is checked as one: one
+   * with a Session header, whatever token it carries, and one whose token is not a public
+   * client's. A public client's token works here only when it was issued for this server,
+   * within what the company gives public clients now, and the client policy still allows its
+   * client and this service for it.
+   */
+  async #publicMcpCaller(request: CompanyRequest): Promise<IssuedAccessToken | CompanyResponse | undefined> {
+    if (!(this.config.publicClients && this.config.oauth)) return undefined;
+    if (request.headers[SESSION_HEADER]) return undefined;
+    const [scheme, presented] = (request.headers.authorization ?? "").split(" ");
+    if ((scheme ?? "").toLowerCase() !== "bearer" || !presented) return undefined;
+    if ((request.headers.authorization ?? "").split(" ").length !== 2) return undefined;
+    const issued = await this.#accessToken(presented);
+    if (issued?.public !== true) return undefined;
+    if (
+      issued.resource !== this.config.mcpUrl ||
+      !this.#offers(issued.scopes) ||
+      !this.#publicTokenWithin(issued.resource, issued.scopes) ||
+      !(await this.#publicAllowed(issued.clientId)) ||
+      !(await this.#resourceAllowed(issued.clientId, this.config.mcpUrl))
+    ) {
+      return this.#mcpRefusal(401, "invalid_token");
+    }
+    const exchange = exchanges.getStore();
+    if (exchange !== undefined) exchange.clientId = issued.clientId;
+    const limit = optionalContribution(this.reactor, CompanyRateLimits, "rate limit");
+    if (limit !== undefined) {
+      const wait = await limit.admit(issued.clientId, issued.accountId);
+      if (wait !== undefined) throw new RateLimitedRefusal(Math.max(1, Math.trunc(wait)));
+    }
+    return issued;
+  }
+
+  /**
+   * A tool called by a public client: with its account and scopes, and no Session.
+   *
+   * An action that needs the person's approval is not done and returns no operation: operations
+   * are approved by a personal agent in its Session (Operations 6), and a public client has
+   * neither.
+   */
+  async #publicMcpTool(
+    issued: IssuedAccessToken,
+    mcp: CompanyMcp,
+    params: Readonly<Record<string, unknown>>,
+  ): Promise<{ readonly result: Record<string, unknown> } | { readonly refused: CompanyResponse }> {
+    const name = params.name;
+    const args = params.arguments ?? {};
+    if (typeof name !== "string" || !isObject(args)) {
+      return { refused: rpcError(null, -32602, "Invalid params") };
+    }
+    const answer = await mcp.call(name, args, {
+      method: "TOOL",
+      path: name,
+      query: {},
+      body: args,
+      accountId: issued.accountId,
+      scopes: issued.scopes,
+      clientId: issued.clientId,
+      carriesApproval: false,
+    });
+    if (answer.refusal !== undefined) {
+      const [status, error, scope] = answer.refusal;
+      return { refused: this.#mcpRefusal(status, error, scope) };
+    }
+    if (answer.operation !== undefined) {
+      return { result: { content: [{ type: "text", text: PUBLIC_NEEDS_APPROVAL }], isError: true } };
+    }
+    const result: Record<string, unknown> = {
+      content: [{ type: "text", text: answer.text ?? JSON.stringify(answer.structured ?? {}) }],
+    };
+    if (answer.structured !== undefined) result.structuredContent = answer.structured;
+    if (answer.isError === true) result.isError = true;
+    return { result };
   }
 
   async #mcpTool(
@@ -3665,6 +4539,11 @@ export class CompanyService {
     let issued: IssuedAccessToken | undefined;
     if (presented !== undefined) {
       issued = await this.#accessToken(presented);
+      if (issued?.public === true) {
+        // A public client's token is for its one service, used without a Session: the
+        // protocol's endpoints take it from no one, whatever header comes with it.
+        throw new Refused(401, "invalid_token");
+      }
       if (issued !== undefined && issued.clientId !== verified.clientId) {
         // Issued to another agent than the Session JWT's (§5.3).
         throw new SessionError("invalid_session", "Token of another agent", { statusCode: 400 });

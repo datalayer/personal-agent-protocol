@@ -20,7 +20,7 @@ import httpx
 from reactor import PluginManifest, PluginPlatform, hookimpl  # type: ignore[import-untyped]
 
 from ..identity import AgentIdentityClient
-from ..models import ClientMetadata, JsonWebKeySet
+from ..models import ClientMetadata, JsonWebKeySet, PublicClientMetadata
 from ..reactor import (
     CLOCKS,
     AddressResolver,
@@ -66,6 +66,7 @@ from .points import (
     OperationOutcomeUnknown,
     OperatorDirectory,
     ProposedOperation,
+    PublicClientResolver,
     RateLimit,
     Reply,
     SignInContext,
@@ -83,6 +84,7 @@ from .service import (
     CompanyService,
     ConsentDecision,
     OpenWork,
+    PublicClientSignIn,
     StaleConversationError,
     resource_metadata_url,
 )
@@ -104,6 +106,12 @@ class IdentityClientResolver:
         return await self.identity.fetch_metadata(client_id), await self.identity.fetch_jwks(
             client_id, kid=kid
         )
+
+    async def resolve_public(self, client_id: str) -> PublicClientMetadata:
+        """A public client's client ID metadata document, cached: fetched as a personal
+        agent's is, and refused when it names a key."""
+
+        return await self.identity.fetch_public_metadata(client_id)
 
 
 class IdentityOperatorDirectory:
@@ -183,7 +191,7 @@ def build_company(
     reactor.register_plugin(
         PluginManifest(
             name="personal-agent-protocol.company",
-            version="0.37.3",
+            version="0.37.5",
             contribution_points=[
                 COMPANY_STORES.id,
                 COMPANY_ACCOUNTS.id,
@@ -259,6 +267,8 @@ __all__ = [
     "OperationOutcomeUnknown",
     "OperatorDirectory",
     "ProposedOperation",
+    "PublicClientResolver",
+    "PublicClientSignIn",
     "RateLimit",
     "ReactorClock",
     "Reply",

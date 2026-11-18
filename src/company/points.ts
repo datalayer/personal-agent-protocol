@@ -39,7 +39,15 @@ import { defineContributionPoint } from "@datalayer/reactor";
 
 import type { JWK } from "jose";
 
-import type { Alternative, Approval, ClientMetadata, JsonWebKeySet, Link, Operation } from "../models.js";
+import type {
+  Alternative,
+  Approval,
+  ClientMetadata,
+  JsonWebKeySet,
+  Link,
+  Operation,
+  PublicClientMetadata,
+} from "../models.js";
 import type { SecretValue } from "../secret.js";
 import { RecordKinds, type CompanyStore } from "./store.js";
 
@@ -241,6 +249,12 @@ export interface ClientPolicy {
    */
   allowsSignIn?(clientId: string, grantType: string): Promise<boolean>;
   /**
+   * With `publicClients`, a policy may answer for clients that are no personal agents apart: a
+   * company that lists the personal agents it serves takes public clients all the same, or
+   * none. Without the method, `allows` answers for both classes.
+   */
+  allowsPublic?(clientId: string): Promise<boolean>;
+  /**
    * A sign-in covers every resource the company offers personal agents (§4.5): with this method
    * a policy may leave a service out, for every agent or by `clientId`, and a token request for
    * it is `invalid_target`. `resource` is the service's (the MCP server's `url`, the conversation
@@ -278,6 +292,14 @@ export interface ClientResolver {
     clientId: string,
     options?: { readonly kid?: string },
   ): Promise<readonly [ClientMetadata, JsonWebKeySet]>;
+  /**
+   * What a resolver adds to verify a public client by its domain: the client ID metadata
+   * document of a client that is no personal agent (an MCP client), one that says
+   * `token_endpoint_auth_method` is `none` and names no key. It fetches as `resolve` does, never
+   * a private address. A resolver without it verifies no public client: with `publicClients`,
+   * only those that registered themselves sign in.
+   */
+  resolvePublic?(clientId: string): Promise<PublicClientMetadata>;
 }
 
 /**

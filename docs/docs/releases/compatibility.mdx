@@ -4,7 +4,7 @@ title: Compatibility
 
 # Compatibility
 
-This page is versioned with the SDK: it describes **SDK 0.37.3**.
+This page is versioned with the SDK: it describes **SDK 0.37.5**.
 
 ## The PAP version implemented
 
@@ -35,6 +35,8 @@ profile, never picked up from an unattended fetch.
 
 | SDK (PyPI and npm) | PAP profile | Specification revision | Operations | Breaking changes |
 | --- | --- | --- | --- | --- |
+| `0.37.5` | `0.4` | 2026-11-10 | v3 | none: a client that registers itself (`client_registration`) is registered as a public client whatever `token_endpoint_auth_method` it asked for among `none`, `client_secret_post`, `client_secret_basic` or none at all, and told `none`; a request that sends a client secret is refused |
+| `0.37.4` | `0.4` | 2026-11-10 | v3 | none: a company may let clients that are no personal agents sign in (`public_clients`: MCP clients, with PKCE alone, verified by their client ID metadata document or registered at `/oauth/register` with `client_registration`), for tokens that work at one service and at no endpoint of the protocol; off by default |
 | `0.37.3` | `0.4` | 2026-11-10 | v3 | none: a company names its services at URLs of their own (`resource_servers`, an MCP server on another host), which its issuer lists in `protected_resources` and issues Bearer tokens for, and which verify them with `access_token_for` |
 | `0.37.2` | `0.4` | 2026-11-10 | v3 | none: opening a sign-in link reads its record without consuming it (the state store's optional `get`), a link begun by 0.37.0 still opens after an upgrade, and the Direct Sign-In start names its `state` for hosts whose redirect lands elsewhere |
 | `0.37.1` | `0.4` | 2026-11-10 | v3 | none: a bound refresh token keeps its sign-in at a Bearer-only MCP server, `open_link` leaves the callback state to `complete`, an empty SSE event name is a message, and `effectiveContext` keeps a `__proto__` field as a field |

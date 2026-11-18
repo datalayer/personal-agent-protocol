@@ -6,6 +6,76 @@
 
 # Changelog
 
+## 0.37.5 (2026-11-18)
+
+A client that registers itself is registered as a public client, whatever it asked for. In
+both SDKs; it concerns only a company with `client_registration` on.
+
+- **`POST /oauth/register` takes `token_endpoint_auth_method` left out, `none`,
+  `client_secret_post` or `client_secret_basic`**, registers a public client each time, and
+  says so: the response's `token_endpoint_auth_method` is `none`, with no `client_secret` and
+  no `client_secret_expires_at` (RFC 7591 §3.2.1: the server may replace what was requested,
+  and the client uses what is returned). 0.37.4 registered only a client that said `none`
+  itself, which refused MCP clients whose SDK leaves the method out or defaults to a secret.
+- **Unchanged:** a registration that names a `client_secret`, `jwks` or `jwks_uri` of its
+  own is refused, so a personal agent can't register as a public client; any other method
+  (`private_key_jwt`, an unknown one, one that is no text) is refused; grant types are
+  `authorization_code` and `refresh_token`; PKCE `S256` is mandatory; the redirect rules.
+  A client ID metadata document still says `none` itself.
+- **A request that carries a client secret is refused.** A token or revocation request
+  without a client assertion that sends `client_secret`, in its form or as HTTP Basic, is
+  `invalid_client` with a description saying the client has none. No secret is issued,
+  checked, or ignored: a request is never served as if a secret had been right. It is
+  refused before the code or the refresh token is looked at, so it spends nothing.
+
+## 0.37.4 (2026-11-18)
+
+Clients that are no personal agents. In both SDKs; additive API only, off by default, and a
+company that turns nothing on behaves exactly as before.
+
+- **`public_clients` (`publicClients`) on `CompanyConfig`** (spec 7: MCP clients sign in with
+  MCP's own OAuth flow). A public client, such as an MCP client, authenticates with nothing but
+  PKCE (S256) at Direct Sign-In's authorization endpoint. It is either verified by its domain,
+  a client ID metadata document that says `token_endpoint_auth_method` is `none` and names no
+  key, read by the client resolver's new optional `resolve_public` (`resolvePublic`); or, with
+  **`client_registration` (`clientRegistration`)**, registered at `POST /oauth/register`
+  (RFC 7591), unverified. A document that names a key is a personal agent's and no document is
+  both, so a personal agent can't skip its assertion. Guide: guides/company, *Other clients
+  than personal agents*.
+- **One service, and nothing of the protocol.** A public client's token is a Bearer token for
+  one of `resource_servers` or the company's own MCP server, named as `resource` in every
+  request; never the default token. It is refused at every endpoint of the protocol, with or
+  without a Session header; at the MCP server it calls tools with no Session, and a tool that
+  needs approval returns no operation. `access_token_for` (`accessTokenFor`) returns such a
+  token's record with `public` true, and asks the client policy as before. Scopes are
+  `public_client_scopes` (`publicClientScopes`), never `poppy:browser-sign-in`.
+- **Refresh tokens** of a public client are rotated at every use and one used twice ends the
+  sign-in whole, whatever `refresh_reuse_revokes` says; a sign-in lasts
+  `public_client_refresh_lifetime` (`publicClientRefreshLifetimeSeconds`, 30 days) from the
+  consent, and no access token of it outlives it.
+- **Redirect URIs** of a public client are loopback or HTTPS, written without user
+  information, fragment, backslash or space, compared as text, exactly but for a loopback
+  port (`public_redirect_uri`, `public_redirect_uri_matches`). An unverified client's errors
+  are pages, never redirects.
+- **For a consent page**: `authorization_request` (`authorizationRequest`) adds `client_class`
+  (`personal_agent` or `public_client`), `verified`, `redirect_host`, and `resource` for a
+  public client. The company's own page says when a client is unverified and where the
+  browser goes back to.
+- **Registration is bounded**: the host's rate limit is asked with `registration:{address}`,
+  then `client_registrations_per_hour` (10) for each address; a client that never signs in is
+  forgotten after an hour. A token or revocation request without an assertion asks the host's
+  rate limit with `public:{address}` before its client is looked at. `CompanyRequest` has an
+  optional `client_address` (`clientAddress`), which the ASGI and Node adapters fill with the
+  peer's.
+- **The client policy** may answer for public clients apart, with an optional
+  `allows_public(client_id)` (`allowsPublic`); without it, `allows` answers for both classes.
+- **For the company's owner**: `public_client_sign_ins` (`publicClientSignIns`) and
+  `revoke_public_client_sign_in` (`revokePublicClientSignIn`).
+- The issuer's metadata gains `none` in `token_endpoint_auth_methods_supported` and
+  `authorization_response_iss_parameter_supported` only with `public_clients`, and
+  `registration_endpoint` only with `client_registration`. New record kinds `public_client` and
+  `registration_count`; a personal agent's records are written as before.
+
 ## 0.37.3 (2026-11-18)
 
 A company's services at URLs of their own. In both SDKs; additive API only, and a company that

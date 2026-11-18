@@ -33,6 +33,8 @@ import {
   type AccountGrant,
   type CompanyStore,
   type DelegatedKeyUse,
+  type RegisteredClient,
+  type RegistrationCount,
   type IdempotencyRecord,
   type IssuedAccessToken,
   type IssuedCode,
@@ -247,6 +249,13 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
       body: { summary: "Exchanged." },
     } satisfies IdempotencyRecord,
     [RecordKinds.delegatedKey]: { sub: "usr_1" } satisfies DelegatedKeyUse,
+    [RecordKinds.publicClient]: {
+      clientId: "mcpc_Yx2b7Qd_Kp8mR3vT1nWc4A",
+      clientName: "An MCP client",
+      redirectUris: ["http://127.0.0.1/callback", "https://client.example/callback"],
+      registeredAt: now.toISOString(),
+    } satisfies RegisteredClient,
+    [RecordKinds.registrationCount]: { count: 3 } satisfies RegistrationCount,
   };
   return records as Readonly<Record<string, JsonObject>>;
 }

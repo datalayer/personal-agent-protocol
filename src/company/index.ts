@@ -26,7 +26,7 @@ import type { JWK } from "jose";
 
 import { AgentIdentityClient } from "../identity.js";
 import { createResolvingFetch } from "../node-network.js";
-import type { ClientMetadata, JsonWebKeySet } from "../models.js";
+import type { ClientMetadata, JsonWebKeySet, PublicClientMetadata } from "../models.js";
 import {
   Clocks,
   buildPapReactor,
@@ -81,6 +81,16 @@ export class IdentityClientResolver implements ClientResolver {
       await identity.fetchJwks(clientId, options.kid === undefined ? {} : { kid: options.kid }),
     ];
   }
+
+  /**
+   * A public client's client ID metadata document, cached: fetched as a personal agent's is,
+   * and refused when it names a key.
+   */
+  async resolvePublic(clientId: string): Promise<PublicClientMetadata> {
+    const identity = this.#identity;
+    if (identity === undefined) throw new Error("IdentityClientResolver is not bound");
+    return identity.fetchPublicMetadata(clientId);
+  }
 }
 
 /** Read an operator's published keys over HTTPS (§5.3, Web Bot Auth §5.5). */
@@ -127,7 +137,7 @@ export function createCompanyDefaultsPlugin(
 ) {
   return definePlugin({
     name: "personal-agent-protocol.company",
-    version: "0.37.3",
+    version: "0.37.5",
     contributionPoints: [
       CompanyStores,
       CompanyAccounts,

@@ -319,12 +319,22 @@ _REGISTRATION_WINDOW = timedelta(hours=1)
 #: How long a registration is kept before its client first signs in: long enough to
 #: register and then ask the person, short enough that clients nobody used don't pile up.
 _REGISTRATION_UNUSED = timedelta(hours=1)
-#: What a registration that is not a public client's is told: exactly what to send.
+#: The methods a registration may ask for: each is registered as a public client, and
+#: the response says so (RFC 7591 §3.2.1: the server may replace what was requested, and
+#: the client uses what is returned). Left out, the same.
+_REGISTERED_AS_PUBLIC = frozenset({"none", "client_secret_post", "client_secret_basic"})
+#: What a registration that can't be a public client's is told: exactly what to send.
 _REGISTER_AS_PUBLIC = (
-    'Only public clients register here. Send "token_endpoint_auth_method": "none" '
-    "(it is not assumed when left out, and no other method is taken), with no "
-    '"client_secret", "jwks" or "jwks_uri"; sign in with the authorization code grant '
-    "and PKCE (S256)."
+    "Every client registered here is a public client: it gets no secret, whatever "
+    'method it asked for, and the response says "token_endpoint_auth_method": "none". '
+    'Leave the method out or send "none", with no "client_secret", "jwks" or '
+    '"jwks_uri"; sign in with the authorization code grant and PKCE (S256).'
+)
+#: What a request that carries a client secret is told: no client here has one.
+_PUBLIC_CLIENT_SENDS_NONE = (
+    "This client has no secret: it was registered as a public client "
+    '("token_endpoint_auth_method": "none"). Send its client_id and no client_secret, '
+    "with PKCE."
 )
 #: What a public client asking for an action that needs approval is told: operations are
 #: approved by a personal agent in its Session, and a public client has neither.
@@ -2177,6 +2187,7 @@ class CompanyService:
         """
 
         await self._public_admitted(request)
+        self._no_client_secret(request, form)
         client_id = form.get("client_id", "")
         client = await self._public_client(client_id)
         grant = form.get("grant_type")
@@ -2215,6 +2226,20 @@ class CompanyService:
         )
         if wait is not None:
             raise _RateLimitedError(max(1, int(wait)))
+
+    @staticmethod
+    def _no_client_secret(request: CompanyRequest, form: Mapping[str, str]) -> None:
+        """Refuse a request without an assertion that carries a client secret, in its form
+        (`client_secret_post`) or as HTTP Basic (`client_secret_basic`).
+
+        No client here has a secret, and none is ever checked: a request that sends one
+        is refused, never served as if the secret had been right. A client that
+        registered asking for a secret was told `none`, and uses what it was told.
+        """
+
+        scheme = request.headers.get("authorization", "").partition(" ")[0].lower()
+        if "client_secret" in form or scheme == "basic":
+            raise _RefusedError(401, "invalid_client", error_description=_PUBLIC_CLIENT_SENDS_NONE)
 
     def _public_resources(self) -> tuple[str, ...]:
         """The services a public client gets tokens for: `resource_servers`, and the MCP
@@ -2811,6 +2836,7 @@ class CompanyService:
         if self._unauthenticated(form):
             # A public client revokes its own sign-in with the refresh token it holds.
             await self._public_admitted(request)
+            self._no_client_secret(request, form)
             client_id = form.get("client_id", "")
             await self._public_client(client_id)
             public = True
@@ -3173,11 +3199,13 @@ class CompanyService:
     async def _register(self, request: CompanyRequest) -> CompanyResponse:
         """`POST /oauth/register` (RFC 7591): a public client registers itself.
 
-        Rate-limited by address before anything is read. Only a public client: its
-        `token_endpoint_auth_method` is `none`, said and not assumed, and it names no
-        key and no secret. Its redirect URIs are loopback or HTTPS
-        (`models.public_redirect_uri`). It gets a `client_id` and no secret; what it
-        said of itself is kept, never verified, and shown as such.
+        Rate-limited by address before anything is read. Every client registered is a
+        public client, whatever it asked for: `token_endpoint_auth_method` left out,
+        `none`, `client_secret_post` or `client_secret_basic` is answered `none`, with
+        no secret (RFC 7591 §3.2.1). One that names a key or a secret of its own, or
+        another method, is refused. Its redirect URIs are loopback or HTTPS
+        (`models.public_redirect_uri`). It gets a `client_id`; what it said of itself
+        is kept, never verified, and shown as such.
         """
 
         await self._registration_admitted(request.client_address)
@@ -3212,8 +3240,14 @@ class CompanyService:
             raise invalid("the registration is a JSON object") from exc
         if not isinstance(body, dict):
             raise invalid("the registration is a JSON object")
-        if body.get("token_endpoint_auth_method") != "none" or any(
-            member in body for member in ("jwks", "jwks_uri", "client_secret")
+        # A key or a secret of its own is no public client's: a personal agent can't pass
+        # itself off as one. Any method that only says how a secret would be sent is
+        # registered as public all the same, and told so; any other is refused.
+        method = body.get("token_endpoint_auth_method", "none")
+        if (
+            any(member in body for member in ("jwks", "jwks_uri", "client_secret"))
+            or not isinstance(method, str)
+            or method not in _REGISTERED_AS_PUBLIC
         ):
             raise invalid(_REGISTER_AS_PUBLIC)
         grants = body.get("grant_types", [AUTHORIZATION_CODE_GRANT])

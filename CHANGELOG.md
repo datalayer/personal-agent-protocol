@@ -6,6 +6,28 @@
 
 # Changelog
 
+## 0.37.5 (2026-11-18)
+
+A client that registers itself is registered as a public client, whatever it asked for. In
+both SDKs; it concerns only a company with `client_registration` on.
+
+- **`POST /oauth/register` takes `token_endpoint_auth_method` left out, `none`,
+  `client_secret_post` or `client_secret_basic`**, registers a public client each time, and
+  says so: the response's `token_endpoint_auth_method` is `none`, with no `client_secret` and
+  no `client_secret_expires_at` (RFC 7591 §3.2.1: the server may replace what was requested,
+  and the client uses what is returned). 0.37.4 registered only a client that said `none`
+  itself, which refused MCP clients whose SDK leaves the method out or defaults to a secret.
+- **Unchanged:** a registration that names a `client_secret`, `jwks` or `jwks_uri` of its
+  own is refused, so a personal agent can't register as a public client; any other method
+  (`private_key_jwt`, an unknown one, one that is no text) is refused; grant types are
+  `authorization_code` and `refresh_token`; PKCE `S256` is mandatory; the redirect rules.
+  A client ID metadata document still says `none` itself.
+- **A request that carries a client secret is refused.** A token or revocation request
+  without a client assertion that sends `client_secret`, in its form or as HTTP Basic, is
+  `invalid_client` with a description saying the client has none. No secret is issued,
+  checked, or ignored: a request is never served as if a secret had been right. It is
+  refused before the code or the refresh token is looked at, so it spends nothing.
+
 ## 0.37.4 (2026-11-18)
 
 Clients that are no personal agents. In both SDKs; additive API only, off by default, and a

@@ -979,14 +979,20 @@ async def test_only_a_public_client_registers() -> None:
     assert body["response_types"] == ["code"]
     assert "client_secret" not in body and "registration_access_token" not in body
     assert (await register(world, client_name=None)).status_code == 400
-    # A client that leaves the method out, or names another, is told exactly what to send.
-    for method in (None, "client_secret_post"):
-        told = (await register(world, token_endpoint_auth_method=method)).json()
+    # Another method, a null one, or a key or a secret of its own: told exactly what to send.
+    for changes in (
+        {"token_endpoint_auth_method": "private_key_jwt"},
+        {"token_endpoint_auth_method": None},
+        {"client_secret": "s3cret"},
+    ):
+        told = (await register(world, **changes)).json()
         assert told["error"] == "invalid_client_metadata"
         assert '"token_endpoint_auth_method": "none"' in told["error_description"]
 
     refusals: list[tuple[dict[str, object], str]] = [
-        ({"token_endpoint_auth_method": "client_secret_basic"}, "invalid_client_metadata"),
+        ({"token_endpoint_auth_method": "tls_client_auth"}, "invalid_client_metadata"),
+        ({"token_endpoint_auth_method": "NONE"}, "invalid_client_metadata"),
+        ({"token_endpoint_auth_method": "client_secret_jwt"}, "invalid_client_metadata"),
         ({"token_endpoint_auth_method": "private_key_jwt"}, "invalid_client_metadata"),
         ({"token_endpoint_auth_method": None}, "invalid_client_metadata"),
         ({"jwks_uri": "https://pocket.example/jwks.json"}, "invalid_client_metadata"),
@@ -1028,6 +1034,78 @@ async def test_only_a_public_client_registers() -> None:
             f"{SHOP}/oauth/register", content=content, headers={"content-type": "application/json"}
         )
         assert refused.status_code == 400, content[:10]
+
+
+@pytest.mark.asyncio
+async def test_whatever_method_a_registration_asks_for_it_is_registered_as_public() -> None:
+    """RFC 7591 §3.2.1: the server may replace what was requested, and the client uses
+    what is returned. Left out, `none`, or a method that only says how a secret would be
+    sent: a public client each time, told so, with no secret."""
+
+    world = public_world(client_registrations_per_hour=1000)
+    asked: tuple[dict[str, object], ...] = (
+        {},
+        {"token_endpoint_auth_method": "none"},
+        {"token_endpoint_auth_method": "client_secret_post"},
+        {"token_endpoint_auth_method": "client_secret_basic"},
+    )
+    for method in asked:
+        body = {"client_name": "Pocket MCP", "redirect_uris": [LOOPBACK], **method}
+        answer = await world.http.post(f"{SHOP}/oauth/register", json=body)
+        assert answer.status_code == 201, (method, answer.text)
+        said = answer.json()
+        assert said["token_endpoint_auth_method"] == "none", method
+        assert "client_secret" not in said and "client_secret_expires_at" not in said, method
+        assert said["grant_types"] == ["authorization_code", "refresh_token"]
+        # It signs in as any public client does: PKCE, and no secret.
+        tokens = await sign_in(world, said["client_id"])
+        assert tokens["token_type"] == "Bearer"
+        assert (await mcp(world, tokens["access_token"], LIST_TOOLS)).status_code == 200
+    # None of them is anything but a public client's record.
+    for record in await world.shop.store.records("public_client"):
+        assert set(record.value) == {"client_id", "client_name", "redirect_uris", "registered_at"}
+
+
+@pytest.mark.asyncio
+async def test_a_secret_sent_at_the_token_endpoint_is_refused_never_taken() -> None:
+    """No client has one. A request that sends one, in its form or as HTTP Basic, is
+    refused and told why: it is never served as if the secret had been right, and it
+    spends neither the code nor the refresh token."""
+
+    world = public_world()
+    client_id = await registered(world, **{"token_endpoint_auth_method": "client_secret_post"})
+    code = await code_for(world, client_id, LOOPBACK)
+    form = {
+        "grant_type": "authorization_code",
+        "client_id": client_id,
+        "code": code,
+        "redirect_uri": LOOPBACK,
+        "code_verifier": pkce()[0],
+        "resource": MCP,
+    }
+    basic = {"authorization": "Basic " + base64.b64encode(f"{client_id}:guess".encode()).decode()}
+    for refused in (
+        await token(world, **form, **{"client_secret": "guess"}),
+        await world.http.post(f"{SHOP}/oauth/token", data=form, headers=basic),
+    ):
+        assert (refused.status_code, refused.json()["error"]) == (401, "invalid_client")
+        assert "no secret" in refused.json()["error_description"]
+    # The code was not spent: the same request without a secret signs in.
+    signed_in_ = await token(world, **form)
+    assert signed_in_.status_code == 200, signed_in_.text
+    tokens = signed_in_.json()
+    with_secret = await refresh(
+        world, client_id, tokens["refresh_token"], **{"client_secret": "guess"}
+    )
+    assert (with_secret.status_code, with_secret.json()["error"]) == (401, "invalid_client")
+    revoking = await world.http.post(
+        f"{SHOP}/oauth/revoke",
+        data={"client_id": client_id, "token": tokens["refresh_token"], "client_secret": "guess"},
+    )
+    assert revoking.status_code == 401
+    # Neither spent the refresh token nor ended the sign-in.
+    assert (await mcp(world, tokens["access_token"], LIST_TOOLS)).status_code == 200
+    assert (await refresh(world, client_id, tokens["refresh_token"])).status_code == 200
 
 
 @pytest.mark.asyncio

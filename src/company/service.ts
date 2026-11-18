@@ -1495,12 +1495,23 @@ const REGISTRATION_WINDOW_SECONDS = 60 * 60;
  * then ask the person, short enough that clients nobody used don't pile up.
  */
 const REGISTRATION_UNUSED_SECONDS = 60 * 60;
-/** What a registration that is not a public client's is told: exactly what to send. */
+/**
+ * The methods a registration may ask for: each is registered as a public client, and the
+ * response says so (RFC 7591 §3.2.1: the server may replace what was requested, and the client
+ * uses what is returned). Left out, the same.
+ */
+const REGISTERED_AS_PUBLIC = new Set(["none", "client_secret_post", "client_secret_basic"]);
+/** What a registration that can't be a public client's is told: exactly what to send. */
 const REGISTER_AS_PUBLIC =
-  'Only public clients register here. Send "token_endpoint_auth_method": "none" ' +
-  "(it is not assumed when left out, and no other method is taken), with no " +
-  '"client_secret", "jwks" or "jwks_uri"; sign in with the authorization code grant ' +
-  "and PKCE (S256).";
+  "Every client registered here is a public client: it gets no secret, whatever " +
+  'method it asked for, and the response says "token_endpoint_auth_method": "none". ' +
+  'Leave the method out or send "none", with no "client_secret", "jwks" or ' +
+  '"jwks_uri"; sign in with the authorization code grant and PKCE (S256).';
+/** What a request that carries a client secret is told: no client here has one. */
+const NO_CLIENT_SECRET =
+  "This client has no secret: it was registered as a public client " +
+  '("token_endpoint_auth_method": "none"). Send its client_id and no client_secret, ' +
+  "with PKCE.";
 /**
  * What a public client asking for an action that needs approval is told: operations are
  * approved by a personal agent in its Session, and a public client has neither.
@@ -2411,6 +2422,7 @@ export class CompanyService {
    */
   async #publicToken(request: CompanyRequest, form: Readonly<Record<string, string>>): Promise<CompanyResponse> {
     await this.#publicAdmitted(request);
+    this.#noClientSecret(request, form);
     const clientId = form.client_id ?? "";
     const client = await this.#publicClient(clientId);
     const grant = form.grant_type;
@@ -2448,6 +2460,21 @@ export class CompanyService {
     if (limit === undefined) return;
     const wait = await limit.admit(`public:${request.clientAddress || "unknown"}`, undefined);
     if (wait !== undefined) throw new RateLimitedRefusal(Math.max(1, Math.trunc(wait)));
+  }
+
+  /**
+   * Refuse a request without an assertion that carries a client secret, in its form
+   * (`client_secret_post`) or as HTTP Basic (`client_secret_basic`).
+   *
+   * No client here has a secret, and none is ever checked: a request that sends one is refused,
+   * never served as if the secret had been right. A client that registered asking for a secret
+   * was told `none`, and uses what it was told.
+   */
+  #noClientSecret(request: CompanyRequest, form: Readonly<Record<string, string>>): void {
+    const scheme = (request.headers.authorization ?? "").split(" ")[0]?.toLowerCase();
+    if (Object.hasOwn(form, "client_secret") || scheme === "basic") {
+      throw new Refused(401, "invalid_client", { error_description: NO_CLIENT_SECRET });
+    }
   }
 
   /**
@@ -3002,10 +3029,12 @@ export class CompanyService {
   /**
    * `POST /oauth/register` (RFC 7591): a public client registers itself.
    *
-   * Rate-limited by address before anything is read. Only a public client: its
-   * `token_endpoint_auth_method` is `none`, said and not assumed, and it names no key and no
-   * secret. Its redirect URIs are loopback or HTTPS (`publicRedirectUri`). It gets a `client_id`
-   * and no secret; what it said of itself is kept, never verified, and shown as such.
+   * Rate-limited by address before anything is read. Every client registered is a public
+   * client, whatever it asked for: `token_endpoint_auth_method` left out, `none`,
+   * `client_secret_post` or `client_secret_basic` is answered `none`, with no secret (RFC 7591
+   * §3.2.1). One that names a key or a secret of its own, or another method, is refused. Its
+   * redirect URIs are loopback or HTTPS (`publicRedirectUri`). It gets a `client_id`; what it
+   * said of itself is kept, never verified, and shown as such.
    */
   async #register(request: CompanyRequest): Promise<CompanyResponse> {
     await this.#registrationAdmitted(request.clientAddress);
@@ -3038,9 +3067,14 @@ export class CompanyService {
     }
     if (!isObject(parsed)) throw invalid("the registration is a JSON object");
     const body = parsed;
+    // A key or a secret of its own is no public client's: a personal agent can't pass itself
+    // off as one. Any method that only says how a secret would be sent is registered as public
+    // all the same, and told so; any other is refused.
+    const method = Object.hasOwn(body, "token_endpoint_auth_method") ? body.token_endpoint_auth_method : "none";
     if (
-      body.token_endpoint_auth_method !== "none" ||
-      ["jwks", "jwks_uri", "client_secret"].some((member) => Object.hasOwn(body, member))
+      ["jwks", "jwks_uri", "client_secret"].some((member) => Object.hasOwn(body, member)) ||
+      typeof method !== "string" ||
+      !REGISTERED_AS_PUBLIC.has(method)
     ) {
       throw invalid(REGISTER_AS_PUBLIC);
     }
@@ -3235,6 +3269,7 @@ export class CompanyService {
     if (isPublic) {
       // A public client revokes its own sign-in with the refresh token it holds.
       await this.#publicAdmitted(request);
+      this.#noClientSecret(request, form);
       clientId = form.client_id ?? "";
       await this.#publicClient(clientId);
     } else {

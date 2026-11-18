@@ -731,12 +731,18 @@ company that leaves it off behaves exactly as before.
   The redirect URIs used from it are the loopback ones and the HTTPS ones on the
   `client_id`'s own host.
 - **Registered itself**, with `client_registration` (`clientRegistration`): `POST
-  /oauth/register` (RFC 7591) gives it a `client_id` that is no URL, and no secret. Only
-  a public client registers: `token_endpoint_auth_method` must be `none`, said and not
-  assumed. A registration that leaves it out (RFC 7591 then means a client with a
-  secret) or names another method, `client_secret_post` among them, is
-  `invalid_client_metadata`, with an `error_description` saying what to send. Nothing
-  verifies what it says of itself, its name least of all.
+  /oauth/register` (RFC 7591) gives it a `client_id` that is no URL, and no secret.
+  Every client registered is a public client, whatever it asked for:
+  `token_endpoint_auth_method` left out, `none`, `client_secret_post` or
+  `client_secret_basic` is registered the same way, and the response says
+  `"token_endpoint_auth_method": "none"` with no `client_secret` (RFC 7591 §3.2.1: the
+  server may replace what was requested, and the client uses what is returned). A
+  registration that names a `client_secret`, `jwks` or `jwks_uri` of its own, or any
+  other method (`private_key_jwt` among them), is `invalid_client_metadata`, with an
+  `error_description` saying what to send: a personal agent can't register as a public
+  client. A token or revocation request that carries a `client_secret`, in its form or
+  as HTTP Basic, is `invalid_client`: no secret is ever issued, checked or ignored.
+  Nothing verifies what a registered client says of itself, its name least of all.
 
 **Redirect URIs** of a public client are `http` to the loopback (`127.0.0.1`, `[::1]`,
 `localhost`) or HTTPS to a host written in small letters, with no user information,

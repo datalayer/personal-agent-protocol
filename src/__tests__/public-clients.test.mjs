@@ -870,15 +870,21 @@ test("only a public client registers", async () => {
   assert.deepEqual(accepted.body.response_types, ["code"]);
   assert.ok(!("client_secret" in accepted.body) && !("registration_access_token" in accepted.body));
   assert.equal((await w.register({ client_name: null })).status, 400);
-  // A client that leaves the method out, or names another, is told exactly what to send.
-  for (const method of [undefined, "client_secret_post"]) {
-    const told = (await w.register({ token_endpoint_auth_method: method })).body;
+  // Another method, a null one, or a key or a secret of its own: told exactly what to send.
+  for (const changes of [
+    { token_endpoint_auth_method: "private_key_jwt" },
+    { token_endpoint_auth_method: null },
+    { client_secret: "s3cret" },
+  ]) {
+    const told = (await w.register(changes)).body;
     assert.equal(told.error, "invalid_client_metadata");
     assert.match(told.error_description, /"token_endpoint_auth_method": "none"/);
   }
 
   const refusals = [
-    [{ token_endpoint_auth_method: "client_secret_basic" }, "invalid_client_metadata"],
+    [{ token_endpoint_auth_method: "tls_client_auth" }, "invalid_client_metadata"],
+    [{ token_endpoint_auth_method: "NONE" }, "invalid_client_metadata"],
+    [{ token_endpoint_auth_method: "client_secret_jwt" }, "invalid_client_metadata"],
     [{ token_endpoint_auth_method: "private_key_jwt" }, "invalid_client_metadata"],
     [{ token_endpoint_auth_method: null }, "invalid_client_metadata"],
     [{ jwks_uri: "https://pocket.example/jwks.json" }, "invalid_client_metadata"],
@@ -920,6 +926,72 @@ test("only a public client registers", async () => {
     const refused = await w.call("POST", "/oauth/register", { raw });
     assert.equal(refused.status, 400, raw.slice(0, 10));
   }
+});
+
+test("whatever method a registration asks for, it is registered as public", async () => {
+  // RFC 7591 §3.2.1: the server may replace what was requested, and the client uses what is
+  // returned. Left out, `none`, or a method that only says how a secret would be sent: a public
+  // client each time, told so, with no secret.
+  const w = await world({ clientRegistrationsPerHour: 1000 });
+  for (const method of [
+    {},
+    { token_endpoint_auth_method: "none" },
+    { token_endpoint_auth_method: "client_secret_post" },
+    { token_endpoint_auth_method: "client_secret_basic" },
+  ]) {
+    const answer = await w.call("POST", "/oauth/register", {
+      json: { client_name: "Pocket MCP", redirect_uris: [LOOPBACK], ...method },
+    });
+    assert.equal(answer.status, 201, JSON.stringify(method));
+    assert.equal(answer.body.token_endpoint_auth_method, "none", JSON.stringify(method));
+    assert.ok(!("client_secret" in answer.body) && !("client_secret_expires_at" in answer.body));
+    assert.deepEqual(answer.body.grant_types, ["authorization_code", "refresh_token"]);
+    // It signs in as any public client does: PKCE, and no secret.
+    const tokens = await w.signIn(answer.body.client_id);
+    assert.equal(tokens.token_type, "Bearer");
+    assert.equal((await w.mcp(tokens.access_token, LIST_TOOLS)).status, 200);
+  }
+  // None of them is anything but a public client's record.
+  for (const record of await w.shop.store.records("public_client")) {
+    assert.deepEqual(Object.keys(record.value).sort(), ["clientId", "clientName", "redirectUris", "registeredAt"]);
+  }
+});
+
+test("a secret sent at the token endpoint is refused, never taken", async () => {
+  // No client has one. A request that sends one, in its form or as HTTP Basic, is refused and
+  // told why: never served as if the secret had been right, and it spends nothing.
+  const w = await world();
+  const clientId = await w.registered({ token_endpoint_auth_method: "client_secret_post" });
+  const code = await w.codeFor(clientId, LOOPBACK);
+  const form = {
+    grant_type: "authorization_code",
+    client_id: clientId,
+    code,
+    redirect_uri: LOOPBACK,
+    code_verifier: VERIFIER,
+    resource: MCP,
+  };
+  const basic = { authorization: `Basic ${Buffer.from(`${clientId}:guess`).toString("base64")}` };
+  for (const refused of [
+    await w.token({ ...form, client_secret: "guess" }),
+    await w.call("POST", "/oauth/token", { form, headers: basic }),
+  ]) {
+    assert.deepEqual([refused.status, refused.body.error], [401, "invalid_client"]);
+    assert.match(refused.body.error_description, /no secret/);
+  }
+  // The code was not spent: the same request without a secret signs in.
+  const signedIn = await w.token(form);
+  assert.equal(signedIn.status, 200, JSON.stringify(signedIn.body));
+  const tokens = signedIn.body;
+  const withSecret = await w.refresh(clientId, tokens.refresh_token, { client_secret: "guess" });
+  assert.deepEqual([withSecret.status, withSecret.body.error], [401, "invalid_client"]);
+  const revoking = await w.call("POST", "/oauth/revoke", {
+    form: { client_id: clientId, token: tokens.refresh_token, client_secret: "guess" },
+  });
+  assert.equal(revoking.status, 401);
+  // Neither spent the refresh token nor ended the sign-in.
+  assert.equal((await w.mcp(tokens.access_token, LIST_TOOLS)).status, 200);
+  assert.equal((await w.refresh(clientId, tokens.refresh_token)).status, 200);
 });
 
 test("a malformed registration is the caller's mistake, never an error of ours", async () => {

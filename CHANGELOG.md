@@ -12,8 +12,7 @@ The cases describe Poppy 1.0. In both SDKs; no change to the code, the API or th
 behaviour.
 
 - **The four case decks** (`@datalayer/personal-agent-protocol/decks`), shown on the docs site
-  and on the Datalayer home page, said draft 0.3. Each now says `Personal Agent Protocol · 1.0 ·
-  a case` and describes its case at 1.0 as published, with version 3 of the Operations
+  and on the Datalayer home page, said draft 0.3. Each now says `Personal Agent Protocol · 1.0 · a case` and describes its case at 1.0 as published, with version 3 of the Operations
   extension: every approval says who approved, the person or the personal agent on an
   instruction the person gave it, and a company may decline an agent's approval (Ledgerly
   declines one for a payment, so Ada is asked about every payment); the company's consent page

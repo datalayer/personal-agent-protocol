@@ -3,9 +3,10 @@
 
 """A Pydantic AI agent showing two companies working together over PAP, by composition.
 
-Draft 0.3 defines no company-to-company protocol. Ledgerly, an accounting firm, is
+Poppy 1.0 defines no company-to-company protocol. Ledgerly, an accounting firm, is
 a PAP company to Ada's personal agent (Atlas) and, for the same Ada, a PAP personal
-agent at Northwind Bank. Every approval is an Operation, and Ada is asked about each.
+agent at Northwind Bank. Every approval is an Operation that says who approved, and
+Ledgerly declines an agent's approval of a payment, so Ada is asked about each.
 """
 
 from __future__ import annotations

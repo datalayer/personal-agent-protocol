@@ -6,6 +6,21 @@
 
 # Changelog
 
+## 1.0.1 (2026-11-21)
+
+The cases describe Poppy 1.0. In both SDKs; no change to the code, the API or the protocol
+behaviour.
+
+- **The four case decks** (`@datalayer/personal-agent-protocol/decks`), shown on the docs site
+  and on the Datalayer home page, said draft 0.3. Each now says `Personal Agent Protocol · 1.0 · a case` and describes its case at 1.0 as published, with version 3 of the Operations
+  extension: every approval says who approved, the person or the personal agent on an
+  instruction the person gave it, and a company may decline an agent's approval (Ledgerly
+  declines one for a payment, so Ada is asked about every payment); the company's consent page
+  is shown at every sign-in and lists every scope; a company describes its agent in a line.
+- **The docs and examples** that described draft 0.3: the getting-started page, the coverage
+  page (Operations v3), the Two companies and Operations example decks, the Specification menu
+  (version 1.0), and the Pydantic AI examples' READMEs.
+
 ## 1.0.0 (2026-11-21)
 
 The SDK's version follows Poppy's: 1.0. Poppy, the Personal Agent Protocol, reached 1.0 on

@@ -40,7 +40,7 @@
       "type": "mermaid",
       "title": "The redirect is refused",
       "diagram": "sequenceDiagram\n  participant A as Agent tool\n  participant H as Session client\n  participant C as Company API\n  A->>H: GET orders again\n  H->>C: Token + JWT 3\n  C-->>H: 307 to /orders/current\n  H-->>A: redirect_refused",
-      "notes": "On the second call the company answers with a redirect. The client does not follow it: under draft 0.3 no token, Session JWT, assertion or body goes to the URL a protocol endpoint redirects to. The tool gets redirect_refused, and nothing reaches the new URL."
+      "notes": "On the second call the company answers with a redirect. The client does not follow it: no token, Session JWT, assertion or body goes to the URL a protocol endpoint redirects to. The tool gets redirect_refused, and nothing reaches the new URL."
     },
     {
       "type": "bullets",

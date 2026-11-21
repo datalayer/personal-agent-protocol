@@ -14,7 +14,7 @@ slides:
     type: title
     title: Two Companies Together
     subtitle: An accounting firm pays a bill at Ada’s bank, and every payment is Ada’s approval.
-    meta: Personal Agent Protocol · draft 0.3 · a case
+    meta: Personal Agent Protocol · 1.0 · a case
     notes: >-
       Ada’s accounting firm pays her suppliers from her bank account. That means
       one company acting for a person at another company, with real money, and
@@ -43,7 +43,7 @@ slides:
     type: statement
     title: Composition, not a new protocol
     statement: >-
-      Draft 0.3 defines **no company-to-company protocol**. Two ordinary
+      Poppy 1.0 defines **no company-to-company protocol**. Two ordinary
       relationships, for the same person, are enough.
     notes: >-
       There is no special protocol between companies. To Atlas, Ledgerly is a
@@ -69,9 +69,9 @@ slides:
       sees her bank password**.
     notes: >-
       Before it can do anything at the bank, Ledgerly needs Ada’s Northwind
-      account. Ada approves Ledgerly on Northwind’s own page, with a code. It is
-      the same sign-in any personal agent would ask for, and the password never
-      leaves the bank.
+      account. Ada approves Ledgerly on Northwind’s own page, with a code, and
+      the page lists every permission Ledgerly asks for. It is the same sign-in
+      any personal agent would ask for, and the password never leaves the bank.
   - id: what-happens
     type: mermaid
     title: The first payment
@@ -95,7 +95,8 @@ slides:
       Northwind proposes the payment and does not make it yet. Ledgerly passes
       the proposal on to Ada, quoting the bank as written. Ada approves. Ledgerly
       checks that the bank’s revision has not changed, sends the bank the
-      approval of that exact revision, and relays what the bank says it did.
+      approval of that exact revision, saying that Ada approved it, and relays
+      what the bank says it did.
   - id: every-payment
     type: comparison
     title: “Pay Acme without asking me each time”
@@ -103,18 +104,24 @@ slides:
       - Amount
       - What happens
     rows:
-      - label: INV-0042
+      - label: INV-0042, approved by Atlas
         values:
           - EUR 1250.00
-          - Paid, with Ada’s approval
+          - Declined by Ledgerly, nothing sent
+      - label: INV-0042, approved by Ada
+        values:
+          - EUR 1250.00
+          - Paid
       - label: INV-0043
         values:
           - EUR 980.00
           - Waits for Ada’s approval
     notes: >-
-      Ada asks not to be bothered, and the answer is no. Every operation the bank
-      returns goes to Ada, this one and the next, and nothing approves one in
-      her name. So the next bill, INV-0043, waits for her like the first did.
+      At 1.0 Atlas may approve on an instruction Ada gives it, and the approval
+      says so. Ledgerly declines that for a payment, before anything reaches
+      the bank: it tells Northwind that Ada approved, and only her own approval
+      makes that true. So Ada approves INV-0042 herself, and the next bill,
+      INV-0043, waits for her like the first did.
   - id: seen
     type: two-columns
     title: What the model sees
@@ -123,7 +130,7 @@ slides:
       type: bullets
       items:
         - Summaries, as the companies wrote them
-        - Who approved each payment
+        - Who approved each payment, Ada or her agent
     right:
       heading: Never
       type: bullets
@@ -141,15 +148,16 @@ slides:
       Firms can work for a person across companies, and **the person’s approval
       reaches the bank intact**.
     notes: >-
-      Northwind’s records show the exact revision approved and when. Ledgerly can
-      only ever carry an approval Ada gave. No company needed a bilateral
+      Northwind’s records show the exact revision approved, that Ada approved
+      it, and when. Ledgerly only ever carries an approval Ada gave herself. No company needed a bilateral
       integration, and no new protocol was invented.
   - id: run-it
     type: closing
     title: Run it yourself
     cta: The Two companies example flow runs all three parties in one process.
     notes: >-
-      This case is the SDK’s own demonstration, described at draft 0.3 of the
-      protocol, with Ledgerly and Northwind Bank as demo companies. Read the
+      This case is the SDK’s own demonstration, described at version 1.0 of the
+      protocol, Poppy 1.0, as published, with Ledgerly and Northwind Bank as
+      demo companies. Read the
       Operations guide for approvals, and the company guide to build either side.
 `;

@@ -6,6 +6,13 @@
 
 # Changelog
 
+## 1.0.0 (2026-11-21)
+
+The SDK's version follows Poppy's: 1.0. Poppy, the Personal Agent Protocol, reached 1.0 on
+14 November, and since 0.37.0 the SDKs speak it by default, 0.4 still served when asked for.
+Nothing else changes: the code, the API and the protocol behaviour are 0.37.5's, in both
+SDKs.
+
 ## 0.37.5 (2026-11-18)
 
 A client that registers itself is registered as a public client, whatever it asked for. In

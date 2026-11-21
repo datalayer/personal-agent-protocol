@@ -59,10 +59,9 @@ jobs:
       # to have no upper bound. The ref is the Agent Runtimes branch that adopts the new
       # SDK.
       #
-      # 1.0.0: no released Agent Runtimes accepts it yet (1.6.101 pins >=0.37.5,<0.38);
-      # feat/scenes adopts it (>=1.0.0,<1.1). Emptied again once Agent Runtimes is
-      # released with that pin.
-      AGENT_RUNTIMES_REF: 'feat/scenes'
+      # 1.0.0: Agent Runtimes 1.6.102 accepts it (>=1.0.0,<1.1), so the latest release
+      # builds the examples again.
+      AGENT_RUNTIMES_REF: ''
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v7

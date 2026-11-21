@@ -15,7 +15,7 @@
     {
       "type": "statement",
       "title": "Composition, not a new protocol",
-      "statement": "Draft 0.3 defines **no company-to-company protocol**. Two ordinary PAP relationships, for the same user, are enough.",
+      "statement": "Poppy 1.0 defines **no company-to-company protocol**. Two ordinary PAP relationships, for the same user, are enough.",
       "notes": "There is no special protocol between companies. Ledgerly is a company to Ada's personal agent, and, separately, a personal agent at Northwind for the same Ada, with its own client_id and keys on its own domain."
     },
     {
@@ -35,7 +35,7 @@
       "type": "statement",
       "title": "Every approval is an Operation",
       "statement": "Never a chat message, and **Ada is asked about every payment**.",
-      "notes": "Approving money movement in a chat message would be too easy to fake or misread. In this example every approval is an Operation with a summary and terms the user approves, and draft 0.3 asks the user about each one."
+      "notes": "Approving money movement in a chat message would be too easy to fake or misread. In this example every approval is an Operation with a summary and terms, and says who approved. Atlas may approve on an instruction Ada gave it, but Ledgerly declines that for a payment, since it tells Northwind that Ada approved: so Ada is asked about each one."
     },
     {
       "type": "flow",
@@ -45,14 +45,14 @@
         { "label": "2", "title": "Nothing carries over", "detail": "An approval covers one revision of one payment" },
         { "label": "3", "title": "INV-0043", "detail": "EUR 980.00: a new Operation for Ada", "current": true }
       ],
-      "notes": "Ada approves the first payment. That approval covers that revision alone: every operation Northwind returns goes to Ada, and nothing approves one in her name. So the next bill, INV-0043, is a new Operation for her to approve."
+      "notes": "Ada approves the first payment. That approval covers that revision alone: every operation Northwind returns goes to Ada, and an approval Atlas gives in her name is declined by Ledgerly. So the next bill, INV-0043, is a new Operation for her to approve."
     },
     {
       "type": "mermaid",
       "title": "How Ledgerly approves",
       "diagram": "flowchart LR\n  N[\"Northwind proposes\"] --> O[\"Operation for Ada\"]\n  O -- \"Ada approves\" --> U[\"Revision and terms<br/>unchanged?\"]\n  U -- \"yes\" --> C[\"Sends Northwind<br/>the approval\"]\n  O -- \"Ada declines\" --> X[\"Nothing is paid\"]",
       "caption": "Ledgerly approves at Northwind only the exact revision Ada approved.",
-      "notes": "Follow one Northwind proposal. Ledgerly proposes an Operation for Ada, which Atlas shows with its summary and terms, as it would for any company. If Ada declines, nothing is paid. When Ada approves, Ledgerly checks that Northwind's revision and terms have not changed, and only then sends Northwind the approval of that revision. Northwind's records keep the revision approved and when, and Ledgerly relays what Northwind says it came to, as written."
+      "notes": "Follow one Northwind proposal. Ledgerly proposes an Operation for Ada, which Atlas shows with its summary and terms, as it would for any company. If Ada declines, nothing is paid. When Ada approves, Ledgerly checks that Northwind's revision and terms have not changed, and only then sends Northwind the approval of that revision. Northwind's records keep the revision approved, that Ada approved it, and when, and Ledgerly relays what Northwind says it came to, as written."
     },
     {
       "type": "two-columns",

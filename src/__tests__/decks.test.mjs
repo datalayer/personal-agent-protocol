@@ -5,8 +5,8 @@
  */
 
 // The four cases as decks: the package's `./decks` entry, and the docs pages that
-// show them. One deck per case, in the deck format, each naming its case, at draft
-// 0.3: every operation is asked of the person, and nothing stands in for them.
+// show them. One deck per case, in the deck format, each naming its case, at Poppy
+// 1.0 as published: every approval says who approved.
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
@@ -98,9 +98,12 @@ for (const [id, name] of CASES) {
     assert.equal(deck.spec.slides.at(-1).type, "closing");
   });
 
-  test(`${id}: it says draft 0.3 and no standing permission`, () => {
-    const words = textOf(papDeck(id).spec);
-    assert.match(words, /draft 0\.3/);
+  test(`${id}: it says Poppy 1.0, no draft, and no standing permission`, () => {
+    const spec = papDeck(id).spec;
+    const words = textOf(spec);
+    assert.equal(spec.slides[0].meta, "Personal Agent Protocol · 1.0 · a case");
+    assert.match(words, /version 1\.0 of the protocol, Poppy 1\.0, as published/);
+    assert.doesNotMatch(words, /draft|0\.3|version two of the Operations/i);
     assert.doesNotMatch(words, /standing|approved_by|in advance without asking/i);
   });
 
@@ -135,8 +138,10 @@ test("the words a company says are the demo company's own", () => {
   }
 });
 
-test("no deck of the docs site keeps a standing permission: draft 0.3 asks every time", () => {
+test("no deck of the docs site keeps a standing permission, nor describes draft 0.3", () => {
   for (const name of ["two-companies", "operations", "user-with-a-company"]) {
-    assert.doesNotMatch(read(`docs/decks/examples/${name}.deck.json`), /standing|approved_by|Session Key/i);
+    const deck = read(`docs/decks/examples/${name}.deck.json`);
+    assert.doesNotMatch(deck, /standing|approved_by|Session Key/i);
+    assert.doesNotMatch(deck, /draft 0\.3|version 2\b/i);
   }
 });

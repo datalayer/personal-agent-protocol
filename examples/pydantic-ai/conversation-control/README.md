@@ -1,7 +1,7 @@
 # Conversation control
 
-This example drives one Manzanita conversation through every control in PAP
-draft 0.3 §7.9 to §7.12 with the real Python SDK: an `authorization` event
+This example drives one Manzanita conversation through every control in Poppy
+1.0 §8.9 to §8.12 with the real Python SDK: an `authorization` event
 (`insufficient_scope`, with the scope the request needs) answered by signing
 the same Session in mid-conversation (the conversation keeps its ID), a
 Direct Conversation that locks its parent (`direct_conversation_open` names

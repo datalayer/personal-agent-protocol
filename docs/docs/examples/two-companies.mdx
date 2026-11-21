@@ -10,9 +10,9 @@ import deck from '@site/decks/examples/two-companies.deck.json';
 
 <Deck spec={deck} />
 
-:::caution Composition, not a version 0.4 feature
+:::caution Composition, not a version 1.0 feature
 
-PAP version 0.4 defines no company-to-company protocol. This example composes
+Poppy 1.0, like 0.4, defines no company-to-company protocol. This example composes
 two ordinary PAP relationships for the same user. Ledgerly is a **company** to
 Ada's personal agent, Atlas, and a **personal agent** at Northwind Bank for
 the same Ada, with its own `client_id` and keys on its own domain.
@@ -23,8 +23,9 @@ The case [Two Companies Together](/examples/cases/pap-two-companies) tells this
 story in a reader's words; this page is the same story on the wire.
 
 Ledgerly, an accounting firm, pays Ada's supplier invoices from her Northwind
-account. Every approval is an Operation, never a chat message, and Ada is asked
-about every payment.
+account. Every approval is an Operation, never a chat message, and says who
+approved. Ledgerly declines an approval Atlas gives on an instruction, so Ada is
+asked about every payment.
 
 ```mermaid
 sequenceDiagram

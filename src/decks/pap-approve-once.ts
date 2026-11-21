@@ -14,18 +14,19 @@ slides:
     type: title
     title: A Change, Approved Once
     subtitle: The shop proposes an exchange; Ada approves its exact terms, and it is done once.
-    meta: Personal Agent Protocol · draft 0.3 · a case
+    meta: Personal Agent Protocol · 1.0 · a case
     notes: >-
       Reading an order is harmless. Changing one costs money. This case is
       about the moment an agent is about to do something that matters, and how
-      the protocol makes sure the person is the one who decides.
+      the protocol makes sure the person decides, and that the company knows
+      who approved.
   - id: who
     type: three-columns
     title: Who is in this case
     columns:
       - heading: Ada
         type: text
-        content: The person. Only she can approve.
+        content: The person. The decision is hers.
       - heading: Her agent
         type: text
         content: Asks, shows her what is proposed, and carries her answer.
@@ -74,23 +75,25 @@ slides:
         - A revision, naming this exact version
         - When it expires
     notes: >-
-      An operation has a summary, written by the company in plain language, and
-      terms, the same thing as data. The agent compares the two with what Ada
-      asked for and points out any difference. A revision names this exact
-      version, and the operation expires.
+      An operation always has terms, what the company proposes as data, and
+      here a summary too, the same thing written by the company in plain
+      language. The agent compares the two with what Ada asked for and points
+      out any difference. A revision names this exact version, and the
+      operation expires.
   - id: asked
     type: statement
-    title: Every operation is asked of the person
+    title: Every approval says who approved
     statement: >-
-      Ada is asked **every time**. Nothing approves on her behalf, not the
-      model, not a rule, not something she said before.
-    attribution: Draft 0.3 of the protocol
+      Here **Ada approves it herself**. The approval says so, and the company
+      knows whether it came from her or from her agent.
+    attribution: Poppy 1.0, with version 3 of the Operations extension
     notes: >-
-      In draft 0.3 the personal agent must ask the person about each operation,
-      and no permission replaces that. Text from the company is never an
-      approval, and the model can explain a proposal but cannot accept it. A
-      company that lets people allow an action ahead of time simply does not
-      return an operation for it.
+      At 1.0 every approval names its approver, the person or the personal
+      agent. Her agent may approve only on an instruction Ada gave it in its
+      own interface, and only when its check shows the terms fall within it;
+      every doubt goes to Ada. The company sees which it is and may decline an
+      approval her agent gave. Text from the company is never an approval, and
+      the model can explain a proposal but cannot accept it.
   - id: approved-or-not
     type: comparison
     title: What Ada’s answer does
@@ -101,7 +104,7 @@ slides:
       - label: The agent
         values:
           - Sends the same request with her approval
-          - Tells the company no
+          - Sends nothing
       - label: The company
         values:
           - Performs that exact revision
@@ -111,7 +114,8 @@ slides:
           - Exchanged, USD 70.00 charged
           - Stays as it is
     notes: >-
-      She may say no, and then nothing happens. If she approves, her approval
+      She may say no, and then her agent sends nothing, nothing happens, and the
+      operation simply expires. If she approves, her approval
       covers one revision. If the terms change, the company returns a new
       revision and Ada is asked again: approving version one never approves
       version two.
@@ -147,14 +151,14 @@ slides:
       Ada does not have to trust the model’s reading of a chat, and the company
       does not have to trust that a chat message meant yes. Both hold the same
       exact terms, and the company’s record keeps the revision that was
-      approved and when.
+      approved, who approved it, and when.
   - id: run-it
     type: closing
     title: Run it yourself
     cta: The next case turns it round, Your Application, a Company.
     notes: >-
-      This case is played from the SDK’s demo company and described at draft
-      0.3 of the protocol, with version two of the Operations extension. The
-      Operations example flow shows the exact revision, new terms, and a lost
-      answer sent again.
+      This case is played from the SDK’s demo company and described at version
+      1.0 of the protocol, Poppy 1.0, as published, with version 3 of the
+      Operations extension. The Operations example flow shows the exact
+      revision, new terms, and a lost answer sent again.
 `;

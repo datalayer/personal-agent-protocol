@@ -86,7 +86,7 @@ changes, applied at 1.0; one marked `(0.4)` holds at 0.4 only.
 | Conversations | Create, retry idempotently, read cursor events (`cursor`, `wait` as query parameters; `conversation_id` and `events` on every read), poll or stream (`Last-Event-ID` wins), identify speakers (`role` set by the company, `author` with its `type` and, for a company's person or persona, `id`, `name`, `image`), hand off and close idempotently, sign in, stay open after sign-out. |
 | Extensions | Negotiate named major versions while ignoring unsupported extensions and unknown fields. |
 | Excluded tasks and feedback | Read the tasks a company doesn't offer (`excluded_tasks`, each with an optional alternative); report a missing task (`task`, `description`) with the Session header; the company answers 202, or 200 with an alternative when the task can be done after all. |
-| Operations v2 | Refuse an action with 403 `approval_required` and its operation, ask the user about every operation, retry the same request with its approval, perform at most once, across interfaces, with 503 and `Retry-After` while performing. |
+| Operations v3 | Refuse an action with 403 `approval_required` and its operation, ask the user (or approve on the user's instruction, the approval naming its `approver`), decline an approval, retry the same request with its approval, perform at most once, across interfaces, with 503 and `Retry-After` while performing. |
 
 ## Coverage expectations
 
@@ -112,19 +112,19 @@ regardless of the channel where an operation was refused.
 | Mediated Sign-In | Python and TypeScript | Python and TypeScript reference companies | [Mediated Sign-In](/examples/mediated-sign-in/) |
 | Refresh tokens | Python and TypeScript | Python and TypeScript reference companies | [Refresh tokens](/examples/account-tokens/) |
 | Conversations: messages, events, SSE, handoff, Direct, sign-in, close | Python and TypeScript | Python and TypeScript reference companies | [Streaming](/examples/conversation-streaming/), [control](/examples/conversation-control/) |
-| Operations v2 | Refuse an action with 403 `approval_required` and its operation, ask the user about every operation, retry the same request with its approval, perform at most once, across interfaces, with 503 and `Retry-After` while performing. |
+| Operations v3 | Refuse an action with 403 `approval_required` and its operation, ask the user (or approve on the user's instruction, the approval naming its `approver`), decline an approval, retry the same request with its approval, perform at most once, across interfaces, with 503 and `Retry-After` while performing. |
 | Web (Browser Session) | Python and TypeScript | Python and TypeScript reference companies | [Browser Session](/examples/browser-session/) |
 | OpenAPI and MCP | Python and TypeScript (`ApiClient`, `McpClient`, a token by `resource`) | Python and TypeScript reference companies | [TypeScript SDK](/sdk/typescript/#openapi-and-mcp) |
 | Feedback | Python and TypeScript (`FeedbackClient`) | Python and TypeScript reference companies (`POST /poppy/feedback`) | [Feedback coverage](/protocol/coverage/feedback/) |
 
 The end-to-end journeys, [a user with a company](/examples/user-with-a-company/)
-and [two companies](/examples/two-companies/) (composition, not a draft 0.3
+and [two companies](/examples/two-companies/) (composition, not a 1.0
 company-to-company feature), run in Python only, on the demo worlds in
 `personal_agent_protocol.demo`.
 
 ## Deliberate boundaries
 
-Draft 0.3 does not define payments, push notifications, or message
+Version 1.0 does not define payments, push notifications, or message
 attachments. The SDKs preserve unknown extension data but do not invent wire
 formats for those areas. Company registration policy is also outside the
 protocol; implementations may expose allow/block policy without presenting it

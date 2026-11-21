@@ -10,13 +10,13 @@
       "title": "Operations",
       "subtitle": "Approve exactly what the company proposed, performed at most once, and recover a lost answer",
       "meta": "Personal Agent Protocol · example",
-      "notes": "An operation is an action a company performs only once the user approves its exact terms: a payment, an exchange, a cancellation. This example gets Ada's approval of Northwind Bank's payments with the Operations extension, version 2."
+      "notes": "An operation is an action a company performs only once the user approves its exact terms: a payment, an exchange, a cancellation. This example gets Ada's approval of Northwind Bank's payments with the Operations extension, version 3."
     },
     {
       "type": "statement",
       "title": "Why operations",
       "statement": "The approval is **exact** and **durable**: a chat message never approves anything.",
-      "notes": "Money moves only on an explicit approval of one revision of the terms. The user approves in the host's own interface, every time, and the company performs an approved action at most once, even when answers get lost."
+      "notes": "Money moves only on an explicit approval of one revision of the terms. Every approval says who approved; here Ada approves in the host's own interface, every time, and the company performs an approved action at most once, even when answers get lost."
     },
     {
       "type": "mermaid",
@@ -29,7 +29,7 @@
       "type": "flow",
       "title": "Approval, and changed terms",
       "items": [
-        { "label": "1", "title": "Negotiate", "detail": "Both sides list operations version 2" },
+        { "label": "1", "title": "Negotiate", "detail": "Both sides list operations version 3" },
         { "label": "2", "title": "Proposal", "detail": "An operation: EUR 1250.00 to Acme GmbH" },
         { "label": "3", "title": "Approve", "detail": "Ada approves this revision" },
         { "label": "4", "title": "New revision", "detail": "EUR 1262.50, a fee added: nothing done", "current": true }

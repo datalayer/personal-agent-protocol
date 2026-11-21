@@ -14,9 +14,10 @@
  * The documentation site and the Datalayer home page read them here, in the
  * same order, under the same names, so the three tell one story.
  *
- * Decks describe draft 0.3: every operation is asked of the person, and
- * nothing approves in their place. No part of the SDK proper imports this
- * entry, and it imports no part of the SDK.
+ * Decks describe Poppy 1.0, as published, with version 3 of the Operations
+ * extension: every approval says who approved, the person or their agent on
+ * an instruction they gave it. No part of the SDK proper imports this entry,
+ * and it imports no part of the SDK.
  */
 
 import { parse } from "yaml";

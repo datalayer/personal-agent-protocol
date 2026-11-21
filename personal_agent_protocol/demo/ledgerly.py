@@ -4,7 +4,7 @@
 
 """Ledgerly: a fictional accounting firm that is a company and a personal agent at once.
 
-Two companies working together, in draft 0.3's own terms. Draft 0.3 defines
+Two companies working together, in Poppy 1.0's own terms. Version 1.0 defines
 no company-to-company protocol, so this is **composition**:
 
 - To Ada's personal agent (Atlas), Ledgerly is a PAP company: discovery,

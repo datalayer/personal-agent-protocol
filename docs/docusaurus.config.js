@@ -101,7 +101,7 @@ module.exports = {
           label: 'Specification',
           items: [
             {label: 'personalagentprotocol.org', href: 'https://personalagentprotocol.org'},
-            {label: 'Draft 0.3', href: 'https://personalagentprotocol.org/docs/0.3/spec'},
+            {label: 'Version 1.0', href: 'https://personalagentprotocol.org/docs/1.0/spec'},
             {label: 'Changelog', href: 'https://personalagentprotocol.org/docs/changelog'},
             {
               label: 'GitHub: personal-agent-protocol',

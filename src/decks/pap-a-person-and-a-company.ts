@@ -14,7 +14,7 @@ slides:
     type: title
     title: A Person and a Company
     subtitle: Ada’s agent asks a shop about her order, and she signs in at the shop itself.
-    meta: Personal Agent Protocol · draft 0.3 · a case
+    meta: Personal Agent Protocol · 1.0 · a case
     notes: >-
       Ada bought a jacket from an online shop and wants to know where it is.
       She asks her personal agent. This is the first thing the Personal Agent
@@ -80,8 +80,8 @@ slides:
       Every company publishes one page for personal agents, at a well-known
       address on its domain. The agent reads it and checks that the domain and
       whoever signs the company’s sign-ins belong together. Then it opens a
-      Session, proving its own identity with a short-lived key, and starts a
-      conversation. Nobody is signed in yet, so the company answers only what
+      Session, signing every request with a short-lived key that its own
+      published keys vouch for, and starts a conversation. Nobody is signed in yet, so the company answers only what
       anybody may ask.
   - id: asked-to-sign-in
     type: statement
@@ -102,6 +102,7 @@ slides:
       type: bullets
       items:
         - The agent never sees her password
+        - The page lists every permission, each time she signs in
         - She can keep fewer permissions than it asks for
         - The Session the agent already has becomes signed in
     right:
@@ -112,8 +113,10 @@ slides:
         - Tokens kept by the host, out of the model’s reach
         - The order, answered by the company
     notes: >-
-      Ada signs in on manzanita.example, never in the chat. She can allow less
-      than the agent asked for. The same Session carries on, now signed in,
+      Ada signs in on manzanita.example, never in the chat. Manzanita shows its
+      own page every time, listing every permission, even ones she allowed
+      before, so a forwarded link cannot sign anybody in unseen. She can allow
+      less than the agent asked for. The same Session carries on, now signed in,
       and the company answers with what it knows. The tokens are held by the
       host around the agent, so the model that writes the agent’s replies
       never sees them.
@@ -145,7 +148,7 @@ slides:
     cta: The next case takes the same order further, A Change, Approved Once.
     notes: >-
       This case is played from the SDK’s demo company, Manzanita Outfitters,
-      and described at draft 0.3 of the protocol. The example flow called A
-      user with a company runs the whole journey in one process, both sides
-      from the SDK.
+      and described at version 1.0 of the protocol, Poppy 1.0, as published.
+      The example flow called A user with a company runs the whole journey in
+      one process, both sides from the SDK.
 `;

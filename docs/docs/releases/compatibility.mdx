@@ -4,7 +4,7 @@ title: Compatibility
 
 # Compatibility
 
-This page is versioned with the SDK: it describes **SDK 0.37.5**.
+This page is versioned with the SDK: it describes **SDK 1.0.0**.
 
 ## The PAP version implemented
 
@@ -35,6 +35,7 @@ profile, never picked up from an unattended fetch.
 
 | SDK (PyPI and npm) | PAP profile | Specification revision | Operations | Breaking changes |
 | --- | --- | --- | --- | --- |
+| `1.0.0` | `0.4` | 2026-11-10 | v3 | none: the SDK's version follows Poppy's own, 1.0; the code is 0.37.5's |
 | `0.37.5` | `0.4` | 2026-11-10 | v3 | none: a client that registers itself (`client_registration`) is registered as a public client whatever `token_endpoint_auth_method` it asked for among `none`, `client_secret_post`, `client_secret_basic` or none at all, and told `none`; a request that sends a client secret is refused |
 | `0.37.4` | `0.4` | 2026-11-10 | v3 | none: a company may let clients that are no personal agents sign in (`public_clients`: MCP clients, with PKCE alone, verified by their client ID metadata document or registered at `/oauth/register` with `client_registration`), for tokens that work at one service and at no endpoint of the protocol; off by default |
 | `0.37.3` | `0.4` | 2026-11-10 | v3 | none: a company names its services at URLs of their own (`resource_servers`, an MCP server on another host), which its issuer lists in `protected_resources` and issues Bearer tokens for, and which verify them with `access_token_for` |

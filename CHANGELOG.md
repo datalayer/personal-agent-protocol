@@ -17,7 +17,9 @@ does not change.
   while a browser takes `0x7f.1` for the host, 127.0.0.1. `browser_safe` now refuses a URL
   without a host.
 - **An IPv6 literal with a dotted quad is accepted again.** 1.0.3's IPv4 rule refused
-  `https://[::ffff:93.184.216.34]/`, which both read alike; an IPv6 literal is exempt.
+  `https://[::ffff:93.184.216.34]/`, which both read alike; an IPv6 literal is exempt, only
+  when it is a valid IPv6 address: `urlsplit` also takes an IPvFuture host
+  (`https://[v1.a:1.2.3.4]/`), which a browser refuses, and so does the SDK.
 - **A host with an oversized number is refused, not raised.** A four-part host whose first
   part has thousands of digits reached `int` and raised `ValueError` past Python's limit on
   integer conversion, so an attacker's Session issuer or Signature-Agent could abort a

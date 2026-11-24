@@ -72,8 +72,9 @@ def browser_safe(value: str) -> bool:
         # `https:0x7f.1/` a browser takes `0x7f.1` for the host (the review of 1.0.3).
         return False
     if ":" in host:
-        # An IPv6 literal (`[::ffff:93.184.216.34]`): bracketed, read alike by both.
-        return True
+        # An IPv6 literal (`[::ffff:93.184.216.34]`), read alike by both. Only a valid one:
+        # `urlsplit` also takes an IPvFuture host (`[v1.a:1.2.3.4]`), which a browser refuses.
+        return is_ip_address(host)
     # A host a browser reads as an IPv4 address is one only in its canonical form: a
     # browser reads `0x7f.1`, `0177.0.0.1` and `3.1.2` as 127.0.0.1, 127.0.0.1 and
     # 3.1.0.2, the SDK as the names they are written (the review of 1.0.2).

@@ -252,3 +252,24 @@ def test_an_oversized_issuer_or_signature_agent_is_refused_in_a_sentence() -> No
     with pytest.raises(SessionError) as refused:
         unverified_session_issuer(compact)
     assert refused.value.code == "invalid_session"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://[v1.a:1.2.3.4]/device",  # IPvFuture: urlsplit takes it, a browser refuses it
+        "https://[v1.a:b]/device",
+        "https://[::g]/device",  # not an IPv6 address
+    ],
+)
+def test_a_bracketed_host_that_is_no_ipv6_address_is_refused(url: str) -> None:
+    from personal_agent_protocol.ucp import UcpProfile
+
+    assert not browser_safe(url)
+    profile = UcpProfile.model_validate(
+        {
+            "version": "2026-04-08",
+            "services": {"dev.ucp.shopping": [{"transport": "rest", "endpoint": url}]},
+        }
+    )
+    assert profile.endpoint() is None

@@ -34,6 +34,7 @@ from typing import Literal
 from .errors import PersonalAgentProtocolError
 from .models import DiscoveryDocument, domain_host
 from .sessions import PapSession
+from .urls import host_within
 
 BROWSER_CONTROL_EXTENSION = "browser-control"
 #: The version this SDK implements (Browser Control 3).
@@ -267,7 +268,7 @@ def on_company_host(host: str, organization_domain: str) -> bool:
     that get `navigator.poppy` (Browser Control 6)."""
 
     host, domain = host.lower().rstrip("."), domain_host(organization_domain)
-    return host == domain or host.endswith(f".{domain}")
+    return host_within(host, domain)
 
 
 def controller_script(organization_domain: str, channel: str) -> str:

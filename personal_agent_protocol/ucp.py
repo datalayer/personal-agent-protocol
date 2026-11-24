@@ -32,6 +32,7 @@ from .reactor import send_bounded
 from .refusals import challenge_parameters
 from .sessions import AccessToken, PapSession
 from .transport import SessionHttpClient, session_error
+from .urls import browser_safe
 
 #: The extension's name and version in `extensions` and `Poppy-Extensions` (UCP extension 2).
 UCP_EXTENSION = "ucp"
@@ -78,6 +79,7 @@ class UcpProfile(ProtocolModel):
                 entry.get("transport") == transport
                 and isinstance(endpoint, str)
                 and endpoint.startswith("https://")
+                and browser_safe(endpoint)
             ):
                 return endpoint
         return None
@@ -123,8 +125,10 @@ def ucp_agent_header(platform_profile: str) -> str:
     URL would let Companies match a User across Companies (UCP extension 3, 10).
     """
 
-    if not platform_profile.startswith("https://") or any(
-        char in platform_profile for char in '"\\ \t\r\n'
+    if (
+        not platform_profile.startswith("https://")
+        or not browser_safe(platform_profile)
+        or any(char in platform_profile for char in '"\\ \t\r\n')
     ):
         raise ValueError("The platform profile is an HTTPS URL")
     return f'profile="{platform_profile}"'

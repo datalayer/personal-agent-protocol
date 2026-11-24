@@ -175,7 +175,7 @@ from ..ucp import (
     UCP_SHOPPING,
     UCP_VERSION,
 )
-from ..urls import browser_safe
+from ..urls import browser_safe, host_within
 from .points import (
     CLIENT_POLICIES,
     CLIENT_RESOLVERS,
@@ -785,7 +785,7 @@ class CompanyConfig:
         if self.device_page is not None:
             host = (urlsplit(self.device_page).hostname or "").lower()
             own = domain_host(self.domain)
-            if not (host == own or host.endswith(f".{own}")):
+            if not host_within(host, own):
                 # A personal agent shows the link only on the issuer's host or
                 # `organization.domain`, or a subdomain of either (§4.3). The issuer is on
                 # `domain`, and an agent that found the company at an alias knows only that

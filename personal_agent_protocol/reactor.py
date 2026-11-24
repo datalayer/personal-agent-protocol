@@ -1094,7 +1094,7 @@ def build_pap_reactor(
     platform.register_plugin(
         PluginManifest(
             name="personal-agent-protocol.core",
-            version="1.0.2",
+            version="1.0.3",
             contribution_points=[
                 DISCOVERY_TRANSPORTS.id,
                 URL_SAFETY_POLICIES.id,

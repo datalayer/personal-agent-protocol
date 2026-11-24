@@ -17,12 +17,15 @@ another Company's sign-in page as its own (§4.3).
 Every URL the SDK accepts as an HTTPS URL is first checked here: one with no
 backslash, whitespace or control character, and an authority of plain RFC 3986
 ASCII characters, is read on the same host by both, so the host the SDK checks
-is the host the browser opens.
+is the host the browser opens. A host a browser reads as an IPv4 address must be
+written in its canonical form, and an IP address has no subdomains
+(`host_within`).
 """
 
 from __future__ import annotations
 
 import string
+from ipaddress import ip_address
 from urllib.parse import urlsplit
 
 #: The characters of an authority (RFC 3986 §3.2): unreserved, sub-delims, `:`, `@`, `[`, `]`.
@@ -56,7 +59,70 @@ def browser_safe(value: str) -> bool:
         netloc = urlsplit(value).netloc
     except ValueError:
         return False
-    return all(character in _AUTHORITY_CHARACTERS for character in netloc)
+    if not all(character in _AUTHORITY_CHARACTERS for character in netloc):
+        return False
+    try:
+        host = urlsplit(value).hostname or ""
+    except ValueError:
+        return False
+    # A host a browser reads as an IPv4 address is one only in its canonical form: a
+    # browser reads `0x7f.1`, `0177.0.0.1` and `3.1.2` as 127.0.0.1, 127.0.0.1 and
+    # 3.1.0.2, the SDK as the names they are written (the review of 1.0.2).
+    return not ends_in_a_number(host) or canonical_ipv4(host)
 
 
-__all__ = ["browser_safe"]
+def ends_in_a_number(host: str) -> bool:
+    """Whether a browser reads `host` as an IPv4 address (WHATWG's "ends in a number"):
+    its last label, a trailing dot aside, is all digits, or `0x` and hexadecimal digits."""
+
+    labels = host.split(".")
+    if labels[-1] == "" and len(labels) > 1:
+        labels.pop()
+    last = labels[-1]
+    if last and all(character in string.digits for character in last):
+        return True
+    return last[:2].lower() == "0x" and all(character in string.hexdigits for character in last[2:])
+
+
+def canonical_ipv4(host: str) -> bool:
+    """Whether `host` is an IPv4 address written as a browser writes it back: four decimal
+    parts, 0 to 255, with no leading zero, no trailing dot."""
+
+    parts = host.split(".")
+    return len(parts) == 4 and all(
+        part.isascii()
+        and part.isdigit()
+        and (part == "0" or not part.startswith("0"))
+        and int(part) <= 255
+        for part in parts
+    )
+
+
+def is_ip_address(host: str) -> bool:
+    """Whether `host` (as `urlsplit` gives it: lowercase, without brackets) is an IP address."""
+
+    try:
+        ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
+def host_within(host: str, domain: str) -> bool:
+    """Whether `host` is `domain` or one of its subdomains. An IP address has no
+    subdomains: it is within only itself (`3.1.2` is not within `1.2`; a browser opens
+    3.1.0.2)."""
+
+    if not host or not domain:
+        return False
+    if (
+        is_ip_address(host)
+        or is_ip_address(domain)
+        or ends_in_a_number(host)
+        or ends_in_a_number(domain)
+    ):
+        return host == domain
+    return host == domain or host.endswith(f".{domain}")
+
+
+__all__ = ["browser_safe", "canonical_ipv4", "ends_in_a_number", "host_within", "is_ip_address"]

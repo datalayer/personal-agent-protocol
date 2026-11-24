@@ -41,6 +41,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 from .crypto import jwk_thumbprint
 from .errors import PersonalAgentProtocolError, ProofError
 from .reactor import OperatorSignature, OperatorSignatureRequest
+from .urls import browser_safe
 
 #: The headers of a signed request (RFC 9421 §4; Web Bot Auth §5.2.5).
 SIGNATURE_HEADER = "Signature"
@@ -204,7 +205,11 @@ async def sign_operator_request(
     `poppy-session` when the request has one.
     """
 
-    if not signature_agent.startswith("https://") or re.search(r'["\\\s]', signature_agent):
+    if (
+        not signature_agent.startswith("https://")
+        or not browser_safe(signature_agent)
+        or re.search(r'["\\\s]', signature_agent)
+    ):
         raise ValueError("a Signature-Agent is an HTTPS URL")
     label = OPERATOR_SIGNATURE_LABEL
     authorization = request.authorization
@@ -518,6 +523,9 @@ async def _checked(
     agent = cast(str, offered.agent.value)
     keyid = cast(str, offered.parameters["keyid"])
     if offered.parameters.get("alg", OPERATOR_SIGNATURE_ALGORITHM) != OPERATOR_SIGNATURE_ALGORITHM:
+        return OperatorVerdict("unverified")
+    if not browser_safe(agent):
+        # A Signature-Agent a browser reads on another host names no key: it decides nothing.
         return OperatorVerdict("unverified")
     try:
         published = await keys(agent, keyid)

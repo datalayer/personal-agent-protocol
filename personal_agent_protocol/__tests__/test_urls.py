@@ -183,3 +183,93 @@ def test_every_https_prefix_check_also_asks_it() -> None:
         text = (PACKAGE / name).read_text()
         for check in checks:
             assert check in text, (name, check)
+
+
+# --- the review of 1.0.3 -------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https:///0x7f.1/device",  # a browser takes 0x7f.1 for the host: 127.0.0.1
+        "https:/0x7f.1/device",
+        "https:0x7f.1/device",
+        "https:///m.example/device",  # no host for the SDK, m.example for a browser
+    ],
+)
+def test_a_url_with_no_host_for_the_sdk_is_refused(url: str) -> None:
+    assert not browser_safe(url)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://[::ffff:93.184.216.34]/device",  # IPv4-mapped IPv6, a dotted quad inside
+        "https://[2001:db8::1]:8443/device",
+        "https://[::1]/",
+    ],
+)
+def test_an_ipv6_literal_is_read_alike(url: str) -> None:
+    assert browser_safe(url)
+
+
+def test_an_oversized_number_in_a_host_is_refused_not_raised() -> None:
+    from personal_agent_protocol.ucp import UcpProfile
+    from personal_agent_protocol.urls import canonical_ipv4
+
+    huge = "9" * 5000
+    assert not canonical_ipv4(f"{huge}.1.1.1")
+    assert not browser_safe(f"https://{huge}.1.1.1/device")
+    assert not browser_safe(f"https://{huge}/device")
+    profile = UcpProfile.model_validate(
+        {
+            "version": "2026-04-08",
+            "services": {
+                "dev.ucp.shopping": [{"transport": "rest", "endpoint": f"https://{huge}.1.1.1/u"}]
+            },
+        }
+    )
+    assert profile.endpoint() is None
+
+
+def test_an_oversized_issuer_or_signature_agent_is_refused_in_a_sentence() -> None:
+    """An attacker's issuer or Signature-Agent never aborts validation (the review of 1.0.3)."""
+
+    huge = "1" + "0" * 5000
+    agent = f"https://{huge}.1.1.1/keys"
+    assert not browser_safe(agent)
+    from personal_agent_protocol.ucp import ucp_agent_header
+
+    with pytest.raises(ValueError, match="HTTPS URL"):
+        ucp_agent_header(agent)
+
+    import jwt
+
+    from personal_agent_protocol.company.verify import unverified_session_issuer
+    from personal_agent_protocol.errors import SessionError
+
+    compact = jwt.encode({"iss": agent}, "k" * 32, algorithm="HS256")
+    with pytest.raises(SessionError) as refused:
+        unverified_session_issuer(compact)
+    assert refused.value.code == "invalid_session"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://[v1.a:1.2.3.4]/device",  # IPvFuture: urlsplit takes it, a browser refuses it
+        "https://[v1.a:b]/device",
+        "https://[::g]/device",  # not an IPv6 address
+    ],
+)
+def test_a_bracketed_host_that_is_no_ipv6_address_is_refused(url: str) -> None:
+    from personal_agent_protocol.ucp import UcpProfile
+
+    assert not browser_safe(url)
+    profile = UcpProfile.model_validate(
+        {
+            "version": "2026-04-08",
+            "services": {"dev.ucp.shopping": [{"transport": "rest", "endpoint": url}]},
+        }
+    )
+    assert profile.endpoint() is None

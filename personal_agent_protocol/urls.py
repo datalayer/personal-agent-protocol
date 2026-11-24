@@ -47,7 +47,9 @@ def browser_safe(value: str) -> bool:
     RFC 3986 ASCII characters only — no percent-encoding (a browser decodes a
     host, the SDK doesn't) and no other character (a browser maps a host
     through IDNA first). A path or a query may hold any other character: a
-    browser percent-encodes it, on the same host."""
+    browser percent-encodes it, on the same host. A URL with no host for the SDK is
+    refused (a browser finds one in `https:///0x7f.1/`); a host a browser reads as an
+    IPv4 address must be a canonical dotted quad; an IPv6 literal is read alike."""
 
     if (
         not isinstance(value, str)
@@ -65,6 +67,14 @@ def browser_safe(value: str) -> bool:
         host = urlsplit(value).hostname or ""
     except ValueError:
         return False
+    if not host:
+        # No host for the SDK, one for a browser: in `https:///0x7f.1/`, `https:/0x7f.1/` and
+        # `https:0x7f.1/` a browser takes `0x7f.1` for the host (the review of 1.0.3).
+        return False
+    if ":" in host:
+        # An IPv6 literal (`[::ffff:93.184.216.34]`), read alike by both. Only a valid one:
+        # `urlsplit` also takes an IPvFuture host (`[v1.a:1.2.3.4]`), which a browser refuses.
+        return is_ip_address(host)
     # A host a browser reads as an IPv4 address is one only in its canonical form: a
     # browser reads `0x7f.1`, `0177.0.0.1` and `3.1.2` as 127.0.0.1, 127.0.0.1 and
     # 3.1.0.2, the SDK as the names they are written (the review of 1.0.2).
@@ -93,6 +103,8 @@ def canonical_ipv4(host: str) -> bool:
         part.isascii()
         and part.isdigit()
         and (part == "0" or not part.startswith("0"))
+        # Three digits at most before `int`: a part of thousands of digits would raise.
+        and len(part) <= 3
         and int(part) <= 255
         for part in parts
     )

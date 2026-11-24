@@ -6,6 +6,24 @@
 
 # Changelog
 
+## 1.0.3 (2026-11-24)
+
+The follow-up to 1.0.2, in the Python SDK, from the review of its fix. The TypeScript SDK
+parses URLs as a browser does (WHATWG `URL`) and does not change.
+
+- **A host a browser reads as another IPv4 address is refused.** A browser reads a host whose
+  last label is a number as an IPv4 address, abbreviated, octal or hexadecimal:
+  `https://0x7f.1/` and `https://0177.0.0.1/` are 127.0.0.1, and `https://3.1.2/` is
+  3.1.0.2, while the SDK read the names as written. Such a host is now accepted only as a
+  canonical dotted-quad address (`browser_safe`), and an IP address has no subdomains:
+  `3.1.2` is not within `1.2` (`host_within`, used for device sign-in links, a company's
+  device page and Browser Control's company hosts).
+- **The URLs 1.0.2 missed are checked too:** a company's logo (`PapSignIn.organization_logo`),
+  a UCP profile's endpoint (`UcpProfile.endpoint`), the platform profile (`ucp_agent_header`),
+  a Signature-Agent (sent and verified), a Session JWT's issuer before it is fetched, and the
+  entries of `protected_resources`. 1.0.2 said every accepted HTTPS URL was checked; with
+  these it is.
+
 ## 1.0.2 (2026-11-24)
 
 A security fix in the Python SDK: a URL the SDK accepts is one a browser reads on the same

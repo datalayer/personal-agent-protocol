@@ -154,7 +154,7 @@ class PapSignIn(Display):
     @field_validator("organization_logo")
     @classmethod
     def _logo(cls, value: str | None) -> str | None:
-        if value is not None and urlsplit(value).scheme != "https":
+        if value is not None and (not browser_safe(value) or urlsplit(value).scheme != "https"):
             raise ValueError("a company's logo is an HTTPS URL")
         return value
 

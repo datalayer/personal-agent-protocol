@@ -35,6 +35,7 @@ from ..crypto import (
 )
 from ..errors import ProofError, SessionError
 from ..models import ClientMetadata, JsonWebKeySet
+from ..urls import browser_safe
 from .points import ReplayCache
 
 #: Companies accept client assertions and delegations signed with these (§4.1, §5.2): both
@@ -248,7 +249,7 @@ def unverified_session_issuer(compact: str) -> str:
     except jwt.PyJWTError as exc:
         raise _refused("The Session header is not a JWT") from exc
     issuer = claims.get("iss")
-    if not isinstance(issuer, str) or not issuer.startswith("https://"):
+    if not isinstance(issuer, str) or not issuer.startswith("https://") or not browser_safe(issuer):
         raise _refused("The Session JWT names no personal agent")
     return issuer
 

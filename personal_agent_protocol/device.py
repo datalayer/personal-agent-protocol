@@ -44,6 +44,7 @@ from .sessions import (
     proves_with_dpop,
 )
 from .telemetry import sign_in_method, sign_in_result, signed_in_as, traced
+from .urls import host_within
 
 DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 
@@ -69,7 +70,7 @@ def _host(url: str) -> str:
 
 
 def _within(host: str, domain: str) -> bool:
-    return host == domain or host.endswith(f".{domain}")
+    return host_within(host, domain)
 
 
 def verification_host_allowed(url: str, *, issuer: str, domain: str) -> bool:

@@ -903,7 +903,7 @@ class OAuthServerMetadata(ProtocolModel):
 
         wanted = domain.lower().rstrip(".")
         for entry in self.protected_resources:
-            if not entry.startswith("https://"):
+            if not entry.startswith("https://") or not browser_safe(entry):
                 continue
             host = entry[len("https://") :]
             if host and not any(char in host for char in "/?#@") and host.lower() == wanted:

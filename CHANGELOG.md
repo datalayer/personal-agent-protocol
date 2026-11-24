@@ -6,6 +6,24 @@
 
 # Changelog
 
+## 1.0.4 (2026-11-24)
+
+The follow-up to 1.0.3, in the Python SDK, from the review of its fix. The TypeScript SDK
+does not change.
+
+- **A URL with no host for the SDK is refused.** In `https:///0x7f.1/device`,
+  `https:/0x7f.1/device` and `https:0x7f.1/device` the SDK found no host, and the checks that
+  accept a URL on its `https://` prefix (a UCP endpoint, the platform profile) let it through,
+  while a browser takes `0x7f.1` for the host, 127.0.0.1. `browser_safe` now refuses a URL
+  without a host.
+- **An IPv6 literal with a dotted quad is accepted again.** 1.0.3's IPv4 rule refused
+  `https://[::ffff:93.184.216.34]/`, which both read alike; an IPv6 literal is exempt.
+- **A host with an oversized number is refused, not raised.** A four-part host whose first
+  part has thousands of digits reached `int` and raised `ValueError` past Python's limit on
+  integer conversion, so an attacker's Session issuer or Signature-Agent could abort a
+  validation instead of being refused (`invalid_session`, `unverified`). A part of more than
+  three digits is refused first.
+
 ## 1.0.3 (2026-11-24)
 
 The follow-up to 1.0.2, in the Python SDK, from the review of its fix. The TypeScript SDK

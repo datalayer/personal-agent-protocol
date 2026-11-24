@@ -4,7 +4,7 @@ title: Compatibility
 
 # Compatibility
 
-This page is versioned with the SDK: it describes **SDK 1.0.3**.
+This page is versioned with the SDK: it describes **SDK 1.0.4**.
 
 ## The PAP version implemented
 
@@ -35,6 +35,7 @@ profile, never picked up from an unattended fetch.
 
 | SDK (PyPI and npm) | PAP profile | Specification revision | Operations | Breaking changes |
 | --- | --- | --- | --- | --- |
+| `1.0.4` | `0.4` | 2026-11-10 | v3 | none: the Python SDK refuses a URL with no host for it where a browser finds one (`https:///0x7f.1/`), accepts IPv6 literals with a dotted quad (`[::ffff:93.184.216.34]`) again, and refuses a host with an oversized number instead of raising |
 | `1.0.3` | `0.4` | 2026-11-10 | v3 | none: the Python SDK refuses a host a browser reads as another IPv4 address (abbreviated, octal or hexadecimal, such as `0x7f.1` or `3.1.2`), an IP address has no subdomains, and a company's logo, a UCP endpoint, a Signature-Agent and a Session's issuer are checked as every HTTPS URL is |
 | `1.0.2` | `0.4` | 2026-11-10 | v3 | none: the Python SDK refuses a URL a browser reads on another host (a backslash, whitespace or a control character anywhere, an authority with anything but RFC 3986 ASCII characters), so a device sign-in link is shown only on the host it was checked on (§4.3) |
 | `1.0.1` | `0.4` | 2026-11-10 | v3 | none: the four case decks (`./decks`) and the docs describe the cases at Poppy 1.0 as published, with Operations version 3, no longer draft 0.3 |

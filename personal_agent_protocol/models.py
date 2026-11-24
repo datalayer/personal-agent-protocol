@@ -28,6 +28,7 @@ from pydantic import (
 
 from .errors import AuthorizationError
 from .profile import DEFAULT_PROTOCOL_VERSION, DRAFT_PROTOCOL_VERSION, PROTOCOL_PROFILE
+from .urls import browser_safe
 
 _VERSION = re.compile(r"^(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)$")
 #: The protocol versions a Personal Agent implements unless it asks for others (§3.4): a
@@ -151,7 +152,13 @@ def _iana_zone(value: object) -> bool:
 
 def _https_url(value: str, label: str) -> str:
     parsed = urlsplit(value)
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+    if (
+        not browser_safe(value)
+        or parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
         raise ValueError(f"{label} must be an HTTPS URL without user information")
     return value
 
@@ -175,7 +182,13 @@ def is_loopback_redirect(value: str) -> bool:
     """
 
     parsed = urlsplit(value)
-    if parsed.scheme != "http" or not parsed.hostname or parsed.username or parsed.password:
+    if (
+        not browser_safe(value)
+        or parsed.scheme != "http"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
         return False
     if parsed.fragment:
         return False
@@ -353,7 +366,13 @@ def url_domain(url: str) -> str | None:
         port = parsed.port
     except ValueError:
         return None
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+    if (
+        not browser_safe(url)
+        or parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
         return None
     host = parsed.hostname.lower().rstrip(".")
     return host if port in {None, 443} else f"{host}:{port}"

@@ -6,6 +6,28 @@
 
 # Changelog
 
+## 1.0.2 (2026-11-24)
+
+A security fix in the Python SDK: a URL the SDK accepts is one a browser reads on the same
+host. The TypeScript SDK already read URLs as a browser does (WHATWG `URL`) and does not
+change.
+
+- **A device sign-in link a browser opens elsewhere is refused (§4.3).** The SDK read a link
+  with `urlsplit` (RFC 3986), a browser with the WHATWG URL parser, and they disagree on some
+  characters: in `https://v.example\.m.example/../device` the SDK read the host
+  `v.example\.m.example`, a subdomain of a Company at `m.example`, and showed the link, while
+  a browser opens `v.example`, taking the backslash for a slash. A Company the User's agent
+  works with could have shown another Company's sign-in page as its own.
+  `DeviceSignInClient.begin` now refuses it with `invalid_url`, as it refused the same link
+  with user information. Reported against 1.0.1, with a reproduction; thank you.
+- **Every HTTPS URL the SDK accepts is checked the same way** (`personal_agent_protocol.urls.browser_safe`):
+  discovery and metadata URLs, endpoints, issuers, sign-in pages and links, MCP servers,
+  pages, signed request targets and loopback redirects. Refused: a backslash, whitespace or a
+  control character anywhere (a browser reads a backslash as a slash and drops tabs and
+  newlines), and an authority with anything but RFC 3986 ASCII characters (a browser decodes
+  a percent-encoded host and maps a non-ASCII one through IDNA). A path or query may still
+  hold other characters, which a browser percent-encodes on the same host.
+
 ## 1.0.1 (2026-11-21)
 
 The cases describe Poppy 1.0. In both SDKs; no change to the code, the API or the protocol

@@ -54,6 +54,7 @@ from .reactor import (
 )
 from .refusals import refusal_code, refusal_details, refuse_redirect, refused_without_body
 from .telemetry import by_issuer, session_result, traced
+from .urls import browser_safe
 
 JWT_CLIENT_ASSERTION = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
 
@@ -121,7 +122,13 @@ class ClientAssertionClaims(ProtocolModel):
     @classmethod
     def validate_https_url(cls, value: str) -> str:
         parsed = urlsplit(value)
-        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        if (
+            not browser_safe(value)
+            or parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+        ):
             raise ValueError("client assertion URLs must use HTTPS")
         return value
 
@@ -196,7 +203,11 @@ class PapSession:
             raise ValueError("a Session names its User ID")
         for name in ("issuer", "client_id"):
             parsed = urlsplit(getattr(self, name))
-            if parsed.scheme != "https" or not parsed.hostname:
+            if (
+                not browser_safe(getattr(self, name))
+                or parsed.scheme != "https"
+                or not parsed.hostname
+            ):
                 raise ValueError(f"a Session's {name} is an HTTPS URL")
         if not self.tenant_id or len(self.tenant_id) > 256:
             raise ValueError("tenant_id must contain between 1 and 256 characters")

@@ -49,6 +49,7 @@ from .reactor import SystemClock, parse_retry_after, send_bounded
 from .refusals import challenge_parameters, dpop_nonce_asked, refuse_redirect
 from .sessions import DPOP_NONCE_HEADER, AccessToken, PapSession
 from .transport import session_ended, session_error, session_headers
+from .urls import browser_safe
 
 MCP_PROTOCOL_VERSION = "2025-06-18"
 
@@ -142,7 +143,7 @@ class McpSessionAuth(httpx.Auth):
         token: AccessToken | None,
         reactor: PluginPlatform,
     ) -> None:
-        if urlsplit(url).scheme != "https":
+        if not browser_safe(url) or urlsplit(url).scheme != "https":
             raise TransportError("invalid_url", "an MCP server's url must use HTTPS")
         if token is not None and token.resource != url:
             raise TransportError(

@@ -81,6 +81,7 @@ from .reactor import (
 )
 from .sessions import AccessToken, PapSession
 from .telemetry import operation_result, traced
+from .urls import browser_safe
 
 if TYPE_CHECKING:
     from .apis import ApiClient, ApiResponse
@@ -433,7 +434,13 @@ def operations_endpoint(document: DiscoveryDocument) -> str | None:
     if document.web.browser_session_endpoint is None:
         return None
     parsed = urlsplit(endpoint)
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+    if (
+        not browser_safe(endpoint)
+        or parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
         return None
     return endpoint
 

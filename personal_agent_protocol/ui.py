@@ -50,6 +50,7 @@ from reactor.ui import (  # type: ignore[import-untyped]
 )
 
 from .models import _domain, known_handoff, known_responder, terms_leaves
+from .urls import browser_safe
 
 #: The display type of a sign-in waiting for the person.
 PAP_SIGN_IN_TYPE = "application/vnd.datalayer.pap.sign-in+json"
@@ -161,7 +162,13 @@ class PapSignIn(Display):
     @classmethod
     def _https(cls, value: str) -> str:
         parsed = urlsplit(value)
-        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        if (
+            not browser_safe(value)
+            or parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+        ):
             raise ValueError("a sign-in page must be an HTTPS URL")
         return value
 
@@ -431,7 +438,12 @@ class PapLink(BaseModel):
     @classmethod
     def _url(cls, value: str) -> str:
         parts = urlsplit(value)
-        if parts.scheme != "https" or not parts.hostname or "@" in parts.netloc:
+        if (
+            not browser_safe(value)
+            or parts.scheme != "https"
+            or not parts.hostname
+            or "@" in parts.netloc
+        ):
             raise ValueError("a link is an HTTPS URL without user information")
         return value
 

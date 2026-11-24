@@ -40,6 +40,7 @@ from reactor import PluginPlatform  # type: ignore[import-untyped]
 
 from .errors import ProofError
 from .reactor import SIGNERS, DpopProofRequest, SessionJwtRequest, Signer, first_contribution
+from .urls import browser_safe
 
 JoseAlgorithm = Literal["ES256", "PS384"]
 SigningKey: TypeAlias = EllipticCurvePrivateKey | RSAPrivateKey | jwt.PyJWK | str | bytes
@@ -86,7 +87,13 @@ def normalized_htu(value: str) -> str:
     """`htu`: the request's URL without its query or fragment (§5.2)."""
 
     parsed = urlsplit(value)
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+    if (
+        not browser_safe(value)
+        or parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
         raise ProofError("invalid_htu", "A signed request's target must be an HTTPS URL")
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
 

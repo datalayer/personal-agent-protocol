@@ -175,6 +175,7 @@ from ..ucp import (
     UCP_SHOPPING,
     UCP_VERSION,
 )
+from ..urls import browser_safe
 from .points import (
     CLIENT_POLICIES,
     CLIENT_RESOLVERS,
@@ -772,7 +773,12 @@ class CompanyConfig:
             if value is None:
                 continue
             parsed = urlsplit(value.replace("{request_id}", "x"))
-            if parsed.scheme != "https" or not parsed.hostname or parsed.fragment:
+            if (
+                not browser_safe(value.replace("{request_id}", "x"))
+                or parsed.scheme != "https"
+                or not parsed.hostname
+                or parsed.fragment
+            ):
                 raise ValueError(f"{name} must be an HTTPS URL without a fragment")
         if self.consent_page is not None and "{request_id}" not in self.consent_page:
             raise ValueError("consent_page must contain {request_id}")

@@ -62,6 +62,7 @@ from .reactor import (
 )
 from .refusals import dpop_nonce_asked, refuse_redirect
 from .sessions import DPOP_HEADER, DPOP_NONCE_HEADER, AccessToken, PapSession
+from .urls import browser_safe
 
 #: The header that carries the Session JWT (§5.2).
 SESSION_HEADER = "Poppy-Session"
@@ -88,7 +89,13 @@ _HOST_OWNED = frozenset(
 
 def _https_url(value: str) -> str:
     parsed = urlsplit(value)
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+    if (
+        not browser_safe(value)
+        or parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
         raise TransportError("invalid_url", "PAP resource URL must use HTTPS")
     return value
 

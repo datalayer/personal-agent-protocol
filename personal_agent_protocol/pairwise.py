@@ -16,6 +16,7 @@ from reactor import PluginPlatform  # type: ignore[import-untyped]
 
 from .reactor import PAIRWISE_USER_ID_STORES, PairwiseUserIdStore, first_contribution
 from .sessions import RandomBytes, generate_pairwise_user_id
+from .urls import browser_safe
 
 
 def _key_part(value: str, label: str) -> str:
@@ -27,7 +28,8 @@ def _key_part(value: str, label: str) -> str:
 def _issuer(value: str) -> str:
     parsed = urlsplit(value)
     if (
-        parsed.scheme != "https"
+        not browser_safe(value)
+        or parsed.scheme != "https"
         or not parsed.hostname
         or parsed.username
         or parsed.password

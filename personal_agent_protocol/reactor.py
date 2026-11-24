@@ -33,6 +33,7 @@ from reactor import (  # type: ignore[import-untyped]
 )
 
 from .errors import DiscoveryError, TransportError
+from .urls import browser_safe
 
 AddressResolver = Callable[[str], Awaitable[list[str]]]
 
@@ -980,7 +981,12 @@ class PublicUrlSafetyPolicy:
     async def assert_safe(self, url: str) -> ApprovedUrl:
         parsed = urlsplit(url)
         # Any user information, even empty (`https://:@host/`), is refused.
-        if parsed.scheme != "https" or not parsed.hostname or "@" in parsed.netloc:
+        if (
+            not browser_safe(url)
+            or parsed.scheme != "https"
+            or not parsed.hostname
+            or "@" in parsed.netloc
+        ):
             raise DiscoveryError("unsafe_url", "Discovery and metadata URLs must use HTTPS")
         addresses = await self._resolver(parsed.hostname)
         if not addresses:
@@ -1088,7 +1094,7 @@ def build_pap_reactor(
     platform.register_plugin(
         PluginManifest(
             name="personal-agent-protocol.core",
-            version="1.0.1",
+            version="1.0.2",
             contribution_points=[
                 DISCOVERY_TRANSPORTS.id,
                 URL_SAFETY_POLICIES.id,

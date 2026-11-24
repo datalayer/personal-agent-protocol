@@ -45,6 +45,7 @@ from .sessions import (
     proves_with_dpop,
 )
 from .telemetry import sign_in_method, sign_in_result, signed_in_as, traced
+from .urls import browser_safe
 
 RandomBytes = Callable[[int], bytes]
 _SCOPE_TOKEN = re.compile(r"^[\x21\x23-\x5b\x5d-\x7e]+$")
@@ -89,7 +90,13 @@ def _entropy(length: int, random_bytes: RandomBytes) -> bytes:
 
 def _https_url(value: str, label: str) -> str:
     parsed = urlsplit(value)
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+    if (
+        not browser_safe(value)
+        or parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
         raise AuthorizationError("invalid_url", f"{label} must be an HTTPS URL")
     return value
 

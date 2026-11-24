@@ -142,6 +142,7 @@ from .sessions import (
 from .tasks import TasksClient, tasks_endpoint
 from .transport import SESSION_HEADER, SessionHttpClient, session_headers
 from .ucp import UcpProfile, speaks_ucp, ucp_profile_url
+from .urls import browser_safe
 
 Kind = Literal["positive", "negative", "recovery"]
 Outcome = Literal["passed", "failed", "skipped"]
@@ -407,7 +408,7 @@ class ConformanceContext:
         test a company that serves 0.4 at that version."""
 
         parsed = urlsplit(base_url)
-        if parsed.scheme != "https" or not parsed.hostname:
+        if not browser_safe(base_url) or parsed.scheme != "https" or not parsed.hostname:
             raise ValueError("the company base URL must be an HTTPS origin")
         self.base_url = f"https://{parsed.netloc}"
         self.domain = parsed.hostname

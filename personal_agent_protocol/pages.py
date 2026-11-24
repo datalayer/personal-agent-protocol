@@ -61,6 +61,7 @@ from .reactor import (
 from .refusals import REDIRECT_STATUSES
 from .sessions import PapSession
 from .transport import SessionHttpClient, session_error, session_headers
+from .urls import browser_safe
 
 
 @dataclass(frozen=True)
@@ -90,7 +91,7 @@ def page_carries_session(url: str, domain: str) -> bool:
 
 def _document_key(url: str) -> str | None:
     parsed = urlsplit(url)
-    if parsed.scheme != "https" or not parsed.hostname:
+    if not browser_safe(url) or parsed.scheme != "https" or not parsed.hostname:
         return None
     return f"{parsed.hostname.lower()}{parsed.path or '/'}"
 
@@ -223,7 +224,13 @@ class PageClient:
 
     async def _assert_safe(self, url: str) -> None:
         parsed = urlsplit(url)
-        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        if (
+            not browser_safe(url)
+            or parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+        ):
             raise TransportError("invalid_url", "A page is fetched from an HTTPS URL")
         policy = optional_contribution(self.transport.reactor, URL_SAFETY_POLICIES, "URL policy")
         if policy is None:

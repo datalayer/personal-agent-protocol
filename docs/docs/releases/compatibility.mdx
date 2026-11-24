@@ -4,7 +4,7 @@ title: Compatibility
 
 # Compatibility
 
-This page is versioned with the SDK: it describes **SDK 1.0.1**.
+This page is versioned with the SDK: it describes **SDK 1.0.2**.
 
 ## The PAP version implemented
 
@@ -35,6 +35,7 @@ profile, never picked up from an unattended fetch.
 
 | SDK (PyPI and npm) | PAP profile | Specification revision | Operations | Breaking changes |
 | --- | --- | --- | --- | --- |
+| `1.0.2` | `0.4` | 2026-11-10 | v3 | none: the Python SDK refuses a URL a browser reads on another host (a backslash, whitespace or a control character anywhere, an authority with anything but RFC 3986 ASCII characters), so a device sign-in link is shown only on the host it was checked on (§4.3) |
 | `1.0.1` | `0.4` | 2026-11-10 | v3 | none: the four case decks (`./decks`) and the docs describe the cases at Poppy 1.0 as published, with Operations version 3, no longer draft 0.3 |
 | `1.0.0` | `0.4` | 2026-11-10 | v3 | none: the SDK's version follows Poppy's own, 1.0; the code is 0.37.5's |
 | `0.37.5` | `0.4` | 2026-11-10 | v3 | none: a client that registers itself (`client_registration`) is registered as a public client whatever `token_endpoint_auth_method` it asked for among `none`, `client_secret_post`, `client_secret_basic` or none at all, and told `none`; a request that sends a client secret is refused |

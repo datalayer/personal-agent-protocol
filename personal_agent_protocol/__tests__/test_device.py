@@ -217,6 +217,61 @@ def test_device_sign_in_denial_is_terminal() -> None:
 
 
 @pytest.mark.parametrize(
+    "link",
+    [
+        # A browser reads a backslash as a slash: host v.example, path /device (reported on 1.0.1).
+        "https://v.example\\.company.example/../device",
+        "https://v.example\\@company.example/device",
+        # A browser drops tabs and newlines, and strips spaces and controls at either end.
+        "https://v.example\t.company.example/device",
+        "https://login.company.example\n/device",
+        " https://login.company.example/device",
+        "https://login.company.example/device\x00",
+        # A browser decodes a percent-encoded host; the SDK reads it as written.
+        "https://v.example%2e.company.example/device",
+        # Not a URI at all: non-ASCII, which a browser maps through IDNA first.
+        "https://v.example\uff0ecompany.example/device",
+    ],
+)
+def test_a_device_link_a_browser_reads_otherwise_is_refused(link: str) -> None:
+    """A link is shown only when a browser opens it on the host the SDK checked (§4.3)."""
+
+    async def scenario() -> None:
+        def handler(_: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "device_code": "private-device-code",
+                    "user_code": "WDJB-MJHT",
+                    "verification_uri": link,
+                    "expires_in": 600,
+                    "interval": 5,
+                },
+            )
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            reactor, _ = build_pap_reactor(http_client=http)
+            plugin = DevicePlugin()
+            reactor.register_plugin(PluginManifest(name="pap-test-device", version="1"), plugin)
+            begin = DeviceSignInClient(reactor=reactor, http_client=http).begin(
+                device_authorization_endpoint="https://auth.example.com/oauth/device",
+                token_endpoint="https://auth.example.com/oauth/token",  # noqa: S106
+                issuer="https://auth.example.com",
+                client_id="https://agent.example/agent.json",
+                scopes=("orders:read",),
+                tenant_id="application-one",
+                organization=Organization(name="Company", domain="company.example"),
+            )
+            with pytest.raises(AuthorizationError) as refused:
+                await begin
+            assert refused.value.code == "invalid_url"
+            assert plugin.state.values == {}  # nothing kept for a link never shown
+            reactor.stop()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
     ("link", "allowed"),
     [
         ("https://company.example/device", True),

@@ -39,6 +39,7 @@ from .reactor import BROWSER_JOINS, CLOCKS, BrowserJoin, Clock, first_contributi
 from .refusals import challenge_parameters
 from .sessions import AccessToken, PapSession
 from .transport import SessionHttpClient
+from .urls import browser_safe
 
 #: A join code carries at least 128 random bits (§6): 22 base64url characters or more.
 _MIN_CODE_LENGTH = 22
@@ -46,7 +47,13 @@ _MIN_CODE_LENGTH = 22
 
 def _https_url(value: str, label: str) -> str:
     parsed = urlsplit(value)
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+    if (
+        not browser_safe(value)
+        or parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
         raise BrowserSessionError("invalid_url", f"{label} must be an HTTPS URL")
     return value
 

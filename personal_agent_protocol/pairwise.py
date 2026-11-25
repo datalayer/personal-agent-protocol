@@ -291,7 +291,7 @@ def derive_pairwise_user_id(
     from personal information, keyed or not (§5.1).
     """
 
-    secret = key.get_secret_value() if isinstance(key, SecretBytes) else key
+    secret = key.get_secret_value() if isinstance(key, SecretBytes) else bytes(key)
     if len(secret) < PAIRWISE_KEY_MIN_BYTES:
         raise ValueError(f"the key has at least {PAIRWISE_KEY_MIN_BYTES} bytes")
     if isinstance(counter, bool) or counter < 0:
@@ -386,7 +386,9 @@ class DerivedPairwiseUserIds:
     user IDs*). The key is the host's secret, kept for as long as the IDs are."""
 
     def __init__(self, key: SecretBytes | bytes, *, counters: PairwiseCounters) -> None:
-        secret = key if isinstance(key, SecretBytes) else SecretBytes(key)
+        # A copy the store owns: a bytearray or memoryview the host wipes or reuses must not
+        # change the key, and with it every derived ID.
+        secret = key if isinstance(key, SecretBytes) else SecretBytes(bytes(key))
         if len(secret.get_secret_value()) < PAIRWISE_KEY_MIN_BYTES:
             raise ValueError(f"the key has at least {PAIRWISE_KEY_MIN_BYTES} bytes")
         self._key = secret

@@ -851,6 +851,12 @@ async def test_a_keyed_hash_replaces_one_users_id_with_a_counter(tmp_path: Path)
     )
     assert await again.get_or_create(**WHO) == replaced
     assert await ids.get_or_create(**{**WHO, "local_user_id": "user-bo"}) == different[2]
+    # The store owns its key: a buffer the host wipes afterwards changes no ID.
+    buffer = bytearray(key)
+    owned = DerivedPairwiseUserIds(buffer, counters=counters)  # type: ignore[arg-type]
+    kept = await owned.get_or_create(**{**WHO, "local_user_id": "user-cy"})
+    buffer[:] = bytes(32)
+    assert await owned.get_or_create(**{**WHO, "local_user_id": "user-cy"}) == kept
     with pytest.raises(ValueError):
         DerivedPairwiseUserIds(b"short", counters=counters)
     with pytest.raises(ValueError):

@@ -700,6 +700,12 @@ test("a keyed hash replaces one user's ID with a counter", async () => {
   // Another process over the same counters derives the new ID.
   assert.equal(await new DerivedPairwiseUserIds(key, { counters }).getOrCreate(WHO), replaced);
   assert.equal(await ids.getOrCreate({ ...WHO, localUserId: "user-bo" }), different[2]);
+  // The store owns its key: a Node.js Buffer the host wipes afterwards changes no ID.
+  const buffer = Buffer.from(key);
+  const owned = new DerivedPairwiseUserIds(buffer, { counters });
+  const kept = await owned.getOrCreate({ ...WHO, localUserId: "user-cy" });
+  buffer.fill(0);
+  assert.equal(await owned.getOrCreate({ ...WHO, localUserId: "user-cy" }), kept);
   assert.throws(() => new DerivedPairwiseUserIds(new Uint8Array(5), { counters }), RangeError);
 });
 

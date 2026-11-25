@@ -10,13 +10,16 @@ import { AuthorizationError } from "./errors.js";
 import { parseJsonStrict } from "./json.js";
 import { readLimitedText } from "./limits.js";
 import { isLoopbackRedirect } from "./models.js";
+import { signOauthRequest } from "./operator-signatures.js";
 import { SecretValue } from "./secret.js";
 import {
   DPOP_HEADER,
   DPOP_NONCE_HEADER,
   SessionClient,
+  accountScopes,
   finishSignIn,
   provesWithDpop,
+  requestScope,
   type RandomBytes,
   type SignInResult,
 } from "./sessions.js";
@@ -126,15 +129,6 @@ function redirectUrl(value: string, label: string): URL {
   return isLoopbackRedirect(value) ? new URL(value) : httpsUrl(value, label);
 }
 
-function validScopes(values: readonly string[]): readonly string[] {
-  const scopes = [...new Set(values)];
-  const token = /^[\x21\x23-\x5b\x5d-\x7e]+$/;
-  if (scopes.length === 0 || scopes.some((scope) => !token.test(scope))) {
-    throw new AuthorizationError("invalid_scope", "At least one valid OAuth scope is required");
-  }
-  return scopes;
-}
-
 export interface DirectSignInOptions {
   readonly authorizationEndpoint: string;
   readonly issuer: string;
@@ -148,6 +142,12 @@ export interface DirectSignInOptions {
    * `false`. Default `true`.
    */
   readonly promptConsent?: boolean;
+  /**
+   * The issuer's `scopes_supported`: when it lists `offline_access`, the request's `scope`
+   * includes it (§4.4). `DirectSignInRequest.scopes` stay the account scopes asked for:
+   * `offline_access` is none of the scopes a sign-in grants (§4.7).
+   */
+  readonly scopesSupported?: readonly string[] | undefined;
 }
 
 /**
@@ -198,7 +198,7 @@ export async function buildDirectSignInRequest(
     new Uint8Array(await cryptoApi.subtle.digest("SHA-256", new TextEncoder().encode(verifier))),
   );
   const endpoint = httpsUrl(options.authorizationEndpoint, "authorizationEndpoint");
-  const scopes = validScopes(options.scopes);
+  const scopes = accountScopes(options.scopes);
   const clientId = httpsUrl(options.clientId, "clientId").toString();
   const redirectUri = redirectUrl(options.redirectUri, "redirectUri").toString();
   // Kept exactly as written: the callback's `iss` is compared character for character (§3.2).
@@ -208,7 +208,7 @@ export async function buildDirectSignInRequest(
     ["response_type", "code"],
     ["client_id", clientId],
     ["redirect_uri", redirectUri],
-    ["scope", scopes.join(" ")],
+    ["scope", requestScope(scopes, options.scopesSupported)],
     ["state", state],
     ["code_challenge", challenge],
     ["code_challenge_method", "S256"],
@@ -354,6 +354,13 @@ export interface DirectSignInBeginOptions extends Omit<DirectSignInOptions, "pro
   readonly dpopSigningAlgs?: readonly string[] | undefined;
   /** The User ID the sign-in is for: its DPoP key proves the code exchange (§4.5). */
   readonly pairwiseUserId?: string | undefined;
+  /**
+   * The issuer's `scopes_supported`: when it lists `offline_access`, the request asks for it,
+   * pushed or not, since some authorization servers issue a refresh token only then (§4.4). It
+   * is never one of `requestedScopes` or of the scopes granted: a sign-in that grants nothing
+   * else is a decline (§4.7).
+   */
+  readonly scopesSupported?: readonly string[] | undefined;
   /**
    * The host receives the redirect only on the device that opened the URL (a loopback
    * `redirectUri`, or its own app signed in as the User who started): only then does the request
@@ -555,6 +562,7 @@ export class DirectSignInClient {
       scopes: options.scopes,
       randomBytes: (length) => random.bytes(length),
       promptConsent: options.sameDeviceRedirect !== true,
+      scopesSupported: options.scopesSupported,
     });
     const tokenEndpoint = httpsUrl(options.tokenEndpoint, "tokenEndpoint").toString();
     const expiresAt = new Date(clock.now().getTime() + lifetimeSeconds * 1000);
@@ -638,7 +646,8 @@ export class DirectSignInClient {
   /**
    * Push the request (RFC 9126 §2): its parameters, a fresh client assertion, and a DPoP proof
    * when tokens are bound, so the code is bound to the key (RFC 9449 §10.1); a `use_dpop_nonce`
-   * refusal is retried once. The `request_uri`.
+   * refusal is retried once. With a `pap.operatorSigner`, each push carries the operator
+   * signature over its content digest (§5.3). The `request_uri`.
    */
   async #push(pending: PendingDirectSignIn): Promise<string> {
     const request = pending.request;
@@ -666,11 +675,19 @@ export class DirectSignInClient {
         });
         headers[DPOP_HEADER] = proof.reveal();
       }
+      // Signed as its operator too, with a `pap.operatorSigner` (§5.3): a Company can then
+      // decide on the agent before its sign-in page is shown.
+      const signed = await signOauthRequest(this.#reactor, {
+        url: endpoint,
+        tenantId: pending.tenantId,
+        headers,
+        body,
+      });
       try {
         response = await this.#fetch(endpoint, {
           method: "POST",
-          headers,
-          body,
+          headers: signed.headers,
+          body: signed.body,
           credentials: "omit",
           redirect: "manual",
         });

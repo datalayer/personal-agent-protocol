@@ -160,16 +160,37 @@ export interface DpopProver {
 /**
  * What one operator signature is signed for (§5.3, RFC 9421).
  *
- * `method` and `url` are the request's, `sessionJwt` the value of its `Poppy-Session` header and
- * `authorization` of its `Authorization` header, when it has one. A signature covers both.
- * `tenantId` says for whom, for a host with a key per tenant.
+ * `method` and `url` are the request's. A request with the Session header gives `sessionJwt`,
+ * the value of its `Poppy-Session` header, and `authorization`, of its `Authorization` header
+ * when it has one: a signature covers both. A request to the Company's pushed authorization
+ * request, token, device authorization or revocation endpoint carries neither, and gives
+ * `contentDigest`, the value of its `Content-Digest` header (RFC 9530): covering it binds the
+ * signature to the client assertion in the body. Exactly one of `sessionJwt` and
+ * `contentDigest` (`checkOperatorSignatureRequest`). `tenantId` says for whom, for a host with
+ * a key per tenant.
  */
 export interface OperatorSignatureRequest {
   readonly method: string;
   readonly url: string;
   readonly tenantId: string;
-  readonly sessionJwt: SecretValue;
+  readonly sessionJwt?: SecretValue;
   readonly authorization?: SecretValue;
+  readonly contentDigest?: string;
+}
+
+/**
+ * `RangeError` unless the request names the Session header or the content digest of a request
+ * to an OAuth endpoint, one and not both; the latter carries no access token.
+ */
+export function checkOperatorSignatureRequest(request: OperatorSignatureRequest): void {
+  if ((request.sessionJwt === undefined) === (request.contentDigest === undefined)) {
+    throw new RangeError(
+      "an operator signature covers the Session header, or the content digest of a request to an OAuth endpoint",
+    );
+  }
+  if (request.contentDigest !== undefined && request.authorization !== undefined) {
+    throw new RangeError("a request to an OAuth endpoint carries no access token");
+  }
 }
 
 /** The values of the three headers of a signed request (Web Bot Auth §5.2.5). */
@@ -180,7 +201,8 @@ export interface OperatorSignature {
 }
 
 /**
- * Sign one request that carries the Session header, as its operator (§5.3).
+ * Sign one request, as its operator (§5.3): one that carries the Session header, or one to the
+ * Company's pushed authorization request, token, device authorization or revocation endpoint.
  *
  * Never with a delegated key, a DPoP key or a key from `jwks_uri`: an operator signature is a
  * fourth signature, by a key the operator publishes in its directory.
@@ -371,7 +393,7 @@ export function createPapCorePlugin(options: PapCoreOptions = {}) {
   }
   return definePlugin({
     name: "@datalayer/personal-agent-protocol-core",
-    version: "1.0.4",
+    version: "1.1.0",
     contributionPoints: [
       DiscoveryTransports,
       UrlSafetyPolicies,

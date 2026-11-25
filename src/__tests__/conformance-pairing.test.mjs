@@ -115,10 +115,28 @@ test("the conformance cases at 0.4 as published: TypeScript agent ↔ TypeScript
   const failed = Object.fromEntries(report.cases.filter((item) => item.outcome === "failed").map((item) => [item.id, item.message]));
   assert.deepEqual(failed, {});
   assert.equal(report.profile, "0.4");
-  // What only 1.0 defines has nothing to check at 0.4.
+  // What only 1.0 or 1.1 defines has nothing to check at 0.4.
   const skipped = report.cases.filter((item) => item.outcome === "skipped").map((item) => item.id);
-  assert.deepEqual(skipped, ["protocol.agent-protocols-described"]);
-  assert.deepEqual(report.summary, { passed: report.cases.length - 1, failed: 0, skipped: 1 });
+  assert.deepEqual(skipped.sort(), [
+    "protocol.agent-protocols-described",
+    "protocol.feedback-listed-tasks",
+    "protocol.feedback-report-forms",
+    "protocol.listed-tasks-not-at-10",
+  ]);
+  assert.deepEqual(report.summary, { passed: report.cases.length - 4, failed: 0, skipped: 4 });
+});
+
+test("the conformance cases at 1.0 as published: TypeScript agent ↔ TypeScript company over TLS", async () => {
+  // The company serves only 1.0: the suite's agent names 1.0 there, and the cases 1.1 adds
+  // are skipped, never passed.
+  const versions = ["1.0"];
+  const report = await runPairing({ config: { protocolVersions: versions }, protocolVersions: versions });
+  const failed = Object.fromEntries(report.cases.filter((item) => item.outcome === "failed").map((item) => [item.id, item.message]));
+  assert.deepEqual(failed, {});
+  assert.equal(report.profile, "1.0");
+  const skipped = report.cases.filter((item) => item.outcome === "skipped").map((item) => item.id);
+  assert.deepEqual(skipped.sort(), ["protocol.feedback-listed-tasks", "protocol.feedback-report-forms"]);
+  assert.deepEqual(report.summary, { passed: report.cases.length - 2, failed: 0, skipped: 2 });
 });
 
 test("the DPoP cases: TypeScript agent ↔ TypeScript company over TLS, in the world that binds", async () => {

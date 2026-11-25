@@ -38,9 +38,12 @@ import { readLimitedText } from "./limits.js";
 import type { DiscoveredCompany, ProtectedResourceMetadata } from "./models.js";
 import { RefreshTokenLocks, TokenStores, firstContribution, type TokenStore } from "./reactor.js";
 import { refusalCode, refusalDetails, refuseRedirect, refusedWithoutBody } from "./refusals.js";
+import { signOauthRequest } from "./operator-signatures.js";
 import {
   SessionClient,
   accessTokenFromResponse,
+  accountScopes,
+  requestScope,
   type AccessToken,
   type TokenResponse,
 } from "./sessions.js";
@@ -48,7 +51,6 @@ import { byIssuer, signInResult, traced } from "./telemetry.js";
 
 export const REFRESH_TOKEN_GRANT = "refresh_token";
 
-const scopeToken = /^[\x21\x23-\x5b\x5d-\x7e]+$/;
 
 function httpsUrl(value: string, label: string): string {
   let parsed: URL;
@@ -68,7 +70,8 @@ function httpsUrl(value: string, label: string): string {
  *
  * `dpopSigningAlgs` is the issuer's `dpop_signing_alg_values_supported`: a refresh sends a DPoP
  * proof when it includes ES256 (§4.5), by the DPoP key of `pairwiseUserId`, the User ID the
- * refresh token is for, which proving needs.
+ * refresh token is for, which proving needs. `scopesSupported` is the issuer's too: when it
+ * lists `offline_access`, a refresh that asks for fewer scopes names it in `scope` (§4.4).
  */
 export interface RefreshTokenContext {
   readonly tokenEndpoint: string;
@@ -78,6 +81,7 @@ export interface RefreshTokenContext {
   readonly revocationEndpoint?: string;
   readonly dpopSigningAlgs?: readonly string[] | undefined;
   readonly pairwiseUserId?: string | undefined;
+  readonly scopesSupported?: readonly string[] | undefined;
 }
 
 export interface RefreshOptions {
@@ -165,10 +169,7 @@ export class RefreshTokenClient {
   }
 
   async #refresh(reference: string, options: RefreshOptions): Promise<RefreshResult> {
-    const requested = options.scopes === undefined ? undefined : [...new Set(options.scopes)];
-    if (requested && (requested.length === 0 || requested.some((scope) => !scopeToken.test(scope)))) {
-      throw new AuthorizationError("invalid_scope", "At least one valid OAuth scope is required");
-    }
+    const requested = options.scopes === undefined ? undefined : accountScopes(options.scopes);
     const resource = options.resource === undefined ? undefined : httpsUrl(options.resource, "resource");
     const context = options.context;
     const tokenEndpoint = httpsUrl(context.tokenEndpoint, "tokenEndpoint");
@@ -180,7 +181,8 @@ export class RefreshTokenClient {
       const form: Record<string, string> = {
         grant_type: REFRESH_TOKEN_GRANT,
         refresh_token: refreshToken.reveal(),
-        ...(requested ? { scope: requested.join(" ") } : {}),
+        // A narrowed request also names `offline_access` when the issuer lists it (§4.4).
+        ...(requested ? { scope: requestScope(requested, context.scopesSupported) } : {}),
         ...(resource === undefined ? {} : { resource }),
       };
       let response: TokenResponse;
@@ -292,16 +294,23 @@ export class RefreshTokenClient {
         clientId: context.clientId,
         issuer: context.issuer,
       });
+      // Signed as its operator too, with a `pap.operatorSigner` (§5.3).
+      const signed = await signOauthRequest(this.#reactor, {
+        url: endpoint,
+        tenantId: context.tenantId,
+        headers: { Accept: "application/json" },
+        body: new URLSearchParams({
+          token: refreshToken.reveal(),
+          token_type_hint: REFRESH_TOKEN_GRANT,
+          ...client,
+        }),
+      });
       let response: Response;
       try {
         response = await this.#fetch(endpoint, {
           method: "POST",
-          headers: { Accept: "application/json" },
-          body: new URLSearchParams({
-            token: refreshToken.reveal(),
-            token_type_hint: REFRESH_TOKEN_GRANT,
-            ...client,
-          }),
+          headers: signed.headers,
+          body: signed.body,
           credentials: "omit",
           redirect: "manual",
           ...(options.signal === undefined ? {} : { signal: options.signal }),

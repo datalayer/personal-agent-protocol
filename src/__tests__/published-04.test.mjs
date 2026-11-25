@@ -73,7 +73,7 @@ test("poppy.json names a tasks endpoint and nothing it moved", async () => {
   assert.equal(tasksEndpoint(w.company.document), TASKS);
   assert.deepEqual(Object.keys(w.shop.tasksDocument()).sort(), ["excluded_tasks", "feedback", "skill_index"]);
   // A company with nothing to say there lists no endpoint and serves none.
-  const quiet = await shopWorld({ config: { excludedTasks: [], feedback: false } });
+  const quiet = await shopWorld({ config: { excludedTasks: [], feedback: false, feedbackTasks: [] } });
   assert.equal(quiet.shop.config.servesTasks, false);
   assert.equal("tasks" in quiet.shop.discoveryDocument(), false);
   assert.equal(tasksEndpoint(quiet.company.document), undefined);
@@ -97,7 +97,7 @@ test("the tasks response is fetched with the Session header and no token", async
   const tasks = await new TasksClient({ transport: watching }).get(w.company, { session });
   assert.deepEqual(sent, [["GET", TASKS, false]]);
   const [[, , headers]] = seen;
-  assert.ok(headers.has("poppy-session") && headers.get("poppy-version") === "1.0");
+  assert.ok(headers.has("poppy-session") && headers.get("poppy-version") === "1.1");
   assert.equal(headers.has("authorization"), false);
   assert.deepEqual([tasks.available, tasks.session, tasks.endpoint], [true, session.sid, TASKS]);
   assert.deepEqual(tasks.excludedTasks.map((task) => task.task), ["Change the size of an item after it has shipped"]);
@@ -289,7 +289,7 @@ test("a page fetched without a browser carries the Session header, signed out", 
   const [request] = requests;
   assert.equal(requests.length, 1);
   assert.ok(request.headers.has("poppy-session"));
-  assert.equal(request.headers.get("poppy-version"), "1.0");
+  assert.equal(request.headers.get("poppy-version"), "1.1");
   assert.equal(request.headers.has("authorization"), false);
   assert.equal(request.headers.has("dpop"), false);
   const [caller] = sessions;

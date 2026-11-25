@@ -7,16 +7,20 @@
 /**
  * Operator signatures: an HTTP Message Signature beside the Session header (§5.3).
  *
- * A Personal Agent SHOULD sign requests that carry the Session header with RFC 9421 and Web Bot
- * Auth (`draft-ietf-webbotauth-httpsig-protocol-01`), so traffic-management infrastructure can
- * authenticate the operator before the Company's application sees the request. It is
- * compatibility support, not a credential: its absence does not make a Session JWT invalid, and
- * a verified one authenticates its key source, never a `client_id`.
+ * A Personal Agent SHOULD sign requests that carry the Session header, and its requests to the
+ * Company's pushed authorization request, token, device authorization and revocation endpoints,
+ * with RFC 9421 and Web Bot Auth (`draft-ietf-webbotauth-httpsig-protocol-01`), so
+ * traffic-management infrastructure can authenticate the operator before the Company's
+ * application or authorization server sees the request. It is compatibility support, not a
+ * credential: its absence does not make a Session JWT invalid, and a verified one authenticates
+ * its key source, never a `client_id`. A request to one of those OAuth endpoints carries no
+ * Session header: its signature covers `content-digest` (RFC 9530), which binds it to the client
+ * assertion in the body (`signOauthRequest`).
  *
  * - `WebBotAuthSigner` is what a host contributes to `pap.operatorSigner`, which has no default:
  *   the key is the operator's, published in a directory the host serves. It covers the authority,
  *   the `Signature-Agent` member, the method, path and query, `poppy-session`, and `authorization`
- *   when present (§5.3). `Ed25519OperatorKey` keeps the key in this process; a key in a KMS is any
+ *   when present, or `content-digest` at an OAuth endpoint (§5.3). `Ed25519OperatorKey` keeps the key in this process; a key in a KMS is any
  *   `OperatorSigningKey`.
  * - `operatorDirectory` is the key set a host publishes at its `Signature-Agent` URL.
  * - `verifyOperatorSignature` is a Company's side, with the draft's outcomes kept apart: `absent`,
@@ -26,20 +30,26 @@
  * holds a shared operator key (Guides, operator signatures).
  */
 
+import type { ReactorPlatformView } from "@datalayer/reactor";
 import { exportJWK, generateKeyPair, importJWK, type JWK } from "jose";
 
 import { base64Url, jwkThumbprint } from "./crypto.js";
 import { PersonalAgentProtocolError, ProofError } from "./errors.js";
-import type {
-  OperatorSignature,
-  OperatorSignatureRequest,
-  OperatorSigner,
+import {
+  OperatorSigners,
+  checkOperatorSignatureRequest,
+  optionalContribution,
+  type OperatorSignature,
+  type OperatorSignatureRequest,
+  type OperatorSigner,
 } from "./reactor.js";
 
 /** The headers of a signed request (RFC 9421 §4; Web Bot Auth §5.2.5). */
 export const SIGNATURE_HEADER = "Signature";
 export const SIGNATURE_INPUT_HEADER = "Signature-Input";
 export const SIGNATURE_AGENT_HEADER = "Signature-Agent";
+/** The header whose value an OAuth endpoint request's signature covers (RFC 9530, §5.3). */
+export const CONTENT_DIGEST_HEADER = "Content-Digest";
 /** The tag that marks a signature as Web Bot Auth's (§5.2). */
 export const WEB_BOT_AUTH_TAG = "web-bot-auth";
 /** The RFC 9421 algorithm these signatures use. */
@@ -188,7 +198,8 @@ export interface SignOperatorRequestOptions {
  * The signature of one request, its `created`, `expires` and `nonce` given.
  *
  * `components` defaults to what §5.3 and Web Bot Auth ask: `authorization` joins `poppy-session`
- * when the request has one.
+ * when the request has one, and a request to an OAuth endpoint, which has neither, covers
+ * `content-digest`.
  */
 export async function signOperatorRequest(
   request: OperatorSignatureRequest,
@@ -200,8 +211,11 @@ export async function signOperatorRequest(
     throw new RangeError("a Signature-Agent is an HTTPS URL");
   }
   const label = OPERATOR_SIGNATURE_LABEL;
-  const headers: Record<string, string> = { "poppy-session": request.sessionJwt.reveal() };
+  checkOperatorSignatureRequest(request);
+  const headers: Record<string, string> = {};
+  if (request.sessionJwt !== undefined) headers["poppy-session"] = request.sessionJwt.reveal();
   if (request.authorization !== undefined) headers.authorization = request.authorization.reveal();
+  if (request.contentDigest !== undefined) headers["content-digest"] = request.contentDigest;
   const names = options.components ?? [...OPERATOR_SIGNATURE_COMPONENTS, ...Object.keys(headers)];
   const components = covered(names, label);
   const listed = components.map((component) => component.identifier).join(" ");
@@ -261,6 +275,62 @@ export class WebBotAuthSigner implements OperatorSigner {
       nonce: base64Url(random),
     });
   }
+}
+
+/**
+ * The `Content-Digest` of a request body (RFC 9530 §2): its SHA-256, as a Dictionary with one
+ * Byte Sequence.
+ */
+export async function contentDigest(content: Uint8Array | string): Promise<string> {
+  const bytes = typeof content === "string" ? new TextEncoder().encode(content) : content;
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes as BufferSource));
+  return `sha-256=:${base64(digest)}:`;
+}
+
+/** A form request to an OAuth endpoint, about to be sent. */
+export interface OauthRequest {
+  readonly url: string;
+  readonly tenantId: string;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly body: URLSearchParams;
+}
+
+/**
+ * Sign a request to the Company's pushed authorization request, token, device authorization or
+ * revocation endpoint as its operator (§5.3), when the host contributes `pap.operatorSigner`;
+ * the request as given otherwise.
+ *
+ * Such a request carries no Session header, so the signature covers `content-digest`, which
+ * this adds over the body as it is sent: the form as text, with its `Content-Type`. That binds
+ * the signature to the client assertion in it. Call it last, on the request about to be sent,
+ * and again for every retry: a signature is fresh for each request. The `headers` and `body` to
+ * send.
+ */
+export async function signOauthRequest(
+  reactor: ReactorPlatformView,
+  request: OauthRequest,
+): Promise<{ readonly headers: Record<string, string>; readonly body: URLSearchParams | string }> {
+  const operator = optionalContribution(reactor, OperatorSigners, "operator signer");
+  if (operator === undefined) return { headers: { ...request.headers }, body: request.body };
+  const body = request.body.toString();
+  const digest = await contentDigest(body);
+  const signed = await operator.sign({
+    method: "POST",
+    url: request.url,
+    tenantId: request.tenantId,
+    contentDigest: digest,
+  });
+  return {
+    headers: {
+      ...request.headers,
+      "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+      [CONTENT_DIGEST_HEADER]: digest,
+      [SIGNATURE_AGENT_HEADER]: signed.signatureAgent,
+      [SIGNATURE_INPUT_HEADER]: signed.signatureInput,
+      [SIGNATURE_HEADER]: signed.signature,
+    },
+    body,
+  };
 }
 
 // Reading signatures (RFC 8941) -----------------------------------------------------------
@@ -404,6 +474,42 @@ class Parser {
 
 /** Keys published at a `Signature-Agent` URL: the URL and the `keyid` asked of it. */
 export type OperatorKeys = (url: string, keyid: string) => Promise<readonly JWK[]>;
+/** Whether a Company reads the directory at a `Signature-Agent` URL at all. */
+export type OperatorTrust = (agent: string) => Promise<boolean>;
+/** The digest algorithms of a `Content-Digest` this SDK checks (RFC 9530 §5). */
+const DIGESTS: Readonly<Record<string, string>> = { "sha-256": "SHA-256", "sha-512": "SHA-512" };
+
+/**
+ * Whether the request's `Content-Digest` is of `content` (RFC 9530 §2): at least one digest by
+ * an algorithm this SDK checks, and every such digest right.
+ */
+async function digestMatches(
+  headers: Readonly<Record<string, string | undefined>>,
+  content: Uint8Array,
+): Promise<boolean> {
+  let digests: Map<string, Field>;
+  try {
+    digests = new Parser(headers["content-digest"] ?? "").dictionary();
+  } catch (error) {
+    if (error instanceof RangeError) return false;
+    throw error;
+  }
+  let checkedDigests = 0;
+  for (const [name, algorithm] of Object.entries(DIGESTS)) {
+    const member = digests.get(name);
+    if (member === undefined) continue;
+    if (!(member.value instanceof Uint8Array)) return false;
+    const expected = new Uint8Array(await crypto.subtle.digest(algorithm, content as BufferSource));
+    const given = member.value;
+    let different = given.byteLength ^ expected.byteLength;
+    for (let index = 0; index < expected.byteLength; index += 1) {
+      different |= (given[index] ?? 0) ^ (expected[index] as number);
+    }
+    if (different !== 0) return false;
+    checkedDigests += 1;
+  }
+  return checkedDigests > 0;
+}
 
 /**
  * What one request's operator signature came to (Web Bot Auth, appendix C.1).
@@ -471,12 +577,17 @@ function offeredSignatures(headers: Readonly<Record<string, string | undefined>>
   });
 }
 
-/** The components §5.3 and Web Bot Auth §5.2 require, the parameters, and freshness. */
+/**
+ * The components §5.3 and Web Bot Auth §5.2 require, the parameters, and freshness. `oauth`
+ * says the request went to an OAuth endpoint: the signature covers `content-digest` (the digest
+ * itself is checked against the body by the caller).
+ */
 function sound(
   offered: Offered,
   headers: Readonly<Record<string, string | undefined>>,
   now: number,
   window: number,
+  oauth: boolean,
 ): boolean {
   const names = new Set(offered.components.map((item) => item.name));
   const member = offered.components.some(
@@ -486,8 +597,9 @@ function sound(
   const url = offered.agent.value;
   return (
     member &&
-    names.has("poppy-session") &&
-    (headers.authorization === undefined || names.has("authorization")) &&
+    (oauth
+      ? names.has("content-digest")
+      : names.has("poppy-session") && (headers.authorization === undefined || names.has("authorization"))) &&
     (names.has("@authority") || names.has("@target-uri")) &&
     Number.isSafeInteger(created) &&
     Number.isSafeInteger(expires) &&
@@ -513,12 +625,17 @@ async function checked(
   keys: OperatorKeys,
   now: number,
   window: number,
+  content: Uint8Array | undefined,
+  trusts: OperatorTrust | undefined,
 ): Promise<OperatorVerdict> {
-  if (!sound(offered, headers, now, window)) return { outcome: "invalid" };
+  if (content !== undefined && !(await digestMatches(headers, content))) return { outcome: "invalid" };
+  if (!sound(offered, headers, now, window, content !== undefined)) return { outcome: "invalid" };
   const agent = offered.agent.value as string;
   const keyid = offered.parameters.keyid as string;
   const algorithm = offered.parameters.alg ?? OPERATOR_SIGNATURE_ALGORITHM;
   if (algorithm !== OPERATOR_SIGNATURE_ALGORITHM) return { outcome: "unverified" };
+  // An operator the Company doesn't know: its directory is never read.
+  if (trusts !== undefined && !(await trusts(agent))) return { outcome: "unverified" };
   let published: readonly JWK[];
   try {
     published = await keys(agent, keyid);
@@ -552,13 +669,25 @@ export interface VerifyOperatorSignatureOptions {
   readonly now: Date;
   /** The clock skew `created` is allowed, in seconds (default a minute). */
   readonly windowSeconds?: number;
+  /**
+   * The body of a request to the pushed authorization request, token, device authorization or
+   * revocation endpoint, which carries no Session header: its signature must cover
+   * `content-digest`, and the `Content-Digest` header be the body's (RFC 9530).
+   */
+  readonly content?: Uint8Array | undefined;
+  /**
+   * Whether a `Signature-Agent` is an operator the Company knows: one it doesn't is
+   * `unverified`, its directory never read.
+   */
+  readonly trusts?: OperatorTrust | undefined;
 }
 
 /**
  * What the request's operator signature comes to.
  *
  * One verified signature is enough. The Session JWT is verified apart from this, whatever it
- * says (§5.3).
+ * says (§5.3). With `content`, the request went to an OAuth endpoint: the signature binds its
+ * body, and so the client assertion in it, which is verified apart from this too.
  */
 export async function verifyOperatorSignature(
   options: VerifyOperatorSignatureOptions,
@@ -574,7 +703,9 @@ export async function verifyOperatorSignature(
   if (offered.length === 0) return { outcome: "absent" };
   const now = options.now.getTime() / 1000;
   const verdicts: OperatorVerdict[] = [];
-  for (const one of offered) verdicts.push(await checked(one, method, url, headers, keys, now, windowSeconds));
+  for (const one of offered) {
+    verdicts.push(await checked(one, method, url, headers, keys, now, windowSeconds, options.content, options.trusts));
+  }
   return (
     verdicts.find((verdict) => verdict.outcome === "verified") ??
     verdicts.find((verdict) => verdict.outcome === "invalid") ??
@@ -593,11 +724,18 @@ export function operatorSignatureBase(
   return signatureBase(offered.components, offered.parametersText, method, url, headers, offered.agent.raw);
 }
 
-/** The `Accept-Signature` of a refusal: what this request should have signed (RFC 9421 §5). */
-export function acceptSignature(headers: Readonly<Record<string, string | undefined>>): string {
+/**
+ * The `Accept-Signature` of a refusal: what this request should have signed (RFC 9421 §5).
+ * `oauth` says it went to an OAuth endpoint, where it covers `content-digest`.
+ */
+export function acceptSignature(
+  headers: Readonly<Record<string, string | undefined>>,
+  options: { readonly oauth?: boolean } = {},
+): string {
   const label = OPERATOR_SIGNATURE_LABEL;
-  const names: string[] = [...OPERATOR_SIGNATURE_COMPONENTS, "poppy-session"];
-  if (headers.authorization !== undefined) names.push("authorization");
+  const oauth = options.oauth === true;
+  const names: string[] = [...OPERATOR_SIGNATURE_COMPONENTS, oauth ? "content-digest" : "poppy-session"];
+  if (!oauth && headers.authorization !== undefined) names.push("authorization");
   const listed = covered(names, label).map((item) => item.identifier).join(" ");
   return `${label}=(${listed});created;expires;tag="${WEB_BOT_AUTH_TAG}"`;
 }

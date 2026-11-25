@@ -34,6 +34,8 @@ import {
   type CompanyStore,
   type DelegatedKeyUse,
   type RegisteredClient,
+  type KnownUserId,
+  type NewUserIdCount,
   type RegistrationCount,
   type IdempotencyRecord,
   type IssuedAccessToken,
@@ -256,6 +258,8 @@ export function recordSamples(now: Date): Readonly<Record<string, JsonObject>> {
       registeredAt: now.toISOString(),
     } satisfies RegisteredClient,
     [RecordKinds.registrationCount]: { count: 3 } satisfies RegistrationCount,
+    [RecordKinds.userId]: {} satisfies KnownUserId,
+    [RecordKinds.newUserIdCount]: { count: 2 } satisfies NewUserIdCount,
   };
   return records as Readonly<Record<string, JsonObject>>;
 }

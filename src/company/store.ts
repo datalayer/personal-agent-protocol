@@ -258,6 +258,13 @@ export const RecordKinds = {
   publicClient: "public_client",
   /** How many clients one address registered in the current window (RFC 7591 §5). */
   registrationCount: "registration_count",
+  /**
+   * A User ID one `client_id` sent before, by agent and User ID, while it is remembered: one it
+   * hasn't sent counts against `newUserIdsPerClient` (§5.1; guides, *Rate limits*).
+   */
+  userId: "user_id",
+  /** How many User IDs the company hadn't seen one `client_id` sent in the current window. */
+  newUserIdCount: "new_user_id_count",
 } as const;
 
 export type RecordKind = (typeof RecordKinds)[keyof typeof RecordKinds];
@@ -314,6 +321,17 @@ export interface RegisteredClient {
 
 /** The clients one address registered in the window its record lasts. */
 export interface RegistrationCount {
+  readonly count: number;
+}
+
+/**
+ * A User ID a `client_id` sent before: the record is its presence, until its expiry. Nothing
+ * links it to an account: a User or account doesn't keep one User ID (§5.1).
+ */
+export type KnownUserId = Record<string, never>;
+
+/** The new User IDs one `client_id` sent in the window its record lasts. */
+export interface NewUserIdCount {
   readonly count: number;
 }
 
@@ -469,6 +487,12 @@ export interface PushedAuthorization {
   readonly parameters: Readonly<Record<string, string>>;
   readonly expiresAt: string;
   readonly dpopJkt?: string;
+  /**
+   * The operator whose verified signature on the push the company accepted the agent by (§5.3),
+   * when its policy didn't allow the `client_id` itself: the authorization endpoint, which a
+   * browser opens with no signature, asks the policy with it.
+   */
+  readonly acceptedBy?: string;
 }
 
 /** A one-use authorization code, at most a minute old. */
@@ -540,15 +564,18 @@ export interface IdempotencyRecord {
 /**
  * A feedback report as the company received it (§9.3): data, never instructions.
  *
- * `clientId` and `pairwiseUserId` are the Session's, which sent it.
+ * In free text, `task` and `description`; or, from 1.1, `taskIds`, the IDs of the listed tasks
+ * it named that the company listed then, with no text. `clientId` and `pairwiseUserId` are the
+ * Session's, which sent it.
  */
 export interface StoredFeedback {
   readonly reportId: string;
-  readonly task: string;
-  readonly description: string;
+  readonly task?: string;
+  readonly description?: string;
   readonly clientId: string;
   readonly pairwiseUserId: string;
   readonly receivedAt: string;
+  readonly taskIds?: readonly string[];
 }
 
 /**
@@ -725,6 +752,12 @@ export interface WebSession {
    * Operations 2, Browser Control 3). Absent, none.
    */
   readonly extensions?: Readonly<Record<string, string>>;
+  /**
+   * The operator whose verified signature on step 2 of the join the company accepted the agent
+   * by (§5.3), when its policy didn't allow the `client_id` itself: the browser's own request
+   * carries no signature.
+   */
+  readonly acceptedBy?: string;
 }
 
 /**

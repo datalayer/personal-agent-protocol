@@ -26,7 +26,13 @@
  * }
  * ```
  *
- * The report describes the task, never the user: no names, contact details, order or
+ * From 1.1 a company can list the tasks it already knows can't be done
+ * (`SessionTasks.listedTasks`, each an `id` and a `task` phrase). When the user's task matches
+ * one, the agent reports its ID instead of describing it (`listedReport(id, ...)`), and may
+ * gather the IDs of a Session into one report, sent before the Session ends. A report has one
+ * form or the other, never both.
+ *
+ * A free-text report describes the task, never the user: no names, contact details, order or
  * account numbers (SHOULD NOT), and never a secret (MUST NOT). The Session already
  * tells the company which personal agent and which user sent it. Errors are reported,
  * never retried here: send one report per task, not one per attempt.
@@ -34,7 +40,13 @@
 import { PersonalAgentProtocolError, ProtocolValidationError } from "./errors.js";
 import { parseJsonStrict } from "./json.js";
 import { readLimited } from "./limits.js";
-import { parseAlternative, type Alternative } from "./models.js";
+import {
+  LISTED_TASK_ID,
+  LISTED_TASKS_SINCE,
+  parseAlternative,
+  versionDefines,
+  type Alternative,
+} from "./models.js";
 import { refusalCode, refusalDetails } from "./refusals.js";
 import type { AccessToken, PapSession } from "./sessions.js";
 import type { SessionFetchClient } from "./transport.js";
@@ -57,26 +69,62 @@ export class FeedbackError extends PersonalAgentProtocolError {
 }
 
 /**
- * One report of a task the company offers no way to do through the protocol (§8).
+ * One report of what the company offers no way to do through the protocol (§9.3).
  *
- * Exactly these two fields: nothing about the user, no identifiers, no secret.
+ * In one of two forms, never both: `task` and `description`, a task in free text (nothing
+ * about the user, no identifiers, no secret), or, from 1.1, `task_ids`, the IDs of one or more
+ * tasks the company lists in `feedback.tasks`, each once (`listedReport`). The object is the
+ * request body: the one form the report has, and nothing else.
  */
-export interface FeedbackReport {
-  readonly task: string;
-  readonly description: string;
+export type FeedbackReport =
+  | { readonly task: string; readonly description: string }
+  | { readonly task_ids: readonly string[] };
+
+const REPORT_FIELDS = new Set(["task", "description", "task_ids"]);
+
+/** A report of listed tasks, by their IDs from `SessionTasks.listedTasks` (§9.3). */
+export function listedReport(...taskIds: string[]): FeedbackReport {
+  return parseFeedbackReport({ task_ids: taskIds });
 }
 
-const REPORT_FIELDS = new Set(["task", "description"]);
-
-/** A report to send, checked: `task` 1..200, `description` 1..2000. */
+/**
+ * A report to send, checked: `task` 1..200 and `description` 1..2000, or `task_ids`, one or
+ * more listed task IDs, each once; one form or the other, not both.
+ */
 export function parseFeedbackReport(value: {
-  readonly task: string;
-  readonly description: string;
+  readonly task?: string;
+  readonly description?: string;
+  readonly task_ids?: readonly string[];
 }): FeedbackReport {
   if (typeof value !== "object" || value === null || Object.keys(value).some((key) => !REPORT_FIELDS.has(key))) {
-    throw new ProtocolValidationError("invalid_feedback", "a feedback report has task and description only");
+    throw new ProtocolValidationError(
+      "invalid_feedback",
+      "a feedback report has task_ids, or task and description, only",
+    );
   }
   const { task, description } = value;
+  const taskIds = value.task_ids;
+  if (taskIds !== undefined) {
+    if (task !== undefined || description !== undefined) {
+      throw new ProtocolValidationError(
+        "invalid_feedback",
+        "a report has task_ids, or task and description, not both",
+      );
+    }
+    if (!Array.isArray(taskIds) || taskIds.length === 0) {
+      throw new ProtocolValidationError("invalid_feedback", "task_ids names at least one listed task");
+    }
+    if (new Set(taskIds).size !== taskIds.length) {
+      throw new ProtocolValidationError("invalid_feedback", "task_ids names each listed task once");
+    }
+    if (taskIds.some((id) => typeof id !== "string" || !LISTED_TASK_ID.test(id))) {
+      throw new ProtocolValidationError(
+        "invalid_feedback",
+        "a listed task's ID is lowercase letters, digits, - and _",
+      );
+    }
+    return { task_ids: [...taskIds] };
+  }
   if (typeof task !== "string" || task.length < 1 || task.length > FEEDBACK_TASK_MAX_LENGTH) {
     throw new ProtocolValidationError("invalid_feedback", "task is 1 to 200 characters");
   }
@@ -115,22 +163,31 @@ export class FeedbackClient {
   }
 
   /**
-   * `POST {feedback.endpoint}`: accepted, or answered with a way to do it (§8.3).
+   * `POST {feedback.endpoint}`: accepted, or answered with a way to do it (§9.3).
    *
-   * `202` with no body returns `undefined`; `200` with an alternative (§8.2) returns it,
+   * `202` with no body returns `undefined`; `200` with an alternative (§9.2) returns it,
    * as content from the company, its references for the caller to filter with
    * `usableReferences`. Anything else is a `FeedbackError`. Don't report a task the
-   * company lists as excluded (§8.1).
+   * company lists as excluded (§9.1).
+   *
+   * A report of listed tasks (`task_ids`) is 1.1's: `RangeError` in a Session that names an
+   * earlier version, which sends a Company nothing its version doesn't define (§3.4). The
+   * company answers it with `202`, and ignores IDs it no longer lists.
    *
    * A refusal is never retried here: a 429 carries its `Retry-After` in
-   * `details.retry_after`, and the caller waits at least that long (§4.3).
+   * `details.retry_after`, and the caller waits at least that long (§5.6).
    */
   async report(
     endpoint: string,
-    report: { readonly task: string; readonly description: string },
+    report: FeedbackReport,
     options: FeedbackReportOptions,
   ): Promise<Alternative | undefined> {
     const checked = parseFeedbackReport(report);
+    if ("task_ids" in checked && !versionDefines(options.session.protocolVersion, LISTED_TASKS_SINCE)) {
+      throw new RangeError(
+        `listed tasks are reported by ID from ${LISTED_TASKS_SINCE}: this Session names ${options.session.protocolVersion}`,
+      );
+    }
     const response = await this.#transport.request("POST", endpoint, {
       session: options.session,
       token: options.token,

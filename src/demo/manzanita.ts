@@ -161,6 +161,11 @@ export const CONFIG_OPTIONS: CompanyConfigOptions = {
   scopeHints: { "orders:read": ["none", true], "orders:write": ["reversible", true] },
   excludedTasks: [{ task: "Change the size of an item after it has shipped" }],
   decline: declineAgentReturns,
+  // The gaps Manzanita already knows about, reported by ID from 1.1 (§9.3).
+  feedbackTasks: [
+    { id: "installments", task: "Pay in installments" },
+    { id: "split-payment", task: "Split a payment across two cards" },
+  ],
   feedbackAnswers: {
     "Pay with a gift card": {
       instructions: "Gift cards are applied on the checkout page, before paying.",

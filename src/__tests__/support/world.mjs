@@ -267,7 +267,7 @@ export class ScriptedApprovals {
  * A personal agent's Reactor host: its signer, delegated keys, clock, stores, browser,
  * input, approval surface, and, when given, its own controlled browser (`pap.browserJoin`).
  */
-export async function agentHost({ identity, fetch, clock, answers = [], controlledBrowser, approve }) {
+export async function agentHost({ identity, fetch, clock, answers = [], controlledBrowser, approve, extra = [] }) {
   const state = new Map();
   const tokens = new Map();
   const delegatedKeys = new InMemoryDelegatedKeys();
@@ -310,6 +310,8 @@ export async function agentHost({ identity, fetch, clock, answers = [], controll
         ...(controlledBrowser === undefined
           ? []
           : [{ point: BrowserJoins, value: controlledBrowser, options: { id: "controlled-browser" } }]),
+        // What a test adds: an operator signer, a pairwise ID store, a DPoP prover.
+        ...extra,
       ],
     },
   ]);

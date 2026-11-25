@@ -16,14 +16,17 @@ import {
   Signers,
   firstContribution,
 } from "./reactor.js";
+import { signOauthRequest } from "./operator-signatures.js";
 import { SecretValue } from "./secret.js";
 import { refusalCode, refusalDetails, refuseRedirect, refusedWithoutBody } from "./refusals.js";
 import {
   JWT_CLIENT_ASSERTION,
   SessionClient,
+  accountScopes,
   buildClientAssertionClaims,
   finishSignIn,
   provesWithDpop,
+  requestScope,
   type AccessToken,
   type TokenResponse,
 } from "./sessions.js";
@@ -74,14 +77,6 @@ export function verificationHostAllowed(
   return host !== "" && allowed.some((name) => name !== "" && within(host, name));
 }
 
-function scopes(values: readonly string[]): readonly string[] {
-  const result = [...new Set(values)];
-  const token = /^[\x21\x23-\x5b\x5d-\x7e]+$/;
-  if (result.length === 0 || result.some((scope) => !token.test(scope))) {
-    throw new AuthorizationError("invalid_scope", "At least one valid OAuth scope is required");
-  }
-  return result;
-}
 
 function base64Url(bytes: Uint8Array): string {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -239,6 +234,11 @@ export interface DeviceSignInBeginOptions {
   readonly dpopSigningAlgs?: readonly string[] | undefined;
   /** The User ID the sign-in is for: its DPoP key proves the polls (§4.5). */
   readonly pairwiseUserId?: string | undefined;
+  /**
+   * The issuer's `scopes_supported`: when it lists `offline_access`, the request asks for it
+   * (§4.4), and it is never one of `requestedScopes` or of the scopes granted (§4.7).
+   */
+  readonly scopesSupported?: readonly string[] | undefined;
   readonly signal?: AbortSignal;
 }
 
@@ -287,7 +287,7 @@ export class DeviceSignInClient {
     httpsUrl(options.issuer, "issuer");
     const issuer = options.issuer;
     const clientId = httpsUrl(options.clientId, "clientId");
-    const requestedScopes = scopes(options.scopes);
+    const requestedScopes = accountScopes(options.scopes);
     provesWithDpop(options.dpopSigningAlgs, options.pairwiseUserId);
     const now = clock.now();
     const clientAssertion = await signer.sign(this.#claims(clientId, issuer, now, random.bytes(16)), {
@@ -296,11 +296,12 @@ export class DeviceSignInClient {
     const response = await this.#request(
       endpoint,
       new URLSearchParams({
-        scope: requestedScopes.join(" "),
+        scope: requestScope(requestedScopes, options.scopesSupported),
         client_id: clientId,
         client_assertion_type: JWT_CLIENT_ASSERTION,
         client_assertion: clientAssertion.reveal(),
       }),
+      options.tenantId,
       options.signal,
     );
     // A 429 has `Retry-After` and no body (§5.6).
@@ -431,13 +432,21 @@ export class DeviceSignInClient {
     if (!options.tenantId || options.tenantId.length > 256) throw new RangeError("Invalid tenantId");
   }
 
-  async #request(url: string, body: URLSearchParams, signal?: AbortSignal): Promise<Response> {
+  async #request(url: string, body: URLSearchParams, tenantId: string, signal?: AbortSignal): Promise<Response> {
+    // Signed as its operator too, with a `pap.operatorSigner` (§5.3): Device Sign-In starts
+    // with this request, so a Company can decide on the agent here.
+    const signed = await signOauthRequest(this.#reactor, {
+      url,
+      tenantId,
+      headers: { Accept: "application/json" },
+      body,
+    });
     let response: Response;
     try {
       response = await this.#fetch(url, {
         method: "POST",
-        headers: { Accept: "application/json" },
-        body,
+        headers: signed.headers,
+        body: signed.body,
         credentials: "omit",
         redirect: "manual",
         ...(signal === undefined ? {} : { signal }),

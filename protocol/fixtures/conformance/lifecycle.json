@@ -20,6 +20,17 @@
       "description": "An account request with no access token gets a 401 challenge with scope and no error code, read as insufficient_scope (§7)."
     },
     {
+      "id": "lifecycle.offline-access-kept-from-resources",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP11-4.4-01",
+        "PAP11-4.4-03",
+        "PAP11-4.4-04"
+      ],
+      "description": "offline_access asks for a refresh token, not account access: the domain's protected resource metadata doesn't list it and a challenge never names it; when the issuer lists it, a sign-in that asks for it returns a refresh token and grants at least one other scope (draft 1.1, 4.4, 4.7)."
+    },
+    {
       "id": "lifecycle.resource-not-served",
       "kind": "negative",
       "role": "company",

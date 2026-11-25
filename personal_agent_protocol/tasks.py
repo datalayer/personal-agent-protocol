@@ -2,7 +2,8 @@
 #
 # BSD 3-Clause License
 
-"""Task coverage per Session: excluded tasks, skills and the feedback endpoint (§9).
+"""Task coverage per Session: excluded tasks, skills, the feedback endpoint and, from 1.1,
+the tasks listed for feedback (§9).
 
 A Company that lists excluded tasks, publishes skills or takes feedback names one
 `tasks.endpoint` in its poppy.json. The Personal Agent sends `GET {tasks.endpoint}` with
@@ -48,11 +49,14 @@ from .caching import CacheBounds, cache_lifetime
 from .errors import PersonalAgentProtocolError, TransportError
 from .json import loads_strict
 from .models import (
+    LISTED_TASKS_SINCE,
     DiscoveredCompany,
     DiscoveryDocument,
     ExcludedTask,
+    ListedTask,
     SkillEntry,
     TasksResponse,
+    version_defines,
 )
 from .sessions import PapSession
 from .transport import SessionHttpClient, session_error
@@ -96,6 +100,27 @@ class SessionTasks:
 
         feedback = self.response.feedback
         return None if feedback is None else feedback.endpoint
+
+    @property
+    def listed_tasks(self) -> list[ListedTask]:
+        """The tasks the Company already knows can't be done, each with the ID to report
+        it by (§9.3): `feedback.tasks`, at most 50. Whether the User's task is one of
+        them is the agent's judgment, since each `task` is a phrase; a match is reported
+        with `FeedbackReport.listed(id, ...)`, not described in free text. Always empty
+        before 1.1, which defines them: for a Session that names 1.0, or a Company whose
+        document is 1.0."""
+
+        feedback = self.response.feedback
+        return [] if feedback is None else list(feedback.tasks)
+
+
+def _without_listed_tasks(payload: object) -> object:
+    """A tasks response without `feedback.tasks`, as a version before 1.1 reads it."""
+
+    if not isinstance(payload, dict) or not isinstance(payload.get("feedback"), dict):
+        return payload
+    feedback = {name: value for name, value in payload["feedback"].items() if name != "tasks"}
+    return {**payload, "feedback": feedback}
 
 
 def tasks_endpoint(document: DiscoveryDocument) -> str | None:
@@ -160,6 +185,13 @@ class TasksClient:
         if response.status_code == 200 and len(response.content) <= self.max_response_bytes:
             try:
                 payload = loads_strict(response.content)
+                if not (
+                    version_defines(session.protocol_version, LISTED_TASKS_SINCE)
+                    and version_defines(document.protocol_version, LISTED_TASKS_SINCE)
+                ):
+                    # Listed tasks are 1.1's: at 1.0 the field is one this version doesn't
+                    # define, and is ignored (§3.4).
+                    payload = _without_listed_tasks(payload)
                 tasks = SessionTasks(
                     session=session.sid,
                     endpoint=endpoint,

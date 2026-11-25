@@ -15,6 +15,7 @@ import asyncio
 import base64
 import json
 from collections.abc import AsyncIterator, Iterable
+from datetime import datetime, timezone
 from typing import Any
 
 import httpcore
@@ -69,9 +70,12 @@ from personal_agent_protocol.models import (
     effective_context,
 )
 from personal_agent_protocol.operator_signatures import (
+    content_digest,
+    operator_directory,
     operator_key_from,
     operator_signature_base,
     sign_operator_request,
+    verify_operator_signature,
 )
 from personal_agent_protocol.reactor import (
     OperatorSignatureRequest,
@@ -372,6 +376,8 @@ async def _check(case: Any) -> None:  # noqa: C901 - one branch per fixture chec
         _operator_signature_base(case)
     elif case.check == "operator_signature_sign":
         await _operator_signature_sign(case)
+    elif case.check == "operator_signature_oauth":
+        await _operator_signature_oauth(case)
     else:  # pragma: no cover - a fixture with a check this test does not know
         raise AssertionError(f"unknown fixture check {case.check!r}")
 
@@ -421,6 +427,58 @@ async def _operator_signature_sign(case: Any) -> None:
             "signature_input": signed.signature_input,
             "signature": signed.signature,
         } == expect
+
+
+async def _operator_signature_oauth(case: Any) -> None:
+    """A request to an OAuth endpoint: both SDKs write this digest and these headers,
+    covering `content-digest`, and verify them over the body alone (§5.3, RFC 9530)."""
+
+    for given, expect in zip(case.input, case.expect, strict=True):
+        secret = base64.urlsafe_b64decode(given["d"] + "=" * (-len(given["d"]) % 4))
+        key = operator_key_from(Ed25519PrivateKey.from_private_bytes(secret))
+        body = given["body"].encode()
+        digest = content_digest(body)
+        signed = await sign_operator_request(
+            OperatorSignatureRequest(
+                method=given["method"], url=given["url"], tenant_id="vector", content_digest=digest
+            ),
+            key,
+            signature_agent=given["signature_agent"],
+            created=given["created"],
+            expires=given["expires"],
+            nonce=given["nonce"],
+        )
+        assert {
+            "content_digest": digest,
+            "signature_agent": signed.signature_agent,
+            "signature_input": signed.signature_input,
+            "signature": signed.signature,
+        } == expect
+        headers = {
+            "content-digest": expect["content_digest"],
+            "signature-agent": expect["signature_agent"],
+            "signature-input": expect["signature_input"],
+            "signature": expect["signature"],
+        }
+
+        async def keys(agent: str, keyid: str) -> list[dict[str, Any]]:
+            return list(operator_directory([key])["keys"])  # noqa: B023 - awaited in the loop
+
+        async def outcome(content: bytes | None) -> str:
+            verdict = await verify_operator_signature(
+                method=given["method"],  # noqa: B023 - awaited in the loop
+                url=given["url"],  # noqa: B023
+                headers=headers,  # noqa: B023
+                keys=keys,
+                now=datetime.fromtimestamp(given["created"], tz=timezone.utc),  # noqa: B023
+                content=content,
+            )
+            return verdict.outcome
+
+        assert await outcome(body) == "verified"
+        # Another body, or no body to check the digest against: nothing is bound.
+        assert await outcome(body + b"&scope=more") == "invalid"
+        assert await outcome(None) == "invalid"
 
 
 async def _dpop_token_requests(case: Any) -> None:

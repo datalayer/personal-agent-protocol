@@ -23,7 +23,8 @@ from reactor import PluginPlatform  # type: ignore[import-untyped]
 
 from .errors import AuthorizationError, ProtocolValidationError
 from .json import loads_strict
-from .models import ProtocolModel, is_loopback_redirect
+from .models import OFFLINE_ACCESS_SCOPE, ProtocolModel, is_loopback_redirect
+from .operator_signatures import sign_oauth_request
 from .reactor import (
     AUTHORIZATION_STATE_STORES,
     BROWSER_HANDOFFS,
@@ -108,10 +109,25 @@ def _redirect_url(value: str, label: str) -> str:
 
 
 def _scopes(values: Iterable[str]) -> tuple[str, ...]:
-    scopes = tuple(dict.fromkeys(values))
+    """The account scopes of a request, each once. `offline_access` is none of them (§4.4):
+    it is left out here, and `request_scope` adds it when the issuer lists it."""
+
+    scopes = tuple(dict.fromkeys(value for value in values if value != OFFLINE_ACCESS_SCOPE))
     if not scopes or any(not _SCOPE_TOKEN.fullmatch(scope) for scope in scopes):
         raise AuthorizationError("invalid_scope", "at least one valid OAuth scope is required")
     return scopes
+
+
+def request_scope(scopes: Iterable[str], scopes_supported: Iterable[str] | None) -> str:
+    """The `scope` parameter of a sign-in request, or of a refresh that asks for fewer
+    scopes (§4.4, §4.7): `scopes`, then `offline_access` when the issuer's
+    `scopes_supported` lists it. Some authorization servers issue a refresh token only
+    when it is requested, and such a Company lists it in its issuer's metadata."""
+
+    requested = _scopes(scopes)
+    if scopes_supported is not None and OFFLINE_ACCESS_SCOPE in scopes_supported:
+        requested = (*requested, OFFLINE_ACCESS_SCOPE)
+    return " ".join(requested)
 
 
 class DirectSignInRequest(ProtocolModel):
@@ -172,6 +188,7 @@ def build_direct_sign_in_request(
     scopes: Iterable[str],
     random_bytes: RandomBytes = secrets.token_bytes,
     prompt_consent: bool = True,
+    scopes_supported: Iterable[str] | None = None,
 ) -> DirectSignInRequest:
     """Build a user-browser authorization URL with random state and S256 PKCE (§4.2).
 
@@ -182,6 +199,10 @@ def build_direct_sign_in_request(
     `prompt_consent` adds `prompt=consent` (§4.2, §10.8), which a request MUST carry
     unless the Personal Agent receives the redirect only on the device that opened the
     authorization URL; only then is it `False`.
+
+    `scopes_supported` is the issuer's: when it lists `offline_access`, the request's
+    `scope` includes it (§4.4). `DirectSignInRequest.scopes` stay the account scopes asked
+    for: `offline_access` is none of the scopes a sign-in grants (§4.7).
     """
 
     endpoint = _https_url(authorization_endpoint, "authorization endpoint")
@@ -199,7 +220,7 @@ def build_direct_sign_in_request(
         ("response_type", "code"),
         ("client_id", _https_url(client_id, "client ID")),
         ("redirect_uri", _redirect_url(redirect_uri, "redirect URI")),
-        ("scope", " ".join(validated_scopes)),
+        ("scope", request_scope(validated_scopes, scopes_supported)),
         ("state", state),
         ("code_challenge", challenge),
         ("code_challenge_method", "S256"),
@@ -391,6 +412,7 @@ class DirectSignInClient:
         pushed_authorization_request_endpoint: str | None = None,
         require_pushed_authorization_requests: bool = False,
         link_page: str | None = None,
+        scopes_supported: Iterable[str] | None = None,
     ) -> DirectSignInStart:
         """Store one-use state, then open the authorization URL for the user (§4.2).
 
@@ -412,6 +434,11 @@ class DirectSignInClient:
         `dpop_signing_algs` is the issuer's `dpop_signing_alg_values_supported`: the
         code exchange sends a DPoP proof when it includes ES256 (§4.5), by the DPoP key
         of `pairwise_user_id`, the User ID the sign-in is for, which proving needs.
+
+        `scopes_supported` is the issuer's too: when it lists `offline_access`, the
+        request asks for it, pushed or not, since some authorization servers issue a
+        refresh token only then (§4.4). It is never one of `requested_scopes` or of the
+        scopes granted: a sign-in that grants nothing else is a decline (§4.7).
 
         Nothing in the redirect says who approved the sign-in (§10.8). `cross_device`
         says the URL opens on a device other than the one the User is using, such as a
@@ -464,6 +491,7 @@ class DirectSignInClient:
             scopes=scopes,
             random_bytes=random_source.bytes,
             prompt_consent=not same_device_redirect,
+            scopes_supported=scopes_supported,
         )
         expires_at = clock.now() + timedelta(seconds=lifetime_seconds)
         reference = _state_reference(request.state.get_secret_value())
@@ -550,7 +578,9 @@ class DirectSignInClient:
     async def _push(self, pending: _PendingDirectSignIn) -> str:
         """Push the request (RFC 9126 §2): its parameters, a fresh client assertion, and a
         DPoP proof when tokens are bound, so the code is bound to the key (RFC 9449
-        §10.1); a `use_dpop_nonce` refusal is retried once. The `request_uri`."""
+        §10.1); a `use_dpop_nonce` refusal is retried once. With a `pap.operatorSigner`,
+        each push carries the operator signature over its content digest (§5.3). The
+        `request_uri`."""
 
         request = pending.request
         endpoint = cast(str, pending.pushed_authorization_request_endpoint)
@@ -573,12 +603,12 @@ class DirectSignInClient:
                     nonce,
                 )
                 headers["DPoP"] = proof.get_secret_value()
+            pushed = self.http.build_request("POST", endpoint, data=form, headers=headers)
+            # Signed as its operator too, with a `pap.operatorSigner` (§5.3): a Company can
+            # then decide on the agent before its sign-in page is shown.
+            await sign_oauth_request(self.reactor, pushed, tenant_id=pending.tenant_id)
             try:
-                response = await send_bounded(
-                    self.http,
-                    self.http.build_request("POST", endpoint, data=form, headers=headers),
-                    max_bytes=self.max_response_bytes,
-                )
+                response = await send_bounded(self.http, pushed, max_bytes=self.max_response_bytes)
             except httpx.HTTPError as exc:
                 raise AuthorizationError("request_failed", "Pushed authorization failed") from exc
             refuse_redirect(response, AuthorizationError)

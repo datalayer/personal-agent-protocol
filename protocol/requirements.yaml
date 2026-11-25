@@ -1,4 +1,4 @@
-# Personal Agent Protocol 0.4 as published (upstream 4803900, frozen text as of ed47408), Operations version 3, Mediated Sign-In and Browser Control version 1, and what 1.0 as published (upstream 8c02b42) changes: the normative requirement ledger.
+# Personal Agent Protocol 0.4 as published (upstream 4803900, frozen text as of ed47408), Operations version 3, Mediated Sign-In and Browser Control version 1, what 1.0 as published (upstream 8c02b42) changes, and what draft 1.1 (upstream 589743a) adds: the normative requirement ledger.
 #
 # requirements: every MUST, MUST NOT, SHOULD, and SHOULD NOT of the specification
 # (source: spec, the default), the Operations extension (source: operations), the
@@ -12,15 +12,17 @@
 # run by test_fixtures.py (decided by the SDK) or by the conformance runner
 # (test_conformance.py, against the reference company over TLS).
 # status: implemented | partial | open | not-applicable, with a reason unless implemented.
-# version: '1.0' marks a statement 1.0 as published adds or changes (PAP10-*), and '0.4' one
-# that holds at 0.4 only; an entry without it holds at both versions.
+# version: '1.0' marks a statement 1.0 as published adds or changes (PAP10-*), '1.1' one that
+# draft 1.1 (upstream 589743a) adds (PAP11-*), and '0.4' one that holds at 0.4 only; an entry
+# without it holds at every version.
 # test_requirements.py checks every test and case exists.
 
 protocol: personal-agent-protocol
 profile: '0.4'
 upstream_revision: '2026-11-10'
-reviewed: '2026-11-17'
+reviewed: '2026-11-25'
 sources:
+  spec-1.1: https://personalagentprotocol.org/docs/spec
   spec-1.0: https://personalagentprotocol.org/docs/1.0/spec
   spec: https://personalagentprotocol.org/docs/0.4/spec
   operations: https://personalagentprotocol.org/docs/0.4/extensions/operations
@@ -4174,6 +4176,225 @@ requirements:
   tests:
   - personal_agent_protocol/__tests__/test_published_10.py::test_the_consent_page_lists_every_scope_and_marks_the_earlier_ones
   - personal_agent_protocol/__tests__/test_published_10.py::test_every_device_sign_in_shows_its_page_with_the_earlier_scopes_marked
+- id: PAP11-4.4-01
+  version: '1.1'
+  section: '4.4'
+  level: MUST
+  role: company
+  text: "A Company whose issuer does MUST list offline_access in scopes_supported in the issuer's metadata (3.2)."
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyConfig.offline_access
+  - personal_agent_protocol.company.service:CompanyService.oauth_metadata
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_a_company_whose_refresh_tokens_need_offline_access
+  conformance:
+  - lifecycle.offline-access-kept-from-resources
+- id: PAP11-4.4-02
+  version: '1.1'
+  section: '4.4'
+  level: MUST
+  role: personal-agent
+  text: "When the issuer's metadata lists it, the Personal Agent MUST include it in every sign-in request, and in scope when it asks for fewer scopes at refresh."
+  status: implemented
+  implementation:
+  - personal_agent_protocol.auth:request_scope
+  - personal_agent_protocol.auth:DirectSignInClient.begin
+  - personal_agent_protocol.device:DeviceSignInClient.begin
+  - personal_agent_protocol.mediated:MediatedSignInClient.sign_in
+  - personal_agent_protocol.accounts:RefreshTokenClient.refresh
+  - personal_agent_protocol.models:OAuthServerMetadata.lists_offline_access
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_offline_access_is_requested_when_the_issuer_lists_it_and_never_granted
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_a_company_whose_refresh_tokens_need_offline_access
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_offline_access_in_a_pushed_request_a_mediated_sign_in_and_no_challenge
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_offline_access_is_an_unknown_scope_where_refresh_tokens_need_none
+- id: PAP11-4.4-03
+  version: '1.1'
+  section: '4.4'
+  level: SHOULD NOT
+  role: company
+  text: "Resources SHOULD NOT list it in their protected resource metadata, and MUST NOT name it in a challenge (section 7) or an authorization event (8.11)."
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService.domain_resource_metadata
+  - personal_agent_protocol.company.service:CompanyService.protected_resource_metadata
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_a_company_whose_refresh_tokens_need_offline_access
+  conformance:
+  - lifecycle.offline-access-kept-from-resources
+- id: PAP11-4.4-04
+  version: '1.1'
+  section: '4.4'
+  level: MUST NOT
+  role: company
+  text: "Resources SHOULD NOT list it in their protected resource metadata, and MUST NOT name it in a challenge (section 7) or an authorization event (8.11). A refresh token isn't something a resource requires."
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyConfig.offered_scopes
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_offline_access_in_a_pushed_request_a_mediated_sign_in_and_no_challenge
+  conformance:
+  - lifecycle.offline-access-kept-from-resources
+- id: PAP11-5.1-01
+  version: '1.1'
+  section: '5.1'
+  level: MUST NOT
+  role: personal-agent
+  text: "It MAY also replace an ID on its own once 28 days have passed since it last used a Session with it, but MUST NOT while it holds a refresh token for the User at the Company, however long the ID has gone unused."
+  status: implemented
+  implementation:
+  - personal_agent_protocol.user_ids:may_replace_unused
+  - personal_agent_protocol.user_ids:replace_user_id
+  - personal_agent_protocol.pairwise:SqlitePairwiseUserIdStore.last_used
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_an_unused_id_ages_out_after_28_days_and_never_with_a_refresh_token
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_what_stops_a_replacement_leaves_the_old_id_in_place
+- id: PAP11-5.1-02
+  version: '1.1'
+  section: '5.1'
+  level: MUST NOT
+  role: personal-agent
+  text: "Apart from anonymous browsing (below) and a change of the Company's identifier (3.2), it MUST NOT replace User IDs in other cases, so a Company can count its Users and limit each one (5.6)."
+  status: implemented
+  implementation:
+  - personal_agent_protocol.user_ids:replace_user_id
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_what_stops_a_replacement_leaves_the_old_id_in_place
+- id: PAP11-5.1-03
+  version: '1.1'
+  section: '5.1'
+  level: MUST
+  role: personal-agent
+  text: "The Personal Agent replaces an ID between tasks, when no Session uses it. If it holds a refresh token for the User at the Company, it MUST first sign out (5.5), because the account would link the old ID and the new one."
+  status: implemented
+  implementation:
+  - personal_agent_protocol.user_ids:replace_user_id
+  - personal_agent_protocol.user_ids:UserIdData
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_replacing_a_user_id_signs_out_first_and_discards_what_the_old_one_held
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_what_stops_a_replacement_leaves_the_old_id_in_place
+- id: PAP11-5.1-04
+  version: '1.1'
+  section: '5.1'
+  level: MUST NOT
+  role: personal-agent
+  text: "It MUST NOT send the Company anything it used or received under the old ID, so nothing it sends links the two."
+  status: implemented
+  implementation:
+  - personal_agent_protocol.user_ids:replace_user_id
+  - personal_agent_protocol.user_ids:UserIdData
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_replacing_a_user_id_signs_out_first_and_discards_what_the_old_one_held
+- id: PAP11-5.1-05
+  version: '1.1'
+  section: '5.1'
+  level: MUST
+  role: personal-agent
+  text: "It MUST discard the old ID's identifiers and keys: the User's Agent IDs, sids, DPoP keys (4.5), delegated keys (5.2), its browser's cookies and other site data for the Company (section 6), and the IDs the Company gave it, such as conversation_ids."
+  status: implemented
+  implementation:
+  - personal_agent_protocol.user_ids:replace_user_id
+  - personal_agent_protocol.user_ids:UserIdData
+  - personal_agent_protocol.pairwise:SqlitePairwiseUserIdStore.replace
+  - personal_agent_protocol.pairwise:DerivedPairwiseUserIds.replace
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_replacing_a_user_id_signs_out_first_and_discards_what_the_old_one_held
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_the_store_replaces_one_users_id_and_remembers_when_it_was_used
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_a_keyed_hash_replaces_one_users_id_with_a_counter
+- id: PAP11-5.1-06
+  version: '1.1'
+  section: '5.1'
+  level: MUST NOT
+  role: company
+  text: "The Company sees a new User, and MUST NOT expect a User or account to keep one User ID."
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyService
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_a_company_limits_new_user_ids_by_client_id_and_links_none_to_an_account
+- id: PAP11-5.3-01
+  version: '1.1'
+  section: '5.3'
+  level: SHOULD
+  role: personal-agent
+  text: "A Personal Agent SHOULD also sign requests carrying the Session header, and its requests to the Company's pushed authorization request, token, device authorization, and revocation endpoints (3.2), with an HTTP Message Signature (RFC 9421), using Web Bot Auth."
+  status: implemented
+  implementation:
+  - personal_agent_protocol.operator_signatures:sign_oauth_request
+  - personal_agent_protocol.sessions:SessionClient.token_request
+  - personal_agent_protocol.auth:DirectSignInClient.begin
+  - personal_agent_protocol.device:DeviceSignInClient.begin
+  - personal_agent_protocol.accounts:RefreshTokenClient.revoke
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_the_agent_signs_its_requests_to_the_four_oauth_endpoints
+  conformance:
+  - operator.oauth-signed-vector
+- id: PAP11-5.3-02
+  version: '1.1'
+  section: '5.3'
+  level: MUST
+  role: personal-agent
+  text: "A request to one of those OAuth endpoints carries neither, so its operator signature MUST cover content-digest (RFC 9530), which binds it to the client assertion in the body."
+  status: implemented
+  implementation:
+  - personal_agent_protocol.operator_signatures:content_digest
+  - personal_agent_protocol.operator_signatures:sign_operator_request
+  - personal_agent_protocol.operator_signatures:verify_operator_signature
+  - personal_agent_protocol.reactor:OperatorSignatureRequest
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_an_operator_signature_covers_the_session_header_or_the_content_digest
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_a_signature_over_the_content_digest_binds_the_body
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_the_agent_signs_its_requests_to_the_four_oauth_endpoints
+  conformance:
+  - operator.oauth-signed-vector
+- id: PAP11-9.3-01
+  version: '1.1'
+  section: '9.3'
+  level: MUST NOT
+  role: company
+  text: "A Company MUST NOT list more than 50 tasks. A Personal Agent that gets more uses the first 50."
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyConfig.feedback_tasks
+  - personal_agent_protocol.models:FeedbackDescriptor
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_what_a_company_may_list
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_listed_tasks_as_a_personal_agent_reads_them
+  conformance:
+  - protocol.feedback-listed-tasks
+- id: PAP11-9.3-02
+  version: '1.1'
+  section: '9.3'
+  level: MUST NOT
+  role: company
+  text: "A listed task is one the Company wants reports about, and an excluded task (9.1) one it doesn't. A Company MUST NOT list a task in both."
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyConfig.feedback_tasks
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_what_a_company_may_list
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_a_listed_task_is_reported_by_its_id
+  conformance:
+  - protocol.feedback-listed-tasks
+- id: PAP11-9.3-03
+  version: '1.1'
+  section: '9.3'
+  level: SHOULD
+  role: personal-agent
+  text: "A Personal Agent SHOULD report a task that matches a listed one by its ID, and describe it in free text only when none matches."
+  status: implemented
+  implementation:
+  - personal_agent_protocol.feedback:FeedbackReport.listed
+  - personal_agent_protocol.feedback:FeedbackClient.report
+  - personal_agent_protocol.tasks:SessionTasks.listed_tasks
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_a_listed_task_is_reported_by_its_id
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_nothing_of_listed_tasks_goes_to_a_peer_at_10
+  conformance:
+  - protocol.feedback-listed-tasks
+  - protocol.feedback-report-forms
+  - protocol.listed-tasks-not-at-10
 guide:
 - id: GUIDE-secrets-01
   source: guide
@@ -5900,3 +6121,52 @@ guide:
   tests:
   - personal_agent_protocol/__tests__/test_draft_10.py::test_the_name_is_shown_with_the_domain
   - personal_agent_protocol/__tests__/test_draft_10.py::test_the_terminal_asks_for_credentials_with_the_domain_beside_the_name
+- id: GUIDE11-co-new-user-ids-01
+  source: guide
+  section: Rate limits (draft 1.1)
+  level: SHOULD
+  role: company
+  text: "You can't tell any of these apart from a new user, so also limit how many new user IDs you accept from each client_id, and give a user ID you haven't seen before the limits of a first-time visitor. Count a request against a client_id only after its Session JWT or client assertion's signature checks pass."
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.service:CompanyConfig.new_user_ids_per_client
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_a_company_limits_new_user_ids_by_client_id_and_links_none_to_an_account
+- id: GUIDE11-pa-user-ids-01
+  source: guide
+  section: Choosing user IDs (draft 1.1)
+  level: SHOULD
+  role: personal-agent
+  text: "Derive one with a keyed hash: don't change the key, that replaces every ID at once, which isn't allowed. To replace one user's ID at a company, include a counter for that user and company in what you hash, and increase it."
+  status: implemented
+  implementation:
+  - personal_agent_protocol.pairwise:derive_pairwise_user_id
+  - personal_agent_protocol.pairwise:DerivedPairwiseUserIds
+  - personal_agent_protocol.pairwise:SqlitePairwiseCounters
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_a_keyed_hash_replaces_one_users_id_with_a_counter
+- id: GUIDE11-co-verified-agents-01
+  source: guide
+  section: Accepting personal agents your bot defenses verify (draft 1.1)
+  level: SHOULD
+  role: company
+  text: "Decide which client_id values a verified operator speaks for, such as those on the host of its key directory. Still verify the client assertion against the client_id's jwks_uri. Require Pushed Authorization Requests, so you can decide before the user sees your sign-in page. Keep allowlists and blocklists alongside."
+  status: implemented
+  implementation:
+  - personal_agent_protocol.company.points:OperatorVerifiedAgents
+  - personal_agent_protocol.company.service:CompanyService.access_token_for
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_the_policy_that_accepts_the_agents_a_verified_operator_speaks_for
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_a_company_accepts_an_agent_by_its_verified_operator_signature
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_an_operator_the_company_does_not_trust_accepts_no_one
+- id: GUIDE11-pa-listed-tasks-01
+  source: guide
+  section: Excluded tasks, skills and feedback (draft 1.1)
+  level: SHOULD
+  role: personal-agent
+  text: "When the task matches one in feedback.tasks, report its ID instead of describing it. You can gather the IDs from a Session into one report, but send it before the Session ends."
+  status: implemented
+  implementation:
+  - personal_agent_protocol.feedback:FeedbackReport.listed
+  tests:
+  - personal_agent_protocol/__tests__/test_draft_11.py::test_a_listed_task_is_reported_by_its_id

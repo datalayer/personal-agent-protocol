@@ -23,6 +23,8 @@ from personal_agent_protocol import (
     DRAFT_PROTOCOL_REVISION,
     DRAFT_PROTOCOL_VERSION,
     PROTOCOL_PROFILE,
+    PUBLISHED_PROTOCOL_REVISION,
+    PUBLISHED_PROTOCOL_VERSION,
     SUPPORTED_PROTOCOL_VERSIONS,
     PapSession,
     SessionClient,
@@ -81,25 +83,35 @@ async def _session(world: World, *versions: str) -> PapSession:
 
 
 def test_the_draft_is_the_default_and_the_published_version_is_available() -> None:
-    assert (PROTOCOL_PROFILE, DRAFT_PROTOCOL_VERSION) == ("0.4", "1.0")
+    assert (PROTOCOL_PROFILE, PUBLISHED_PROTOCOL_VERSION, DRAFT_PROTOCOL_VERSION) == (
+        "0.4",
+        "1.0",
+        "1.1",
+    )
     assert DEFAULT_PROTOCOL_VERSION == DRAFT_PROTOCOL_VERSION
-    assert DRAFT_PROTOCOL_REVISION == "2026-11-14"
-    assert SUPPORTED_PROTOCOL_VERSIONS == {"1.0"}
-    assert AVAILABLE_PROTOCOL_VERSIONS == {"0.4", "1.0"}
-    assert implemented_protocol_versions() == {"1.0"}
+    assert (PUBLISHED_PROTOCOL_REVISION, DRAFT_PROTOCOL_REVISION) == ("2026-11-14", "2026-11-18")
+    assert SUPPORTED_PROTOCOL_VERSIONS == {"1.1"}
+    assert AVAILABLE_PROTOCOL_VERSIONS == {"0.4", "1.0", "1.1"}
+    assert implemented_protocol_versions() == {"1.1"}
     assert implemented_protocol_versions(["0.4"]) == {"0.4"}
-    assert implemented_protocol_versions(BOTH) == {"0.4", "1.0"}
-    for unknown in (["0.3"], ["2.0"], ["1.1"], []):
+    assert implemented_protocol_versions(["1.0"]) == {"1.0"}
+    assert implemented_protocol_versions(BOTH) == {"0.4", "1.1"}
+    for unknown in (["0.3"], ["2.0"], ["1.2"], []):
         with pytest.raises(ValueError):
             implemented_protocol_versions(unknown)
     with pytest.raises(ValueError):
-        DiscoveryClient(protocol_versions=["1.1"])
-    # The version a Session names: the one implemented compatible with the chosen one.
+        DiscoveryClient(protocol_versions=["1.2"])
+    # The version a Session names: the newest implemented, compatible with the chosen one
+    # and never later than it.
+    assert implemented_version_for("1.1") == "1.1"
+    assert implemented_version_for("1.4") == "1.1"
     assert implemented_version_for("1.0") == "1.0"
-    assert implemented_version_for("1.4") == "1.0"
-    assert implemented_version_for("0.4") == "0.4"
-    with pytest.raises(ValueError):
-        implemented_version_for("0.3")
+    assert implemented_version_for("1.4", ["1.0"]) == "1.0"
+    assert implemented_version_for("1.1", ["0.4", "1.0"]) == "1.0"
+    assert implemented_version_for("0.4", ["0.4", "1.1"]) == "0.4"
+    for chosen, mine in (("0.3", ["0.4", "1.1"]), ("0.4", ["1.1"]), ("1.1", ["0.4"])):
+        with pytest.raises(ValueError):
+            implemented_version_for(chosen, mine)
 
 
 def test_a_published_document_is_used_only_by_an_agent_that_implements_it() -> None:
@@ -135,11 +147,11 @@ async def test_the_reference_company_serves_the_draft_only_by_default() -> None:
     world = World()
     assert CONFIG.protocol_versions == (DEFAULT_PROTOCOL_VERSION,)
     session = await _session(world, *BOTH)  # an agent that implements both
-    assert world.company.protocol_version == "1.0" and session.protocol_version == "1.0"
+    assert world.company.protocol_version == "1.1" and session.protocol_version == "1.1"
     assert world.company.document.supported_versions == {}
     endpoint = world.company.document.agent.protocols[0].endpoint  # type: ignore[union-attr]
     headers = await session_headers(world.reactor, "POST", endpoint, session=session, token=None)
-    assert headers["Poppy-Version"] == "1.0"
+    assert headers["Poppy-Version"] == "1.1"
     body = {"id": "req_draft_unserved_0000", "message": {"author": {"type": "human"}, "text": "Hi"}}
     published = {**headers, "Poppy-Version": "0.4"}
     refused = await world.http.post(endpoint, headers=published, json=body)
@@ -182,13 +194,13 @@ async def test_a_company_that_serves_both_versions_is_used_at_the_newest_the_age
         other = preferred[1]
         assert world.shop.config.preferred_version == preferred[0]
         default = await _session(world)
-        assert (world.company.protocol_version, default.protocol_version) == ("1.0", "1.0")
-        # `poppy.json` itself when it is 1.0's, else 1.0's own document, which lists none.
-        assert bool(world.company.document.supported_versions) is (preferred[0] == "1.0")
+        assert (world.company.protocol_version, default.protocol_version) == ("1.1", "1.1")
+        # `poppy.json` itself when it is 1.1's, else 1.1's own document, which lists none.
+        assert bool(world.company.document.supported_versions) is (preferred[0] == "1.1")
         published = await _session(world, PROTOCOL_PROFILE)
         assert (world.company.protocol_version, published.protocol_version) == ("0.4", "0.4")
         both = await _session(world, *BOTH)
-        assert (world.company.protocol_version, both.protocol_version) == ("1.0", "1.0")
+        assert (world.company.protocol_version, both.protocol_version) == ("1.1", "1.1")
         served = (await world.http.get("https://manzanita.example/.well-known/poppy.json")).json()
         assert served["protocol_version"] == preferred[0]
         assert served["supported_versions"] == {
@@ -224,7 +236,7 @@ async def test_a_conversation_started_in_the_draft_can_be_refused_in_the_publish
             endpoint, receipt.conversation_id, world.message("Still there?"), session=published
         )
     assert (raised.value.code, raised.value.status_code) == ("version_mismatch", 409)
-    assert raised.value.details == {"protocol_version": "1.0"}
+    assert raised.value.details == {"protocol_version": "1.1"}
 
 
 @pytest.mark.asyncio
@@ -237,7 +249,7 @@ async def test_a_session_names_the_version_given_else_the_companys_else_the_defa
         "issuer": "https://manzanita.example",
         "tenant_id": TENANT,
     }
-    assert (await sessions.start(**who)).protocol_version == "1.0"
+    assert (await sessions.start(**who)).protocol_version == "1.1"
     assert (await sessions.start(**who, protocol_version="0.4")).protocol_version == "0.4"
     with pytest.raises(ValueError):
         await sessions.start(**who, protocol_version="0.3")

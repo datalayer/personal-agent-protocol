@@ -89,7 +89,9 @@ async def test_poppy_json_names_a_tasks_endpoint_and_nothing_it_moved() -> None:
     assert tasks_endpoint(world.company.document) == TASKS
     # A company with nothing to say there lists no endpoint and serves none.
     quiet = World()
-    quiet.shop.config = dataclasses.replace(CONFIG, excluded_tasks=(), feedback=False)
+    quiet.shop.config = dataclasses.replace(
+        CONFIG, excluded_tasks=(), feedback=False, feedback_tasks=()
+    )
     assert "tasks" not in quiet.shop.discovery_document()
     answered = await quiet.http.get(TASKS)
     assert answered.status_code == 404
@@ -301,7 +303,7 @@ async def test_a_page_fetched_without_a_browser_carries_the_session_header_signe
         True,
     )
     (request,) = site.requests
-    assert "poppy-session" in request.headers and request.headers["poppy-version"] == "1.0"
+    assert "poppy-session" in request.headers and request.headers["poppy-version"] == "1.1"
     assert "authorization" not in request.headers and "dpop" not in request.headers
     (caller,) = site.sessions
     assert caller is not None and caller.sid == session.sid and caller.account_id is None

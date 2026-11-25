@@ -2394,6 +2394,36 @@
       "description": "A feedback report with a Session Token and no scope is accepted with 202, a kind the company doesn't recognize too; a task over 200 characters is invalid_request; without a token it is 401."
     },
     {
+      "id": "protocol.feedback-listed-tasks",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP11-9.3-01",
+        "PAP11-9.3-02",
+        "PAP11-9.3-03"
+      ],
+      "description": "At 1.1, feedback.tasks lists at most 50 tasks, each an id and a task, ids unique, none also excluded; a report that names them by task_ids, an id the company doesn't list among them, is 202 (draft 1.1, 9, 9.3)."
+    },
+    {
+      "id": "protocol.feedback-report-forms",
+      "kind": "negative",
+      "role": "company",
+      "requirements": [
+        "PAP11-9.3-03"
+      ],
+      "description": "At 1.1 a report has task_ids, or task and description: both forms, neither, an empty task_ids, or an id named twice is invalid_request (draft 1.1, 9.3)."
+    },
+    {
+      "id": "protocol.listed-tasks-not-at-10",
+      "kind": "positive",
+      "role": "company",
+      "requirements": [
+        "PAP11-9.3-03",
+        "PAP-3.4-08"
+      ],
+      "description": "A request that names 1.0 gets no feedback.tasks, which only 1.1 defines, and its report is read as 1.0 defines: task_ids alone is invalid_request (3.4, draft 1.1, 9.3)."
+    },
+    {
       "id": "protocol.extensions-header",
       "kind": "positive",
       "role": "personal-agent",

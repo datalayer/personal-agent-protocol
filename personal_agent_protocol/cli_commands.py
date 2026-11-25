@@ -522,6 +522,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 dpop_signing_algs=(
                     None if metadata is None else metadata.dpop_signing_alg_values_supported
                 ),
+                offline_access=metadata is not None and metadata.lists_offline_access,
             )
             runtime.state.sessions[record.id] = record
             runtime.state.save()
@@ -632,6 +633,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 tenant_id=record.tenant_id,
                 dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
                 pairwise_user_id=record.pairwise_user_id,
+                scopes_supported=metadata.scopes_supported,
                 # Pushed whenever the issuer takes PAR (§4.2, RFC 9126).
                 pushed_authorization_request_endpoint=metadata.pushed_authorization_request_endpoint,
                 require_pushed_authorization_requests=metadata.require_pushed_authorization_requests,
@@ -679,6 +681,7 @@ def add_protocol_groups(cli: typer.Typer, plugin: PapCliPlugin) -> None:  # noqa
                 organization=company.document.organization,
                 dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
                 pairwise_user_id=record.pairwise_user_id,
+                scopes_supported=metadata.scopes_supported,
             )
             link = started.verification_uri_complete or started.verification_uri
             # The company that asks, by name and domain, with the link and code (§4.6).

@@ -32,10 +32,12 @@ from .errors import PersonalAgentProtocolError, ProtocolValidationError, Session
 from .json import loads_strict
 from .models import (
     AVAILABLE_PROTOCOL_VERSIONS,
+    OFFLINE_ACCESS_SCOPE,
     DiscoveredCompany,
     ProtocolModel,
     compatible_versions,
 )
+from .operator_signatures import sign_oauth_request
 from .profile import DEFAULT_PROTOCOL_VERSION, PROTOCOL_PROFILE
 from .reactor import (
     CLOCKS,
@@ -282,7 +284,8 @@ class AccessToken(ProtocolModel):
     `resource` is the service it was issued for, or `None` for the default token
     that works at all of the Company's services but one that asks for its own.
     `scope` is what was granted: a response that leaves it out granted exactly the
-    scopes requested (RFC 6749 §5.1). Never the refresh token: that one stays in
+    scopes requested (RFC 6749 §5.1). Never `offline_access`, which grants no account
+    access (§4.4). Never the refresh token: that one stays in
     `pap.tokenStore`. `token_type` says how it is sent: `DPoP`, bound to the Company's
     DPoP key, with a proof on every request (§4.5). Refresh tokens aren't bound, so
     a lost key means refreshing, not signing in again (RFC 9449 §5).
@@ -308,9 +311,15 @@ class AccessToken(ProtocolModel):
         requested_scopes: tuple[str, ...] = (),
         resource: str | None = None,
     ) -> AccessToken:
-        scope = response.scope if response.scope is not None else " ".join(requested_scopes)
-        if not scope.strip():
-            # A sign-in grants at least one scope; approving none is a decline (§4.7).
+        granted = (
+            response.scope.split(" ") if response.scope is not None else list(requested_scopes)
+        )
+        # `offline_access` asks for a refresh token, not account access: it is none of the
+        # scopes granted, and is ignored when they are compared with those requested (§4.4).
+        scope = " ".join(item for item in granted if item and item != OFFLINE_ACCESS_SCOPE)
+        if not scope:
+            # A sign-in grants at least one scope; approving none, or `offline_access`
+            # alone, is a decline (§4.4, §4.7).
             raise ProtocolValidationError(
                 "invalid_token_response", "A token response grants no scope"
             )
@@ -346,7 +355,8 @@ async def finish_sign_in(
 ) -> SignInResult:
     """Check a sign-in's token response and keep its refresh token behind a reference.
 
-    At least one scope is granted, and none beyond those requested (§4.7).
+    At least one scope is granted, and none beyond those requested (§4.7);
+    `offline_access` counts as neither (§4.4), so `requested` are the account scopes.
     """
 
     try:
@@ -462,7 +472,8 @@ class SessionClient:
         """POST one grant to the token endpoint with a fresh client assertion (§4.1, §4.4).
 
         `form` gives the grant's own fields. No Session header goes to an OAuth
-        endpoint (§5.2). `dpop_signing_algs` is the issuer's
+        endpoint (§5.2); with a `pap.operatorSigner` the request is signed as its operator,
+        over its content digest (§5.3). `dpop_signing_algs` is the issuer's
         `dpop_signing_alg_values_supported`: when it includes ES256 a DPoP proof goes
         with the request, so the Company can bind the tokens (§4.5), and a
         `use_dpop_nonce` refusal is retried once, with a fresh proof and client
@@ -483,6 +494,7 @@ class SessionClient:
                 issuer=issuer,
                 token_endpoint=token_endpoint,
                 error=error,
+                tenant_id=tenant_id,
                 proof=(
                     await self._proof(
                         token_endpoint, tenant_id, issuer, cast(str, pairwise_user_id), nonce
@@ -548,20 +560,21 @@ class SessionClient:
         issuer: str,
         token_endpoint: str,
         error: type[PersonalAgentProtocolError],
+        tenant_id: str,
         proof: SecretStr | None,
     ) -> tuple[httpx.Response, object]:
-        """One POST of a grant, with a fresh client assertion: its response and JSON body."""
+        """One POST of a grant, with a fresh client assertion and, with a
+        `pap.operatorSigner`, the operator signature over its content digest (§5.3): its
+        response and JSON body."""
 
         data = {**fields, **(await self.client_authentication(client_id=client_id, issuer=issuer))}
         headers = {"Accept": "application/json"}
         if proof is not None:
             headers[DPOP_HEADER] = proof.get_secret_value()
+        request = self.http.build_request("POST", token_endpoint, data=data, headers=headers)
+        await sign_oauth_request(self.reactor, request, tenant_id=tenant_id)
         try:
-            response = await send_bounded(
-                self.http,
-                self.http.build_request("POST", token_endpoint, data=data, headers=headers),
-                max_bytes=self.max_response_bytes,
-            )
+            response = await send_bounded(self.http, request, max_bytes=self.max_response_bytes)
         except httpx.HTTPError as exc:
             raise error("request_failed", "Token request failed") from exc
         refuse_redirect(response, error)

@@ -144,6 +144,11 @@ CONFIG = CompanyConfig(
     scope_hints={"orders:read": ("none", True), "orders:write": ("reversible", True)},
     excluded_tasks=({"task": "Change the size of an item after it has shipped"},),
     decline=decline_agent_returns,
+    # The gaps Manzanita already knows about, reported by ID from 1.1 (§9.3).
+    feedback_tasks=(
+        {"id": "installments", "task": "Pay in installments"},
+        {"id": "split-payment", "task": "Split a payment across two cards"},
+    ),
     feedback_answers={
         "Pay with a gift card": {
             "instructions": "Gift cards are applied on the checkout page, before paying.",

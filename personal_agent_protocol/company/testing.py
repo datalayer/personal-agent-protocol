@@ -56,6 +56,7 @@ from .store import (
     IDEMPOTENCY,
     JOIN_CODE,
     MEDIATED,
+    NEW_USER_ID_COUNT,
     OPERATION,
     PROPOSAL,
     PUBLIC_CLIENT,
@@ -69,6 +70,7 @@ from .store import (
     SESSION,
     SIGN_IN_ATTEMPTS,
     USER_CODE,
+    USER_ID,
     Acceptance,
     AccountAgent,
     AccountFamily,
@@ -81,6 +83,8 @@ from .store import (
     IssuedNonce,
     JoinCode,
     KnownClient,
+    KnownUserId,
+    NewUserIdCount,
     OperationOutcome,
     OperationProposal,
     OperationRevision,
@@ -233,6 +237,8 @@ def record_samples(now: datetime) -> dict[str, Any]:
             registered_at=now,
         ),
         REGISTRATION_COUNT: RegistrationCount(count=3),
+        USER_ID: KnownUserId(),
+        NEW_USER_ID_COUNT: NewUserIdCount(count=2),
     }
 
 

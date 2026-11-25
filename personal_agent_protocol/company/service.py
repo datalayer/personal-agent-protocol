@@ -108,7 +108,11 @@ from ..models import (
     DISCLOSURES_VERSION,
     LINKS_EXTENSION,
     LINKS_VERSION,
+    LISTED_TASK_ID,
+    LISTED_TASKS_SINCE,
+    MAX_LISTED_TASKS,
     MEDIATED_RESERVED_FIELDS,
+    OFFLINE_ACCESS_SCOPE,
     REFRESH_TOKEN_GRANT,
     SKILL_INDEX_SCHEMA,
     Approval,
@@ -136,6 +140,7 @@ from ..models import (
     redirect_host,
     redirect_uri_matches,
     split_domain,
+    version_defines,
 )
 from ..operations import (
     ACTION_FAILED,
@@ -233,6 +238,7 @@ from .store import (
     IDEMPOTENCY,
     JOIN_CODE,
     MEDIATED,
+    NEW_USER_ID_COUNT,
     OPERATION,
     PROPOSAL,
     PUBLIC_CLIENT,
@@ -243,6 +249,7 @@ from .store import (
     SESSION,
     SIGN_IN_ATTEMPTS,
     USER_CODE,
+    USER_ID,
     Acceptance,
     AccountAgent,
     AccountFamily,
@@ -256,6 +263,8 @@ from .store import (
     JoinCode,
     JsonObject,
     KnownClient,
+    KnownUserId,
+    NewUserIdCount,
     OperationOutcome,
     OperationProposal,
     OperationRevision,
@@ -471,6 +480,38 @@ def _check_resource_servers(config: CompanyConfig) -> None:
         raise ValueError("each resource server is named once")
 
 
+def _check_feedback_tasks(config: CompanyConfig) -> None:
+    """`feedback_tasks` as §9.3 writes them: at most 50, each an `id` and a `task`, IDs
+    unique, and no task also excluded (§9.1) or answered with an alternative (§9.2)."""
+
+    listed = config.feedback_tasks
+    if not listed:
+        return
+    if not config.feedback:
+        raise ValueError("feedback_tasks are listed with the feedback endpoint")
+    if len(listed) > MAX_LISTED_TASKS:
+        raise ValueError(f"a company lists at most {MAX_LISTED_TASKS} feedback tasks")
+    for entry in listed:
+        task_id, task = entry.get("id"), entry.get("task")
+        if set(entry) != {"id", "task"}:
+            raise ValueError("a feedback task has an id and a task")
+        if not isinstance(task_id, str) or not LISTED_TASK_ID.fullmatch(task_id):
+            raise ValueError(
+                "a feedback task's id is lowercase letters, digits, - and _, at most 64"
+            )
+        if not isinstance(task, str) or not 0 < len(task) <= 200:
+            raise ValueError("a feedback task's task is a phrase of at most 200 characters")
+    if len({entry["id"] for entry in listed}) != len(listed):
+        raise ValueError("each feedback task has an id of its own")
+    elsewhere = {str(task.get("task", "")).casefold() for task in config.excluded_tasks}
+    elsewhere |= {task.casefold() for task in config.feedback_answers}
+    if any(entry["task"].casefold() in elsewhere for entry in listed):
+        raise ValueError(
+            "a task is listed for feedback, or excluded, or answered with an alternative: "
+            "never two of them"
+        )
+
+
 def _check_aliases(domain: str, aliases: tuple[str, ...]) -> None:
     """Each alias a DNS name in small letters, another than `domain`, named once."""
     for alias in aliases:
@@ -541,6 +582,15 @@ class CompanyConfig:
     #: tokens rotated from it (§4.4, a MAY from 1.0): a refresh whose proof is missing or
     #: by another key is `invalid_grant`. Off by default; needs `dpop_binding`.
     bind_refresh_tokens: bool = False
+    #: Whether the issuer issues a refresh token only when a sign-in request includes the
+    #: `offline_access` scope (OpenID Connect Core §11, §4.4). Such a company lists it in
+    #: the issuer's `scopes_supported`, where a Personal Agent reads that it includes it in
+    #: every sign-in request; a sign-in that leaves it out gets an access token and no
+    #: refresh token. It is no account access: it is in no consent page, `auth.scopes`,
+    #: protected resource metadata, challenge or `authorization` event, and a sign-in
+    #: grants at least one other scope (§4.7). Off by default: every sign-in then returns
+    #: a refresh token, and `offline_access` is an unknown scope.
+    offline_access: bool = False
     #: Pushed Authorization Requests for Direct Sign-In (RFC 9126, §4.2, a MAY from 1.0):
     #: `offered` lists `pushed_authorization_request_endpoint` (`/oauth/par`), and
     #: `required` also sets `require_pushed_authorization_requests`, so the authorization
@@ -578,6 +628,14 @@ class CompanyConfig:
     #: Tasks a feedback report may name that can be done after all: the alternative
     #: (§8.2) the company answers with, HTTP 200, keyed by task, compared ignoring case.
     feedback_answers: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    #: The tasks the company already knows can't be done and wants reports about, listed
+    #: in the tasks response's `feedback.tasks` (§9, §9.3, from 1.1): each an `id`
+    #: (lowercase letters, digits, `-` and `_`, at most 64 characters, unique, and the
+    #: same for as long as the gap lasts) and a `task` phrase of at most 200 characters.
+    #: At most 50, with `feedback` on, and none that is also in `excluded_tasks` or has
+    #: an answer in `feedback_answers`. Sent only to a Personal Agent whose request names
+    #: 1.1 or later (§3.4), which reports them by ID (`feedback_task_counts`).
+    feedback_tasks: tuple[Mapping[str, str], ...] = ()
     #: An HTTPS URL of the company's logo, published as `organization.logo_uri` (§3.1).
     logo_uri: str | None = None
     #: Skills for personal agents acting for the user here (§9.4): each a name, a
@@ -696,6 +754,18 @@ class CompanyConfig:
     #: How many clients one address registers in an hour, whatever the host's own
     #: `pap.company.rateLimit` allows besides (RFC 7591 §5).
     client_registrations_per_hour: int = 10
+    #: How many User IDs it hasn't seen before the company accepts from one `client_id`
+    #: in `new_user_id_window` (§5.1; guides, *Rate limits*). A User ID can change: a
+    #: Personal Agent replaces it when the User asks or after 28 days unused, anonymous
+    #: browsing sessions get new ones, and none of these can be told from a new User, so
+    #: a company limits how many new ones each `client_id` sends. Past the limit, a
+    #: request that starts a Session with a new User ID is HTTP 429 with `Retry-After`
+    #: and no body (§5.6); User IDs seen before are served. Counted only once the Session
+    #: JWT's signature verified. None, the default: no limit.
+    new_user_ids_per_client: int | None = None
+    new_user_id_window: timedelta = timedelta(hours=1)
+    #: How long a User ID stays one the company has seen, after its first request.
+    user_id_memory: timedelta = timedelta(days=400)
 
     def __post_init__(self) -> None:  # noqa: C901 - one branch per protocol rule
         _check_aliases(self.domain, self.aliases)
@@ -716,6 +786,9 @@ class CompanyConfig:
             raise ValueError("a domain with a port is served at 1.0 or later only")
         if any(version not in self.protocol_versions for version in self.deprecated_versions):
             raise ValueError("deprecated_versions are served versions")
+        _check_feedback_tasks(self)
+        if self.new_user_ids_per_client is not None and self.new_user_ids_per_client < 1:
+            raise ValueError("new_user_ids_per_client is at least 1, or None for no limit")
         _check_positive(
             idempotency_lifetime=self.idempotency_lifetime,
             session_lifetime=self.session_lifetime,
@@ -728,6 +801,8 @@ class CompanyConfig:
             pushed_request_lifetime=self.pushed_request_lifetime,
             public_client_refresh_lifetime=self.public_client_refresh_lifetime,
             client_registration_lifetime=self.client_registration_lifetime,
+            new_user_id_window=self.new_user_id_window,
+            user_id_memory=self.user_id_memory,
         )
         if self.public_clients and not (self.oauth and self.direct):
             raise ValueError("public_clients sign in at the authorization endpoint: direct is on")
@@ -929,6 +1004,22 @@ class CompanyConfig:
         """Where another served version's document is (§3.4): on the company's own host."""
 
         return f"{self.base}/poppy/{version}.json"
+
+    def defines(self, version: str | None, since: str) -> bool:
+        """Whether a request in `version` is handled with what protocol version `since`
+        added (§3.4): the request's version defines it, and so does a version the company
+        serves that is compatible with it. A 1.0 request is handled as 1.0 defines, and
+        a company that serves only 1.0 sends nothing of 1.1 to anyone."""
+
+        if version is None:
+            return False
+        try:
+            return version_defines(version, since) and any(
+                compatible_versions(version, served) and version_defines(served, since)
+                for served in self.protocol_versions
+            )
+        except ValueError:
+            return False
 
     def serves_version(self, version: str | None) -> bool:
         """Whether a request's `Poppy-Version` is compatible with a version served (§3.4)."""
@@ -1387,6 +1478,11 @@ class _Exchange:
     replayed: bool = False
     #: The request's verified `Poppy-Version` (§3.4), once checked.
     protocol_version: str | None = None
+    #: The request itself, for its operator signature (§5.3).
+    request: CompanyRequest | None = None
+    #: Per `client_id` the policy doesn't allow itself: the operator whose verified
+    #: signature on this request the policy accepts it by, or `None` (§5.3).
+    accepted_by: dict[str, str | None] = field(default_factory=dict)
 
 
 _EXCHANGE: ContextVar[_Exchange | None] = ContextVar("pap_company_exchange", default=None)
@@ -1537,7 +1633,7 @@ class CompanyService:
         """Answer one request; what it came to is reported to `pap.telemetry`."""
 
         path = urlsplit(request.url).path
-        exchange = _Exchange(started=time.perf_counter(), route=_route_of(path))
+        exchange = _Exchange(started=time.perf_counter(), route=_route_of(path), request=request)
         token = _EXCHANGE.set(exchange)
         try:
             response = await self._dispatch(request)
@@ -1898,12 +1994,16 @@ class CompanyService:
             document["extensions"] = extensions
         return document
 
-    def tasks_document(self) -> dict[str, Any]:
+    def tasks_document(self, protocol_version: str | None = None) -> dict[str, Any]:
         """The tasks response (§9): the excluded tasks, the pinned Agent Skills discovery
-        index with absolute URLs (§9.4), and the feedback endpoint. The same for every
-        Session of this company."""
+        index with absolute URLs (§9.4), the feedback endpoint and, from 1.1, the tasks
+        listed for feedback (§9.3). The same for every Session of this company at one
+        protocol version: `protocol_version` is the request's `Poppy-Version`, the
+        company's preferred version when not given, and a request in 1.0 gets no
+        `feedback.tasks`, which 1.0 doesn't define (§3.4)."""
 
         config = self.config
+        version = protocol_version or config.preferred_version
         document: dict[str, Any] = {}
         if config.excluded_tasks:
             document["excluded_tasks"] = [dict(task) for task in config.excluded_tasks]
@@ -1923,6 +2023,10 @@ class CompanyService:
             }
         if config.feedback:
             document["feedback"] = {"endpoint": config.feedback_endpoint}
+            if config.feedback_tasks and config.defines(version, LISTED_TASKS_SINCE):
+                document["feedback"]["tasks"] = [
+                    {"id": task["id"], "task": task["task"]} for task in config.feedback_tasks
+                ]
         return document
 
     async def _tasks(self, request: CompanyRequest) -> CompanyResponse:
@@ -1934,9 +2038,11 @@ class CompanyService:
         Session's response to another, which a company that varies it MUST ensure.
         """
 
-        await self._caller(request)
+        _, session = await self._caller(request)
         return CompanyResponse(
-            200, self.tasks_document(), headers={"Cache-Control": "private, max-age=300"}
+            200,
+            self.tasks_document(session.protocol_version),
+            headers={"Cache-Control": "private, max-age=300"},
         )
 
     def domain_resource_metadata(self, domain: str | None = None) -> dict[str, Any]:
@@ -1994,7 +2100,12 @@ class CompanyService:
             # Every client authenticates with an assertion (§4.1): UCP's identity linking
             # needs it said (UCP extension 4).
             "token_endpoint_auth_methods_supported": ["private_key_jwt"],
-            "scopes_supported": list(config.offered_scopes),
+            # With `offline_access` when refresh tokens need it (§4.4): here only, never in
+            # a resource's metadata.
+            "scopes_supported": [
+                *config.offered_scopes,
+                *((OFFLINE_ACCESS_SCOPE,) if config.offline_access else ()),
+            ],
             # `https://{domain}` for each domain whose poppy.json names the issuer, then
             # the MCP server: exact strings (§3.2, RFC 9728 §4).
             "protected_resources": [
@@ -2083,15 +2194,71 @@ class CompanyService:
             # Its identity verified for the first time.
             self._report("pap.company.identity.check", "ok", {})
 
-    async def _allowed(self, client_id: str) -> bool:
+    async def _allowed(self, client_id: str, *, accepted_by: str | None = None) -> bool:
         """The company's policy on this agent, asked before anything is fetched for it.
 
         A blocked `client_id` is never resolved (no metadata or keys fetched from
         its domain), and a blocked agent's tokens stop working at once.
+
+        A policy with `allows_operator` may also accept a `client_id` it doesn't allow
+        itself because a verified operator speaks for it (§5.3): the operator of this
+        request's signature, or `accepted_by`, the one an earlier signed request of the
+        same sign-in or join was accepted by, for a request the User's browser sends.
+        The client assertion or Session JWT is verified all the same.
         """
 
         policy = cast(ClientPolicy, first_contribution(self.reactor, CLIENT_POLICIES, "policy"))
-        return bool(await policy.allows(client_id))
+        if await policy.allows(client_id):
+            return True
+        decide = getattr(policy, "allows_operator", None)
+        if decide is None:
+            return False
+        operator = accepted_by or await self._accepting_operator(client_id)
+        return operator is not None and bool(await decide(client_id, operator))
+
+    async def _accepting_operator(self, client_id: str) -> str | None:
+        """The operator whose verified signature on this request the policy accepts
+        `client_id` by (§5.3; guides, *Accepting personal agents your bot defenses
+        verify*), or `None`: no such policy, no signature, one that fails, or an operator
+        the policy doesn't link to this `client_id`. Decided once for a request.
+
+        A request with the Session header covers it; one to an OAuth endpoint covers its
+        content digest, checked against the body. The policy is asked before a directory
+        is read, so only an operator the company knows makes it fetch one.
+        """
+
+        exchange = _EXCHANGE.get()
+        request = None if exchange is None else exchange.request
+        if exchange is None or request is None:
+            return None
+        if client_id in exchange.accepted_by:
+            return exchange.accepted_by[client_id]
+        policy = first_contribution(self.reactor, CLIENT_POLICIES, "policy")
+        decide = getattr(policy, "allows_operator", None)
+        operator: str | None = None
+        if decide is not None and request.headers.get("signature-input"):
+
+            async def trusts(agent: str) -> bool:
+                return bool(await decide(client_id, agent))
+
+            directory = cast(
+                OperatorDirectory,
+                first_contribution(self.reactor, OPERATOR_DIRECTORIES, "operator directory"),
+            )
+            verdict = await verify_operator_signature(
+                method=request.method,
+                url=request.url,
+                headers=request.headers,
+                keys=directory.keys,
+                now=self._now(),
+                window=self.config.operator_signature_window,
+                content=None if request.headers.get(SESSION_HEADER) else request.body,
+                trusts=trusts,
+            )
+            if verdict.outcome == "verified":
+                operator = verdict.operator
+        exchange.accepted_by[client_id] = operator
+        return operator
 
     async def _sign_in_allowed(self, client_id: str, grant_type: str) -> bool:
         """Whether this agent may sign in with this grant (§3.2, §4.1).
@@ -2106,6 +2273,16 @@ class CompanyService:
         policy = first_contribution(self.reactor, CLIENT_POLICIES, "policy")
         decide = getattr(policy, "allows_sign_in", None)
         return True if decide is None else bool(await decide(client_id, grant_type))
+
+    def _account_scopes_asked(self, asked: Sequence[str]) -> tuple[str, ...]:
+        """The account scopes a request asks for (§4.4, §4.7): `asked` without
+        `offline_access` at a company whose refresh tokens need it, since that scope asks
+        for a refresh token and is granted as none. Elsewhere it is a scope like any
+        other, which the company doesn't offer."""
+
+        if not self.config.offline_access:
+            return tuple(asked)
+        return tuple(scope for scope in asked if scope != OFFLINE_ACCESS_SCOPE)
 
     def _granted_to_agents(self, scopes: Sequence[str]) -> tuple[str, ...]:
         """The scopes of `scopes` this company grants personal agents (§4.7).
@@ -2574,9 +2751,11 @@ class CompanyService:
             # with any other, and nothing is issued for it.
             raise _RefusedError(400, "invalid_grant")
         requested = tuple(scope for scope in form.get("scope", "").split(" ") if scope)
-        if requested and any(scope not in grant.scopes for scope in requested):
+        # Fewer scopes, named with `offline_access` where refresh tokens need it (§4.4).
+        narrowed = self._account_scopes_asked(requested)
+        if narrowed and any(scope not in grant.scopes for scope in narrowed):
             raise _RefusedError(400, "invalid_scope")
-        if not self._offers(requested or grant.scopes):
+        if not self._offers(narrowed or grant.scopes):
             # A scope the company no longer offers (a rollback, a narrower version): asked
             # within what it offers now, the same refresh token still serves.
             raise _RefusedError(400, "invalid_scope")
@@ -2604,7 +2783,7 @@ class CompanyService:
         response = await self._issue(
             client_id=client_id,
             account_id=grant.account_id,
-            scopes=requested or grant.scopes,
+            scopes=narrowed or grant.scopes,
             family=grant.family,
             resource=resource,
             refresh_token=rotated,
@@ -2626,9 +2805,11 @@ class CompanyService:
         if not await self._sign_in_allowed(client_id, DEVICE_CODE_GRANT):
             raise _RefusedError(400, "unauthorized_client")
         asked = tuple(scope for scope in form.get("scope", "").split(" ") if scope)
-        if not asked or any(scope not in self.config.offered_scopes for scope in asked):
+        account = self._account_scopes_asked(asked)
+        if not account or any(scope not in self.config.offered_scopes for scope in account):
+            # None, an unknown one, or `offline_access` alone (§4.7).
             raise _RefusedError(400, "invalid_scope")
-        scopes = self._granted_to_agents(asked)
+        scopes = self._granted_to_agents(account)
         device_code = self._id("dev")
         lifetime = 600
         expires_at = self._now() + timedelta(seconds=lifetime)
@@ -3029,7 +3210,13 @@ class CompanyService:
             scopes=scopes,
             family=family,
             resource=resource,
-            refresh_token=refresh_token,
+            # Where refresh tokens need `offline_access`, only a sign-in that asked for it
+            # gets one (§4.4): the others get an access token alone.
+            refresh_token=(
+                refresh_token
+                if not self.config.offline_access or OFFLINE_ACCESS_SCOPE in requested
+                else None
+            ),
             requested=requested,
             jkt=jkt,
             public=public is not None,
@@ -3111,8 +3298,17 @@ class CompanyService:
             "token_type": "Bearer" if jkt is None else "DPoP",
             "expires_in": max(1, int((expires_at - self._now()).total_seconds())),
         }
-        if set(scopes) != set(requested):
-            body["scope"] = " ".join(scopes)
+        granted = scopes
+        if (
+            self.config.offline_access
+            and refresh_token is not None
+            and OFFLINE_ACCESS_SCOPE in requested
+        ):
+            # Asked for and given: the refresh token below. It is no account scope, and
+            # is kept with no grant or access token (§4.4).
+            granted = (*scopes, OFFLINE_ACCESS_SCOPE)
+        if set(granted) != set(requested):
+            body["scope"] = " ".join(granted)
         if refresh_token is not None:
             body["refresh_token"] = refresh_token
         return CompanyResponse(200, body, {"Cache-Control": "no-store"})
@@ -3150,7 +3346,9 @@ class CompanyService:
             return None
         return issued
 
-    async def access_token_for(self, token: str, resource: str) -> IssuedAccessToken | None:
+    async def access_token_for(
+        self, token: str, resource: str, *, operator: str | None = None
+    ) -> IssuedAccessToken | None:
         """The record of an access token presented at one of `resource_servers`, or `None`.
 
         For the service at `resource` to verify what it is sent (§4.5, §7): the token
@@ -3163,6 +3361,10 @@ class CompanyService:
         service enforces. With `public_clients`, the record's `public` says the token is
         a public client's (an MCP client's), never a personal agent's: the service gives
         it no Session and takes no operation approval from it.
+
+        `operator` is the `Signature-Agent` URL of the operator signature the service
+        verified on the request that carried the token, when it did (§5.3): a policy
+        with `allows_operator` accepts by it an agent it doesn't allow by `client_id`.
         """
 
         if resource not in self.config.resource_servers:
@@ -3180,7 +3382,7 @@ class CompanyService:
         allowed = (
             await self._public_allowed(issued.client_id)
             if issued.public
-            else await self._allowed(issued.client_id)
+            else await self._allowed(issued.client_id, accepted_by=operator)
         )
         if not allowed or not await self._resource_allowed(issued.client_id, resource):
             return None
@@ -3437,7 +3639,9 @@ class CompanyService:
         redirect_uri = form.get("redirect_uri", "")
         if not any(redirect_uri_matches(entry, redirect_uri) for entry in metadata.redirect_uris):
             raise _RefusedError(400, "invalid_request")
-        scopes = tuple(scope for scope in form.get("scope", "").split(" ") if scope)
+        scopes = self._account_scopes_asked(
+            tuple(scope for scope in form.get("scope", "").split(" ") if scope)
+        )
         if form.get("response_type") != "code":
             raise _RefusedError(400, "unsupported_response_type")
         if form.get("code_challenge_method") != "S256" or not form.get("code_challenge"):
@@ -3457,7 +3661,13 @@ class CompanyService:
             PUSHED_REQUEST,
             request_uri,
             PushedAuthorization(
-                client_id=client_id, parameters=parameters, expires_at=expires_at, dpop_jkt=jkt
+                client_id=client_id,
+                parameters=parameters,
+                expires_at=expires_at,
+                dpop_jkt=jkt,
+                # Decided here, before the sign-in page: the browser's request to the
+                # authorization endpoint carries no operator signature (§5.3, guides).
+                accepted_by=await self._accepting_operator(client_id),
             ).to_json(),
             expires_at=expires_at,
         )
@@ -3472,10 +3682,11 @@ class CompanyService:
 
     async def _pushed_parameters(
         self, query: Mapping[str, str]
-    ) -> tuple[dict[str, str], str | None] | None:
-        """The authorization request a `request_uri` names, taken once, and the DPoP key
-        that pushed it (RFC 9126 §4); `None` for an unknown, used or expired one, or one
-        another agent pushed. Every other query parameter but `client_id` is ignored."""
+    ) -> tuple[dict[str, str], str | None, str | None] | None:
+        """The authorization request a `request_uri` names, taken once, the DPoP key that
+        pushed it (RFC 9126 §4), and the operator the push was accepted by (§5.3);
+        `None` for an unknown, used or expired one, or one another agent pushed. Every
+        other query parameter but `client_id` is ignored."""
 
         taken = await self.store.take(PUSHED_REQUEST, query.get("request_uri", ""))
         pushed = None if taken is None else PushedAuthorization.from_json(taken)
@@ -3485,7 +3696,7 @@ class CompanyService:
             or pushed.client_id != query.get("client_id")
         ):
             return None
-        return pushed.parameters, pushed.dpop_jkt
+        return pushed.parameters, pushed.dpop_jkt, pushed.accepted_by
 
     async def _authorize(  # noqa: C901 - the checks of §4.2, then the page
         self, request: CompanyRequest
@@ -3500,11 +3711,12 @@ class CompanyService:
 
         query = dict(parse_qsl(urlsplit(request.url).query))
         pushed_by: str | None = None
+        accepted_by: str | None = None
         if "request_uri" in query and self.config.pushed_authorization_requests != "off":
             pushed = await self._pushed_parameters(query)
             if pushed is None:
                 return self._page(400, "This sign-in request is not valid or has expired.")
-            query, pushed_by = pushed
+            query, pushed_by, accepted_by = pushed
         elif self.config.pushed_authorization_requests == "required":
             # Only a pushed request (RFC 9126 §5): nothing the browser carried is trusted.
             return self._page(400, "This sign-in request is not valid.")
@@ -3512,7 +3724,7 @@ class CompanyService:
         redirect_uri = query.get("redirect_uri", "")
         if not client_id:
             return self._page(400, "This sign-in request is not valid.")
-        client = await self._authorizing_client(client_id)
+        client = await self._authorizing_client(client_id, accepted_by=accepted_by)
         if client is None:
             return self._page(400, "This agent could not be verified.")
         # An unknown client or redirect is never redirected to: that would be an open redirector.
@@ -3532,7 +3744,10 @@ class CompanyService:
                 return self._page(400, "This sign-in request is not valid.")
             return self._redirect(redirect_uri, error=error, state=state)
 
-        scopes = tuple(scope for scope in query.get("scope", "").split(" ") if scope)
+        asked = tuple(scope for scope in query.get("scope", "").split(" ") if scope)
+        # The account scopes: `offline_access`, where refresh tokens need it, asks for a
+        # refresh token and is on no consent page (§4.4).
+        scopes = self._account_scopes_asked(asked)
         if query.get("response_type") != "code":
             return refuse("unsupported_response_type")
         if query.get("code_challenge_method") != "S256" or not query.get("code_challenge"):
@@ -3540,7 +3755,6 @@ class CompanyService:
         offered = self.config.public_scopes if client.public else self.config.offered_scopes
         if not scopes or any(scope not in offered for scope in scopes):
             return refuse("invalid_scope")
-        asked = scopes
         public: PublicClient | None = None
         if client.public:
             if pushed_by is not None or not _CODE_CHALLENGE.fullmatch(query["code_challenge"]):
@@ -3567,7 +3781,7 @@ class CompanyService:
                 # Refused sign-in, or this type of it: served signed out (§4.1).
                 return refuse("unauthorized_client")
             try:
-                scopes = self._granted_to_agents(asked)
+                scopes = self._granted_to_agents(scopes)
             except _RefusedError:
                 return refuse("invalid_scope")
         request_id = self._id("authz")
@@ -3653,9 +3867,11 @@ class CompanyService:
             cookie=f"{CONSENT_COOKIE}={browser}; Path=/; Secure; HttpOnly; SameSite=Strict",
         )
 
-    async def _authorizing_client(self, client_id: str) -> _Client | None:
+    async def _authorizing_client(
+        self, client_id: str, *, accepted_by: str | None = None
+    ) -> _Client | None:
         """Who asks at the authorization endpoint, by its `client_id`; `None` when it can't
-        be verified.
+        be verified. `accepted_by` is the operator a pushed request was accepted by (§5.3).
 
         A URL is a client ID metadata document: a personal agent's when it names its
         keys, and otherwise, with `public_clients`, a public client's when it says it
@@ -3670,7 +3886,7 @@ class CompanyService:
             return await self._registered_client(client_id)
         # The policy before anything is fetched: as a personal agent, then as a public
         # client. A `client_id` neither allows is never resolved.
-        if await self._allowed(client_id):
+        if await self._allowed(client_id, accepted_by=accepted_by):
             resolver = cast(
                 ClientResolver, first_contribution(self.reactor, CLIENT_RESOLVERS, "client")
             )
@@ -4227,6 +4443,7 @@ class CompanyService:
         for _ in range(_CAS_ATTEMPTS):
             known = await self._read(SESSION, key, StoredSession.from_json)
             if known is None:
+                await self._new_user_id_admitted(verified.client_id, verified.sub)
                 started = StoredSession(
                     client_id=verified.client_id,
                     sid=verified.sid,
@@ -4246,6 +4463,55 @@ class CompanyService:
             if known.ended or now >= known.ends_at:
                 raise SessionError("session_ended", "The Session has ended", status_code=400)
             return key
+        raise _RefusedError(503, "temporarily_unavailable")
+
+    async def _new_user_id_admitted(self, client_id: str, pairwise_user_id: str) -> None:
+        """Count a User ID this `client_id` hasn't sent before against
+        `new_user_ids_per_client`, or HTTP 429 once the window's count is reached (§5.1,
+        §5.6; guides, *Rate limits*).
+
+        Called when a Session starts, after its Session JWT verified, so no one can use
+        up another agent's count by naming it. A replaced User ID can't be told from a
+        new User, and nothing here links a User ID to an account or to another one.
+        """
+
+        limit = self.config.new_user_ids_per_client
+        if limit is None:
+            return
+        now = self._now()
+        known = _composite(client_id, pairwise_user_id)
+        if await self.store.get(USER_ID, known) is not None:
+            return
+        window = self.config.new_user_id_window
+        for _ in range(_CAS_ATTEMPTS):
+            entry = await self.store.get(NEW_USER_ID_COUNT, client_id)
+            if entry is None:
+                counted = await self.store.create(
+                    NEW_USER_ID_COUNT,
+                    client_id,
+                    NewUserIdCount(count=1).to_json(),
+                    expires_at=now + window,
+                )
+            else:
+                count = NewUserIdCount.from_json(entry.value).count
+                if count >= limit:
+                    until = entry.expires_at or now + window
+                    raise _RateLimitedError(max(1, math.ceil((until - now).total_seconds())))
+                counted = await self.store.replace(
+                    NEW_USER_ID_COUNT,
+                    client_id,
+                    entry.version,
+                    NewUserIdCount(count=count + 1).to_json(),
+                    expires_at=entry.expires_at,
+                )
+            if counted:
+                await self.store.put(
+                    USER_ID,
+                    known,
+                    KnownUserId().to_json(),
+                    expires_at=now + self.config.user_id_memory,
+                )
+                return
         raise _RefusedError(503, "temporarily_unavailable")
 
     async def end_session(self, client_id: str, sid: str, pairwise_user_id: str) -> bool:
@@ -4369,10 +4635,11 @@ class CompanyService:
         if not await self._sign_in_allowed(client_id, MEDIATED_GRANT):
             raise _RefusedError(400, "unauthorized_client")
         asked = tuple(s for s in form.get("scope", "").split(" ") if s)
-        if not asked or any(s not in config.mediated_grant_scopes for s in asked):
+        account = self._account_scopes_asked(asked)
+        if not account or any(s not in config.mediated_grant_scopes for s in account):
             # Missing or unknown scopes are refused (§4.7).
             raise _RefusedError(400, "invalid_scope")
-        granted = self._granted_to_agents(asked)
+        granted = self._granted_to_agents(account)
         credentials = {name: form.get(name) for name, _, _ in config.mediated_fields}
         if any(value is None for value in credentials.values()):
             raise _RefusedError(400, "invalid_request")
@@ -5240,16 +5507,23 @@ class CompanyService:
     # Feedback (§8) -------------------------------------------------------------------
 
     async def _feedback(self, request: CompanyRequest) -> CompanyResponse:
-        """Accept a report with the Session header, signed in or out, no scope needed.
+        """Accept a report with the Session header, signed in or out, no scope needed (§9.3).
 
-        `task` (at most 200 characters) and `description` (at most 2,000) are
-        required; other members are ignored. The text is kept as data for the
-        operator, never acted on.
+        A report in free text has `task` (at most 200 characters) and `description` (at
+        most 2,000); other members are ignored. The text is kept as data for the
+        operator, never acted on. From 1.1 a report may instead name listed tasks in
+        `task_ids`: one or more IDs, each once. It is answered 202, the IDs the company
+        lists counted and the others ignored, since the list can change during a
+        Session. A report with both forms or neither, or with an empty `task_ids`, is
+        `invalid_request`. A request in 1.0 is handled as 1.0 defines: `task_ids` is a
+        member it ignores.
         """
 
         _, session = await self._caller(request)
         body = _json_object(request.body)
         task, description = body.get("task"), body.get("description")
+        if self.config.defines(session.protocol_version, LISTED_TASKS_SINCE) and "task_ids" in body:
+            return await self._listed_feedback(body, session)
         if (
             not isinstance(task, str)
             or not 0 < len(task) <= 200
@@ -5273,8 +5547,55 @@ class CompanyService:
             return CompanyResponse(200, dict(alternative), {"Cache-Control": "no-store"})
         return CompanyResponse(202, None, {"Cache-Control": "no-store"})
 
+    async def _listed_feedback(
+        self, body: Mapping[str, Any], session: CallerSession
+    ) -> CompanyResponse:
+        """A report of listed tasks (§9.3): `task_ids` and nothing of the other form."""
+
+        task_ids = body["task_ids"]
+        if (
+            "task" in body
+            or "description" in body
+            or not isinstance(task_ids, list)
+            or not task_ids
+            or any(
+                not isinstance(task_id, str) or not LISTED_TASK_ID.fullmatch(task_id)
+                for task_id in task_ids
+            )
+            or len(set(task_ids)) != len(task_ids)
+        ):
+            # Both forms, an empty list, something that is no ID, or an ID twice.
+            raise _RefusedError(400, "invalid_request")
+        listed = {task["id"] for task in self.config.feedback_tasks}
+        known = tuple(task_id for task_id in task_ids if task_id in listed)
+        if known:
+            report = StoredFeedback(
+                report_id=self._id("fb"),
+                task=None,
+                description=None,
+                task_ids=known,
+                client_id=session.client_id,
+                pairwise_user_id=session.pairwise_user_id,
+                received_at=self._now(),
+            )
+            await self.store.put(FEEDBACK, report.report_id, report.to_json())
+        return CompanyResponse(202, None, {"Cache-Control": "no-store"})
+
+    async def feedback_task_counts(self) -> dict[str, int]:
+        """How many reports named each task the company lists (§9.3), by its ID: reports
+        by ID need no reading, so the company sees which gaps to close first. Every
+        listed task is there, at 0 when none named it; IDs no longer listed are left out.
+        """
+
+        counts = {task["id"]: 0 for task in self.config.feedback_tasks}
+        for report in await self.feedback_reports():
+            for task_id in report.task_ids:
+                if task_id in counts:
+                    counts[task_id] += 1
+        return counts
+
     async def feedback_reports(self) -> tuple[StoredFeedback, ...]:
-        """The feedback reports personal agents sent, oldest first, for the operator (§8).
+        """The feedback reports personal agents sent, oldest first, for the operator (§9.3).
 
         A report can be wrong or written to mislead: its text is data, never
         an instruction, including when a model reads it.
@@ -6152,6 +6473,7 @@ class CompanyService:
             # and its requests declare the extensions this request declared (§6).
             protocol_version=session.protocol_version,
             extensions=dict(session.extensions),
+            accepted_by=await self._accepting_operator(session.client_id),
         )
 
         def authorize(current: JoinCode) -> JoinCode:
@@ -6185,7 +6507,10 @@ class CompanyService:
         ):
             return refused
         joined = issued.authorized
-        if not await self._allowed(joined.client_id) or self._now() >= joined.expires_at:
+        if (
+            not await self._allowed(joined.client_id, accepted_by=joined.accepted_by)
+            or self._now() >= joined.expires_at
+        ):
             return refused
         replaced = _cookie(request, WEB_COOKIE)
         if replaced is not None:

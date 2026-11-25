@@ -450,6 +450,8 @@ class SessionRecord:
     token_type: Literal["Bearer", "DPoP"] = "Bearer"
     #: The issuer's `dpop_signing_alg_values_supported`, for its refreshes (§4.5).
     dpop_signing_algs: list[str] | None = None
+    #: Whether the issuer lists `offline_access`, for its narrowed refreshes (§4.4).
+    offline_access: bool = False
     #: The extensions the Session declares with the company, one version each (§3.4).
     extensions: dict[str, str] = field(default_factory=dict)
 

@@ -38,7 +38,7 @@ import httpx
 from pydantic import Field, SecretStr, ValidationError
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
-from .auth import _scopes
+from .auth import _scopes, request_scope
 from .errors import AuthorizationError
 from .models import (
     MEDIATED_EXTENSION,
@@ -217,7 +217,8 @@ class MediatedSignInClient:
         try:
             form = {
                 "grant_type": MEDIATED_GRANT,
-                "scope": " ".join(requested),
+                # With `offline_access` when the issuer lists it, as every sign-in (§4.4).
+                "scope": request_scope(requested, metadata.scopes_supported),
                 **{name: value.get_secret_value() for name, value in credentials.items()},
             }
         finally:

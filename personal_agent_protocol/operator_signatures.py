@@ -4,16 +4,21 @@
 
 """Operator signatures: an HTTP Message Signature beside the Session header (§5.3).
 
-A Personal Agent SHOULD sign requests that carry the Session header with RFC 9421 and
-Web Bot Auth (`draft-ietf-webbotauth-httpsig-protocol-01`), so traffic-management
-infrastructure can authenticate the operator before the Company's application sees the
-request. It is compatibility support, not a credential: its absence does not make a
-Session JWT invalid, and a verified one authenticates its key source, never a `client_id`.
+A Personal Agent SHOULD sign requests that carry the Session header, and its requests to
+the Company's pushed authorization request, token, device authorization and revocation
+endpoints, with RFC 9421 and Web Bot Auth (`draft-ietf-webbotauth-httpsig-protocol-01`),
+so traffic-management infrastructure can authenticate the operator before the Company's
+application or authorization server sees the request. It is compatibility support, not a
+credential: its absence does not make a Session JWT invalid, and a verified one
+authenticates its key source, never a `client_id`. A request to one of those OAuth
+endpoints carries no Session header: its signature covers `content-digest` (RFC 9530),
+which binds it to the client assertion in the body (`sign_oauth_request`).
 
 - `WebBotAuthSigner` is what a host contributes to `pap.operatorSigner`, which has no
   default: the key is the operator's, published in a directory the host serves. It
   covers the authority, the `Signature-Agent` member, the method, path and query,
-  `poppy-session`, and `authorization` when present (§5.3). `Ed25519OperatorKey` keeps
+  `poppy-session`, and `authorization` when present, or `content-digest` at an OAuth
+  endpoint (§5.3). `Ed25519OperatorKey` keeps
   the key in this process; a key in a KMS is any `OperatorSigningKey`.
 - `operator_directory` is the key set a host publishes at its `Signature-Agent` URL.
 - `verify_operator_signature` is a Company's side, with the draft's outcomes kept apart:
@@ -26,6 +31,8 @@ never holds a shared operator key (Guides, operator signatures).
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import re
 import secrets
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -37,16 +44,25 @@ import httpx
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+from reactor import PluginPlatform  # type: ignore[import-untyped]
 
 from .crypto import jwk_thumbprint
 from .errors import PersonalAgentProtocolError, ProofError
-from .reactor import OperatorSignature, OperatorSignatureRequest
+from .reactor import (
+    OPERATOR_SIGNERS,
+    OperatorSignature,
+    OperatorSignatureRequest,
+    OperatorSigner,
+    optional_contribution,
+)
 from .urls import browser_safe
 
 #: The headers of a signed request (RFC 9421 §4; Web Bot Auth §5.2.5).
 SIGNATURE_HEADER = "Signature"
 SIGNATURE_INPUT_HEADER = "Signature-Input"
 SIGNATURE_AGENT_HEADER = "Signature-Agent"
+#: The header whose value an OAuth endpoint request's signature covers (RFC 9530, §5.3).
+CONTENT_DIGEST_HEADER = "Content-Digest"
 #: The tag that marks a signature as Web Bot Auth's (§5.2).
 WEB_BOT_AUTH_TAG = "web-bot-auth"
 #: The RFC 9421 algorithm these signatures use.
@@ -202,7 +218,8 @@ async def sign_operator_request(
     """The signature of one request, its `created`, `expires` and `nonce` given.
 
     `components` defaults to what §5.3 and Web Bot Auth ask: `authorization` joins
-    `poppy-session` when the request has one.
+    `poppy-session` when the request has one, and a request to an OAuth endpoint, which
+    has neither, covers `content-digest`.
     """
 
     if (
@@ -213,9 +230,13 @@ async def sign_operator_request(
         raise ValueError("a Signature-Agent is an HTTPS URL")
     label = OPERATOR_SIGNATURE_LABEL
     authorization = request.authorization
-    headers = {"poppy-session": request.session_jwt.get_secret_value()}
+    headers: dict[str, str] = {}
+    if request.session_jwt is not None:
+        headers["poppy-session"] = request.session_jwt.get_secret_value()
     if authorization is not None:
         headers["authorization"] = authorization.get_secret_value()
+    if request.content_digest is not None:
+        headers["content-digest"] = request.content_digest
     names = components or (*OPERATOR_SIGNATURE_COMPONENTS, *headers)
     covered = _covered(names, label)
     listed = " ".join(component.identifier for component in covered)
@@ -274,6 +295,44 @@ class WebBotAuthSigner:
             expires=created + int(self.lifetime.total_seconds()),
             nonce=_base64url(random),
         )
+
+
+def content_digest(content: bytes) -> str:
+    """The `Content-Digest` of a request body (RFC 9530 §2): its SHA-256, as a Dictionary
+    with one Byte Sequence."""
+
+    return f"sha-256=:{base64.b64encode(hashlib.sha256(content).digest()).decode()}:"
+
+
+async def sign_oauth_request(
+    reactor: PluginPlatform, request: httpx.Request, *, tenant_id: str
+) -> None:
+    """Sign a request to the Company's pushed authorization request, token, device
+    authorization or revocation endpoint as its operator (§5.3), when the host contributes
+    `pap.operatorSigner`; nothing otherwise.
+
+    Such a request carries no Session header, so the signature covers `content-digest`,
+    which this adds over the body as built: that binds the signature to the client
+    assertion in it. Call it last, on the request about to be sent, and again for every
+    retry: a signature is fresh for each request.
+    """
+
+    operator = optional_contribution(reactor, OPERATOR_SIGNERS, "operator signer")
+    if operator is None:
+        return
+    digest = content_digest(request.content)
+    signed = await cast(OperatorSigner, operator).sign(
+        OperatorSignatureRequest(
+            method=request.method.upper(),
+            url=str(request.url),
+            tenant_id=tenant_id,
+            content_digest=digest,
+        )
+    )
+    request.headers[CONTENT_DIGEST_HEADER] = digest
+    request.headers[SIGNATURE_AGENT_HEADER] = signed.signature_agent
+    request.headers[SIGNATURE_INPUT_HEADER] = signed.signature_input
+    request.headers[SIGNATURE_HEADER] = signed.signature
 
 
 # Reading signatures (RFC 8941) -----------------------------------------------------------
@@ -409,6 +468,10 @@ class _Parser:
 Outcome = Literal["absent", "verified", "invalid", "unverified"]
 #: Keys published at a `Signature-Agent` URL: the URL and the `keyid` asked of it.
 OperatorKeys = Callable[[str, str], Awaitable[Sequence[Mapping[str, Any]]]]
+#: Whether a Company reads the directory at a `Signature-Agent` URL at all.
+OperatorTrust = Callable[[str], Awaitable[bool]]
+#: The digest algorithms of a `Content-Digest` this SDK checks (RFC 9530 §5).
+_DIGESTS = {"sha-256": hashlib.sha256, "sha-512": hashlib.sha512}
 
 
 @dataclass(frozen=True)
@@ -481,15 +544,50 @@ def _offered(headers: Mapping[str, str]) -> list[_Offered]:
     return offered
 
 
-def _sound(offered: _Offered, headers: Mapping[str, str], now: float, window: float) -> bool:
-    """The components §5.3 and Web Bot Auth §5.2 require, the parameters, and freshness."""
+def _digest_matches(headers: Mapping[str, str], content: bytes) -> bool:
+    """Whether the request's `Content-Digest` is of `content` (RFC 9530 §2): at least one
+    digest by an algorithm this SDK checks, and every such digest right."""
+
+    try:
+        digests = _Parser(headers.get("content-digest", "")).dictionary()
+    except ValueError:
+        return False
+    checked = 0
+    for name, hashed in _DIGESTS.items():
+        member = digests.get(name)
+        if member is None:
+            continue
+        if not isinstance(member.value, bytes) or not hmac.compare_digest(
+            member.value, hashed(content).digest()
+        ):
+            return False
+        checked += 1
+    return checked > 0
+
+
+def _sound(
+    offered: _Offered,
+    headers: Mapping[str, str],
+    now: float,
+    window: float,
+    content: bytes | None = None,
+) -> bool:
+    """The components §5.3 and Web Bot Auth §5.2 require, the parameters, and freshness.
+
+    With `content`, the body of a request to an OAuth endpoint: the signature covers
+    `content-digest`, and the digest is the body's."""
 
     names = {component.name for component in offered.covered}
     member = any(
         component.name == "signature-agent" and component.key == offered.label
         for component in offered.covered
     )
-    needs = {"poppy-session", *(("authorization",) if "authorization" in headers else ())}
+    if content is None:
+        needs = {"poppy-session", *(("authorization",) if "authorization" in headers else ())}
+    elif not _digest_matches(headers, content):
+        return False
+    else:
+        needs = {"content-digest"}
     created, expires = offered.parameters.get("created"), offered.parameters.get("expires")
     url = offered.agent.value
     return (
@@ -517,8 +615,10 @@ async def _checked(
     keys: OperatorKeys,
     now: float,
     window: float,
+    content: bytes | None,
+    trusts: OperatorTrust | None,
 ) -> OperatorVerdict:
-    if not _sound(offered, headers, now, window):
+    if not _sound(offered, headers, now, window, content):
         return OperatorVerdict("invalid")
     agent = cast(str, offered.agent.value)
     keyid = cast(str, offered.parameters["keyid"])
@@ -526,6 +626,9 @@ async def _checked(
         return OperatorVerdict("unverified")
     if not browser_safe(agent):
         # A Signature-Agent a browser reads on another host names no key: it decides nothing.
+        return OperatorVerdict("unverified")
+    if trusts is not None and not await trusts(agent):
+        # An operator the Company doesn't know: its directory is never read.
         return OperatorVerdict("unverified")
     try:
         published = await keys(agent, keyid)
@@ -563,11 +666,20 @@ async def verify_operator_signature(
     keys: OperatorKeys,
     now: datetime,
     window: timedelta = timedelta(seconds=60),
+    content: bytes | None = None,
+    trusts: OperatorTrust | None = None,
 ) -> OperatorVerdict:
     """What the request's operator signature comes to; `headers` are lower-case.
 
     One verified signature is enough. `window` is the clock skew `created` is allowed.
     The Session JWT is verified apart from this, whatever it says (§5.3).
+
+    `content` is the body of a request to the pushed authorization request, token, device
+    authorization or revocation endpoint, which carries no Session header: its signature
+    must cover `content-digest`, and the `Content-Digest` header be the body's (RFC
+    9530), which binds the signature to the client assertion in it. The client assertion
+    is verified apart from this too. `trusts` says whether a `Signature-Agent` is an
+    operator the Company knows: one it doesn't is `unverified`, its directory never read.
     """
 
     try:
@@ -585,6 +697,8 @@ async def verify_operator_signature(
             keys=keys,
             now=now.timestamp(),
             window=window.total_seconds(),
+            content=content,
+            trusts=trusts,
         )
         for one in offered
     ]
@@ -606,18 +720,20 @@ def operator_signature_base(
     )
 
 
-def accept_signature(headers: Mapping[str, str]) -> str:
-    """The `Accept-Signature` of a refusal: what this request should have signed (RFC 9421 §5)."""
+def accept_signature(headers: Mapping[str, str], *, oauth: bool = False) -> str:
+    """The `Accept-Signature` of a refusal: what this request should have signed (RFC 9421
+    §5). `oauth` says it went to an OAuth endpoint, where it covers `content-digest`."""
 
     label = OPERATOR_SIGNATURE_LABEL
-    names = [*OPERATOR_SIGNATURE_COMPONENTS, "poppy-session"]
-    if "authorization" in headers:
+    names = [*OPERATOR_SIGNATURE_COMPONENTS, "content-digest" if oauth else "poppy-session"]
+    if not oauth and "authorization" in headers:
         names.append("authorization")
     listed = " ".join(component.identifier for component in _covered(names, label))
     return f'{label}=({listed});created;expires;tag="{WEB_BOT_AUTH_TAG}"'
 
 
 __all__ = [
+    "CONTENT_DIGEST_HEADER",
     "MAX_OFFERED_SIGNATURES",
     "OPERATOR_DIRECTORY_MEDIA_TYPE",
     "OPERATOR_DIRECTORY_PATH",
@@ -633,13 +749,16 @@ __all__ = [
     "Ed25519OperatorKey",
     "OperatorKeys",
     "OperatorSigningKey",
+    "OperatorTrust",
     "OperatorVerdict",
     "WebBotAuthSigner",
     "accept_signature",
+    "content_digest",
     "new_operator_key",
     "operator_directory",
     "operator_key_from",
     "operator_signature_base",
+    "sign_oauth_request",
     "sign_operator_request",
     "verify_operator_signature",
 ]

@@ -27,18 +27,26 @@ from pydantic import (
 )
 
 from .errors import AuthorizationError
-from .profile import DEFAULT_PROTOCOL_VERSION, DRAFT_PROTOCOL_VERSION, PROTOCOL_PROFILE
+from .profile import (
+    DEFAULT_PROTOCOL_VERSION,
+    DRAFT_PROTOCOL_VERSION,
+    PROTOCOL_PROFILE,
+    PUBLISHED_PROTOCOL_VERSION,
+)
 from .urls import browser_safe
 
 _VERSION = re.compile(r"^(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)$")
 #: The protocol versions a Personal Agent implements unless it asks for others (§3.4): a
 #: Company's document is used at a version compatible with one of them, the same major
-#: and, before 1.0, the same minor. 1.0 only (`DEFAULT_PROTOCOL_VERSION`).
+#: and, before 1.0, the same minor. Draft 1.1 only (`DEFAULT_PROTOCOL_VERSION`), which a
+#: Company's 1.0 document is compatible with.
 SUPPORTED_PROTOCOL_VERSIONS = frozenset({DEFAULT_PROTOCOL_VERSION})
-#: Every protocol version this SDK implements: 0.4 and 1.0, both as published. A
+#: Every protocol version this SDK implements: 0.4 and 1.0 as published, and draft 1.1. A
 #: Personal Agent (`DiscoveryClient(protocol_versions=...)`) or a Company
-#: (`CompanyConfig.protocol_versions`) uses 0.4 only when it names it.
-AVAILABLE_PROTOCOL_VERSIONS = frozenset({PROTOCOL_PROFILE, DRAFT_PROTOCOL_VERSION})
+#: (`CompanyConfig.protocol_versions`) uses 0.4 or 1.0 only when it names it.
+AVAILABLE_PROTOCOL_VERSIONS = frozenset(
+    {PROTOCOL_PROFILE, PUBLISHED_PROTOCOL_VERSION, DRAFT_PROTOCOL_VERSION}
+)
 #: The validation context key that names the versions a document is checked against.
 PROTOCOL_VERSIONS_CONTEXT = "pap.protocol_versions"
 
@@ -81,15 +89,37 @@ def implemented_protocol_versions(versions: Iterable[str] | None = None) -> froz
     return chosen
 
 
-def implemented_version_for(chosen: str) -> str:
+def implemented_version_for(
+    chosen: str, implemented: Iterable[str] = SUPPORTED_PROTOCOL_VERSIONS
+) -> str:
     """The version a Personal Agent names in `Poppy-Version` when it uses a Company at
-    `chosen` (§3.4): the one it implements that is compatible with `chosen`, such as `1.0`
-    for a Company used at `1.2`. `ValueError` when this SDK implements none."""
+    `chosen` (§3.4): one this SDK implements, compatible with `chosen` and with one the
+    agent implements (`implemented`), and never later than either. The newest such: `1.1`
+    for an agent that implements 1.1 at a Company used at `1.1` or `1.4`; `1.0` at a
+    Company whose document is `1.0`, so each side sends only what the other's version
+    defines; and `1.0` for an agent that names only 1.0, whatever the Company's minor.
+    `ValueError` when there is none."""
 
-    for version in AVAILABLE_PROTOCOL_VERSIONS:
-        if compatible_versions(chosen, version):
-            return version
+    mine = [version for version in implemented if compatible_versions(chosen, version)]
+    if mine:
+        ceiling = min(parse_version(chosen), max(parse_version(version) for version in mine))
+        usable = [
+            version
+            for version in AVAILABLE_PROTOCOL_VERSIONS
+            if compatible_versions(chosen, version) and parse_version(version) <= ceiling
+        ]
+        if usable:
+            return max(usable, key=parse_version)
     raise ValueError(f"this SDK implements no protocol version compatible with {chosen}")
+
+
+def version_defines(version: str, since: str) -> bool:
+    """Whether protocol version `version` defines what `since` added (§3.4): the same major
+    version, and a minor at least `since`'s. A side sends a field, value or event only to
+    a peer whose version defines it."""
+
+    have, need = parse_version(version), parse_version(since)
+    return have[0] == need[0] and have[1] >= need[1]
 
 
 def choose_protocol_version(
@@ -126,6 +156,10 @@ MEDIATED_GRANT = "https://personalagentprotocol.org/grant/mediated-sign-in"
 #: token with it; the website applies the cookie's other scopes, or treats it as everything
 #: the account can do there and says so with `web.unscoped`.
 BROWSER_SIGN_IN_SCOPE = "poppy:browser-sign-in"
+#: The scope that asks for a refresh token (OpenID Connect Core §11, §4.4): requested in
+#: every sign-in when the issuer's `scopes_supported` lists it, and never account access,
+#: so it is none of the scopes a sign-in grants (§4.7).
+OFFLINE_ACCESS_SCOPE = "offline_access"
 #: The sign-in types, in the order a Personal Agent prefers them (§4): Direct Sign-In is
 #: the preferred type, Device Sign-In stays, and Mediated Sign-In is transitional.
 SIGN_IN_TYPES = ("direct", "device", "mediated")
@@ -614,16 +648,52 @@ class WebDescriptor(ProtocolModel):
         return self
 
 
+#: A listed task's ID (§9.3): lowercase letters, digits, `-` and `_`, at most 64 characters.
+LISTED_TASK_ID = re.compile(r"^[a-z0-9_-]{1,64}$")
+#: The most tasks a Company lists in `feedback.tasks` (§9.3): a Personal Agent that gets
+#: more uses the first 50.
+MAX_LISTED_TASKS = 50
+#: The protocol version that defines `feedback.tasks` and reports by `task_ids` (§9.3).
+LISTED_TASKS_SINCE = "1.1"
+
+
+class ListedTask(ProtocolModel):
+    """A task the Company already knows can't be done, listed in `feedback.tasks` with an
+    ID to report it by (§9.3, from 1.1): content from the Company, a phrase to compare a
+    User's task with, never instructions."""
+
+    id: str = Field(pattern=LISTED_TASK_ID.pattern)
+    task: str = Field(min_length=1, max_length=200)
+
+
 class FeedbackDescriptor(ProtocolModel):
     """Where personal agents report a task the protocol can't do at this company (§9.3):
-    `feedback` in the tasks response, a Session header destination (§5.2)."""
+    `feedback` in the tasks response, a Session header destination (§5.2).
+
+    `tasks`, from 1.1, lists the tasks the Company already knows about, each with an ID:
+    the first 50 as sent, and of two with the same ID the first."""
 
     endpoint: str
+    tasks: list[ListedTask] = Field(default_factory=list)
 
     @field_validator("endpoint")
     @classmethod
     def validate_endpoint(cls, value: str) -> str:
         return _https_url(value, "feedback endpoint")
+
+    @field_validator("tasks", mode="before")
+    @classmethod
+    def first_listed_tasks(cls, value: object) -> object:
+        # A Personal Agent that gets more than 50 uses the first 50 (§9.3).
+        return value[:MAX_LISTED_TASKS] if isinstance(value, list) else value
+
+    @field_validator("tasks")
+    @classmethod
+    def unique_listed_tasks(cls, value: list[ListedTask]) -> list[ListedTask]:
+        seen: dict[str, ListedTask] = {}
+        for task in value:
+            seen.setdefault(task.id, task)
+        return list(seen.values())
 
 
 class TasksDescriptor(ProtocolModel):
@@ -880,6 +950,14 @@ class OAuthServerMetadata(ProtocolModel):
                 "require_pushed_authorization_requests needs pushed_authorization_request_endpoint"
             )
         return self
+
+    @property
+    def lists_offline_access(self) -> bool:
+        """Whether the issuer lists `offline_access` in `scopes_supported` (§4.4): a
+        Personal Agent then includes it in every sign-in request, and in `scope` when it
+        asks for fewer scopes at refresh."""
+
+        return OFFLINE_ACCESS_SCOPE in (self.scopes_supported or ())
 
     @property
     def offers_direct(self) -> bool:
@@ -1800,6 +1878,9 @@ class DiscoveredCompany(ProtocolModel):
     document: DiscoveryDocument
     oauth_metadata: OAuthServerMetadata | None = None
     resource_metadata: ProtectedResourceMetadata | None = None
+    #: The protocol versions the Personal Agent that discovered the Company implements
+    #: (`DiscoveryClient(protocol_versions=...)`); none named, `SUPPORTED_PROTOCOL_VERSIONS`.
+    implemented_versions: tuple[str, ...] = ()
 
     @property
     def issuer(self) -> str | None:
@@ -1839,10 +1920,15 @@ class DiscoveredCompany(ProtocolModel):
 
     @property
     def session_version(self) -> str:
-        """What a Session with the Company names in `Poppy-Version` (§3.4): the version this
-        SDK implements that is compatible with `protocol_version`."""
+        """What a Session with the Company names in `Poppy-Version` (§3.4): the newest
+        version the Personal Agent implements that is compatible with `protocol_version`
+        and no later than it (`implemented_version_for`), so the agent sends the Company
+        nothing a version later than its document defines."""
 
-        return implemented_version_for(self.document.protocol_version)
+        return implemented_version_for(
+            self.document.protocol_version,
+            self.implemented_versions or SUPPORTED_PROTOCOL_VERSIONS,
+        )
 
     @property
     def scopes_supported(self) -> tuple[str, ...]:
@@ -1851,13 +1937,16 @@ class DiscoveredCompany(ProtocolModel):
         metadata lists, each once. A Company can list them in either or both, and the
         agent uses the scopes in either list; both may leave out scopes it offers only to
         its other clients, and a scope its APIs or a sign-in extension document may be
-        requested though absent from both."""
+        requested though absent from both. Never `offline_access`: it asks for a refresh
+        token, not account access (§4.4), and the sign-in clients add it themselves when
+        the issuer lists it (`OAuthServerMetadata.lists_offline_access`)."""
 
         listed: dict[str, None] = {}
         if self.oauth_metadata is not None:
             listed.update(dict.fromkeys(self.oauth_metadata.scopes_supported or ()))
         if self.resource_metadata is not None:
             listed.update(dict.fromkeys(self.resource_metadata.scopes_supported))
+        listed.pop(OFFLINE_ACCESS_SCOPE, None)
         return tuple(listed)
 
     @property

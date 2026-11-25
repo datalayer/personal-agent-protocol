@@ -42,7 +42,13 @@ from .conversations import ConversationClient, StreamReconnected, TextDelta
 from .discovery import DiscoveryClient
 from .errors import AuthorizationError, PersonalAgentProtocolError
 from .mediated import mediated_sign_in
-from .models import ConversationEvent, DiscoveredCompany, Operation, Organization
+from .models import (
+    OFFLINE_ACCESS_SCOPE,
+    ConversationEvent,
+    DiscoveredCompany,
+    Operation,
+    Organization,
+)
 from .reactor import APPROVAL_SURFACES, ApprovalRequest, ApprovalSurface, optional_contribution
 from .requirements import load_ledger
 from .sessions import AccessToken, PapSession
@@ -151,6 +157,7 @@ def account_context(record: SessionRecord) -> RefreshTokenContext:
         revocation_endpoint=record.revocation_endpoint,
         dpop_signing_algs=record.dpop_signing_algs,
         pairwise_user_id=record.pairwise_user_id,
+        scopes_supported=(OFFLINE_ACCESS_SCOPE,) if record.offline_access else None,
     )
 
 

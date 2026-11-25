@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Literal, cast
@@ -16,10 +16,11 @@ import httpx
 from pydantic import Field, SecretStr, field_validator
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
-from .auth import _https_url, _scopes
+from .auth import _https_url, _scopes, request_scope
 from .errors import AuthorizationError, ProtocolValidationError
 from .json import loads_strict
 from .models import Organization, ProtocolModel, domain_host
+from .operator_signatures import sign_oauth_request
 from .reactor import (
     AUTHORIZATION_STATE_STORES,
     CLOCKS,
@@ -166,6 +167,7 @@ class DeviceSignInClient:
         organization: Organization,
         dpop_signing_algs: Sequence[str] | None = None,
         pairwise_user_id: str | None = None,
+        scopes_supported: Iterable[str] | None = None,
     ) -> DeviceSignInStart:
         """Request a device code and retain it behind an opaque state reference (§4.3).
 
@@ -175,7 +177,9 @@ class DeviceSignInClient:
         `dpop_signing_algs`
         is its `dpop_signing_alg_values_supported`: each poll sends a DPoP proof when it
         includes ES256 (§4.5), by the DPoP key of `pairwise_user_id`, the User ID the
-        sign-in is for, which proving needs.
+        sign-in is for, which proving needs. `scopes_supported` is the issuer's too: when
+        it lists `offline_access`, the request asks for it (§4.4), and it is never one of
+        `requested_scopes` or of the scopes granted (§4.7).
         """
 
         clock, random_source, signer = self._proof_inputs()
@@ -193,22 +197,22 @@ class DeviceSignInClient:
             ).model_dump(),
             purpose="client_assertion",
         )
+        request = self.http.build_request(
+            "POST",
+            endpoint,
+            data={
+                "scope": request_scope(requested_scopes, scopes_supported),
+                "client_id": client_url,
+                "client_assertion_type": JWT_CLIENT_ASSERTION,
+                "client_assertion": assertion.get_secret_value(),
+            },
+            headers={"Accept": "application/json"},
+        )
+        # Signed as its operator too, with a `pap.operatorSigner` (§5.3): Device Sign-In
+        # starts with this request, so a Company can decide on the agent here.
+        await sign_oauth_request(self.reactor, request, tenant_id=tenant_id)
         try:
-            response = await send_bounded(
-                self.http,
-                self.http.build_request(
-                    "POST",
-                    endpoint,
-                    data={
-                        "scope": " ".join(requested_scopes),
-                        "client_id": client_url,
-                        "client_assertion_type": JWT_CLIENT_ASSERTION,
-                        "client_assertion": assertion.get_secret_value(),
-                    },
-                    headers={"Accept": "application/json"},
-                ),
-                max_bytes=self.max_response_bytes,
-            )
+            response = await send_bounded(self.http, request, max_bytes=self.max_response_bytes)
         except httpx.HTTPError as exc:
             raise AuthorizationError(
                 "request_failed", "Device authorization request failed"

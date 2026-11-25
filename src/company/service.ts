@@ -409,9 +409,10 @@ export interface CompanyConfigOptions {
    * The protocol versions the company serves (§3.4), the first the one it prefers:
    * `poppy.json` is that version's document, and each other version's document is served at
    * `/poppy/{version}.json` and listed in `supported_versions`. A request whose `Poppy-Version`
-   * is none of them is `version_unsupported`. By default draft 1.1 (`DEFAULT_PROTOCOL_VERSION`),
-   * which also takes requests that name 1.0 and handles them as 1.0 defines; `["1.1", "0.4"]`
-   * also serves 0.4 as published, `["1.0"]` 1.0 only and `["0.4"]` 0.4 only.
+   * is none of them is `version_unsupported`. By default 1.0 as published
+   * (`DEFAULT_PROTOCOL_VERSION`), which also takes requests that name a later 1.x and handles
+   * them as 1.0 defines; `["1.1"]` serves upstream's unpublished draft 1.1 instead, which may
+   * change; `["1.0", "0.4"]` also serves 0.4 as published, and `["0.4"]` 0.4 only.
    */
   readonly protocolVersions?: readonly string[];
   /**

@@ -42,7 +42,8 @@ test("the Python SDK declares the same published and draft versions", () => {
   assert.equal(PUBLISHED_PROTOCOL_REVISION, python("profile.py", "PUBLISHED_PROTOCOL_REVISION"));
   assert.equal(DRAFT_PROTOCOL_VERSION, python("profile.py", "DRAFT_PROTOCOL_VERSION"));
   assert.equal(DRAFT_PROTOCOL_REVISION, python("profile.py", "DRAFT_PROTOCOL_REVISION"));
-  assert.equal(DEFAULT_PROTOCOL_VERSION, DRAFT_PROTOCOL_VERSION);
+  assert.equal(DEFAULT_PROTOCOL_VERSION, PUBLISHED_PROTOCOL_VERSION);
+  assert.equal(DEFAULT_PROTOCOL_VERSION, python("profile.py", "PUBLISHED_PROTOCOL_VERSION"));
 });
 
 test("the npm package states the profile and the Operations version", () => {

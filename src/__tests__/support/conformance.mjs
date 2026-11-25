@@ -2198,10 +2198,9 @@ caseFor("protocol.feedback-report")(async (ctx) => {
   await expectRefusal(bare, 400, "invalid_session", "a report needs the Session header");
 });
 
-function needsListedTasks(ctx) {
-  if (!versionDefines(ctx.profile, LISTED_TASKS_SINCE)) {
-    throw new SkipCase(`listed tasks are ${LISTED_TASKS_SINCE}'s: the suite runs at ${ctx.profile}`);
-  }
+/** Whether the suite runs at a version that defines listed tasks (§3.4, §9.3). */
+function listsTasks(ctx) {
+  return versionDefines(ctx.profile, LISTED_TASKS_SINCE);
 }
 
 async function postReport(ctx, session, endpoint, body) {
@@ -2212,16 +2211,23 @@ async function postReport(ctx, session, endpoint, body) {
 }
 
 caseFor("protocol.feedback-listed-tasks")(async (ctx) => {
-  // `feedback.tasks` as §9.3 writes it, and a report that names listed tasks: 202.
-  needsListedTasks(ctx);
+  // `feedback.tasks` as §9.3 writes it, and a report that names listed tasks: 202. Before
+  // 1.1, which defines them, the tasks response carries none (§3.4).
   const session = await ctx.session(ctx.newUser());
   const endpoint = await feedbackEndpointOf(ctx, session);
   const listedAt = tasksEndpoint((await ctx.company()).document);
   const answered = await ctx.send("GET", listedAt, { headers: await ctx.auth(session, "GET", listedAt) });
   const body = await answered.json();
   const listed = body.feedback?.tasks;
+  if (!listsTasks(ctx)) {
+    check(listed === undefined, `feedback.tasks is not sent at ${ctx.profile}, which doesn't define it`);
+    return;
+  }
   if (!Array.isArray(listed) || listed.length === 0) throw new SkipCase("the company lists no feedback tasks");
-  check(listed.length <= MAX_LISTED_TASKS, "at most 50 tasks");
+  check(
+    listed.length <= MAX_LISTED_TASKS && listed.every((task) => typeof task === "object" && task !== null && !Array.isArray(task)),
+    "at most 50 tasks, each an object",
+  );
   const ids = listed.map((task) => task.id);
   check(
     ids.every((id) => typeof id === "string" && LISTED_TASK_ID.test(id)),
@@ -2256,11 +2262,20 @@ caseFor("protocol.feedback-listed-tasks")(async (ctx) => {
 });
 
 caseFor("protocol.feedback-report-forms")(async (ctx) => {
-  // A report has one form or the other: anything else is `invalid_request` (§9.3).
-  needsListedTasks(ctx);
+  // A report has one form or the other: anything else is `invalid_request` (§9.3). Before 1.1
+  // it has `task` and `description`, and `task_ids` alone is malformed.
   const session = await ctx.session(ctx.newUser());
   const endpoint = await feedbackEndpointOf(ctx, session);
   const freeText = { task: "Conformance task", description: "Not offered." };
+  if (!listsTasks(ctx)) {
+    for (const [label, body] of [
+      ["neither field", {}],
+      ["task_ids alone", { task_ids: ["conformance-not-listed"] }],
+    ]) {
+      await expectRefusal(await postReport(ctx, session, endpoint, body), 400, "invalid_request", label);
+    }
+    return;
+  }
   for (const [label, body] of [
     ["both forms", { ...freeText, task_ids: ["conformance-not-listed"] }],
     ["neither form", {}],

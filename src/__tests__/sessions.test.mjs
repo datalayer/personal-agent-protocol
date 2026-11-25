@@ -202,7 +202,7 @@ test("a persisted Session without its version restores as 0.4, one with it keeps
   assert.equal(
     new PapSession({ sid: persisted.sid, sub: PAIRWISE, issuer: ISSUER, clientId: CLIENT_ID, tenantId: "tenant-one" })
       .protocolVersion,
-    "1.1",
+    "1.0",
   );
 });
 

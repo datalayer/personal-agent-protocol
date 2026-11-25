@@ -209,6 +209,11 @@ export interface OperatorSignature {
  */
 export interface OperatorSigner {
   sign(request: OperatorSignatureRequest): Promise<OperatorSignature>;
+  /**
+   * Whether the signer also signs requests to the OAuth endpoints (upstream's draft 1.1, §5.3):
+   * only `true` makes `signOauthRequest` call it for them. Off when absent.
+   */
+  readonly signsOauthEndpoints?: boolean;
 }
 
 /** Serialize every use of one refresh token: rotation invalidates the one replaced (§4.4). */
@@ -393,7 +398,7 @@ export function createPapCorePlugin(options: PapCoreOptions = {}) {
   }
   return definePlugin({
     name: "@datalayer/personal-agent-protocol-core",
-    version: "1.1.0",
+    version: "1.1.0-alpha.1",
     contributionPoints: [
       DiscoveryTransports,
       UrlSafetyPolicies,

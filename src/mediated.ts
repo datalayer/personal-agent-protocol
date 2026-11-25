@@ -128,6 +128,11 @@ export interface MediatedSignInOptions {
   readonly tenantId: string;
   /** The User ID the sign-in is for: its DPoP key proves the grant, so proving needs it (§4.5). */
   readonly pairwiseUserId?: string | undefined;
+  /**
+   * Ask for the `offline_access` scope when the issuer's `scopes_supported` lists it (upstream's
+   * draft 1.1, §4.4). Off by default.
+   */
+  readonly offlineAccess?: boolean;
   readonly signal?: AbortSignal;
 }
 
@@ -212,8 +217,7 @@ export class MediatedSignInClient {
     try {
       form = {
         grant_type: MEDIATED_GRANT,
-        // With `offline_access` when the issuer lists it, as every sign-in (§4.4).
-        scope: requestScope(requested, metadata.scopes_supported),
+        scope: requestScope(requested, options.offlineAccess === true ? metadata.scopes_supported : undefined),
         ...Object.fromEntries(Object.entries(credentials).map(([name, value]) => [name, value.reveal()])),
       };
     } finally {

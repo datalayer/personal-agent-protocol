@@ -4,11 +4,12 @@
  * BSD 3-Clause License
  */
 
-// What draft 1.1 adds to 1.0 (upstream 589743a, 2026-11-18), both sides, in one process; it
-// ports `personal_agent_protocol/__tests__/test_draft_11.py`.
+// What upstream's unpublished draft 1.1 adds to 1.0 (589743a, 2026-11-18), both sides, in one
+// process; it ports `personal_agent_protocol/__tests__/test_draft_11.py`.
 //
-// Draft 1.1 is the default version, and 1.0 stays available when named: from 1.0 each side
-// sends only what the other's version defines (§3.4). `offline_access` (§4.4, §4.7), operator
+// 1.0 as published stays the default version, and draft 1.1 is used only when named: from 1.0
+// each side sends only what the other's version defines (§3.4). Each addition is off until a
+// caller turns it on. `offline_access` (§4.4, §4.7), operator
 // signatures at the authorization server (§5.3), replacing a User ID (§5.1), and listed tasks
 // in feedback (§9, §9.3).
 import assert from "node:assert/strict";
@@ -113,9 +114,17 @@ function serving(w, config) {
   w.sites["manzanita.example"] = service;
 }
 
-/** The agent's host, built again: signing as its operator or not. */
+/**
+ * The agent's host, built again: signing as its operator or not. `true` signs its requests
+ * with the Session header and, turned on, those to the OAuth endpoints; `"session"` only the
+ * first, as 1.0 has it.
+ */
 async function hosted(w, signing) {
-  const operator = new WebBotAuthSigner(w.operatorKey, { signatureAgent: OPERATOR, now: () => w.clock.now() });
+  const operator = new WebBotAuthSigner(w.operatorKey, {
+    signatureAgent: OPERATOR,
+    now: () => w.clock.now(),
+    oauthEndpoints: signing === true,
+  });
   w.host = await agentHost({
     identity: w.identity,
     fetch: w.fetch,
@@ -191,7 +200,7 @@ const clientAuthentication = (w) =>
 
 const rejectsWith = (code) => (error) => error.code === code;
 
-// Draft 1.1, the default, and 1.0 when named (§3.4) ---------------------------------------
+// 1.0, the default, and draft 1.1 when named (§3.4) ---------------------------------------
 
 test("a version defines what an earlier minor added", () => {
   assert.ok(versionDefines("1.1", "1.1") && versionDefines("1.4", "1.1"));
@@ -205,26 +214,32 @@ test("a version defines what an earlier minor added", () => {
   assert.ok(!new CompanyConfig({ ...CONFIG_OPTIONS, protocolVersions: ["1.0"] }).defines("1.1", "1.1"));
 });
 
-test("each side names the version both define", async () => {
-  // The default agent (1.1) at a company whose document is 1.0 names 1.0, and an agent that
-  // names 1.0 stays at 1.0 with a 1.1 company: nothing of 1.1 goes to a 1.0 peer.
+test("1.0 stays the default and the draft is used when both sides name it", async () => {
+  // Nothing announces 1.1 unless asked. An agent on the default names 1.0 at every company;
+  // one that names the draft uses it only where the company's document is 1.1, so nothing of
+  // 1.1 goes to a 1.0 peer (§3.4).
   const w = await world();
-  const byDefault = await session(w);
-  assert.deepEqual([companyProtocolVersion(w.company), byDefault.protocolVersion], ["1.1", "1.1"]);
-  const published = await session(w, { versions: ["1.0"] });
-  assert.deepEqual([companyProtocolVersion(w.company), published.protocolVersion], ["1.1", "1.0"]);
-  const headers = await sessionHeaders(w.reactor, "GET", TASKS_URL, { session: published });
+  assert.deepEqual(w.shop.config.protocolVersions, ["1.0"]);
+  let byDefault = await session(w);
+  assert.deepEqual([companyProtocolVersion(w.company), byDefault.protocolVersion], ["1.0", "1.0"]);
+  let drafted = await session(w, { versions: ["1.1"] });
+  assert.deepEqual([companyProtocolVersion(w.company), drafted.protocolVersion], ["1.0", "1.0"]);
+  // A request that names 1.1 is compatible with 1.0, and handled as 1.0 defines (§3.4).
+  const newer = PapSession.fromJson({ ...byDefault.toJson(), protocol_version: "1.1" });
+  const answer = await w.transport.request("GET", TASKS_URL, { session: newer });
+  assert.equal(answer.status, 200);
+  assert.ok(!("tasks" in (await answer.json()).feedback));
+
+  serving(w, { protocolVersions: ["1.1"] });
+  byDefault = await session(w);
+  assert.deepEqual([companyProtocolVersion(w.company), byDefault.protocolVersion], ["1.1", "1.0"]);
+  const headers = await sessionHeaders(w.reactor, "GET", TASKS_URL, { session: byDefault });
   assert.equal(headers["Poppy-Version"], "1.0");
-  // Both are served by the 1.1 company, each in its own version.
-  for (const one of [byDefault, published]) {
+  drafted = await session(w, { versions: ["1.1"] });
+  assert.deepEqual([companyProtocolVersion(w.company), drafted.protocolVersion], ["1.1", "1.1"]);
+  for (const one of [byDefault, drafted]) {
     assert.equal((await w.transport.request("GET", TASKS_URL, { session: one })).status, 200);
   }
-  serving(w, { protocolVersions: ["1.0"] });
-  const atPublished = await session(w);
-  assert.deepEqual([companyProtocolVersion(w.company), atPublished.protocolVersion], ["1.0", "1.0"]);
-  // A 1.0 company accepts a request that names 1.1, compatible with what it serves.
-  const newer = PapSession.fromJson({ ...atPublished.toJson(), protocol_version: "1.1" });
-  assert.equal((await w.transport.request("GET", TASKS_URL, { session: newer })).status, 200);
 });
 
 // `offline_access` (§4.4, §4.7, §4.8) -------------------------------------------------------
@@ -342,6 +357,7 @@ test("offline_access in a pushed request, a Mediated Sign-In, and no challenge",
     clientId: mediated.identity.clientId,
     scopes: ["orders:read"],
     tenantId: TENANT,
+    offlineAccess: true,
   });
   assert.equal(form(at(mediated, "/oauth/token")[0]).scope, "orders:read offline_access");
 
@@ -463,6 +479,16 @@ test("the agent signs its requests to the four OAuth endpoints", async () => {
   // No operator signer: nothing is signed, and no digest is added.
   await deviceSignIn(w);
   assert.ok(w.sent.every((request) => !("signature" in request.headers) && !("content-digest" in request.headers)));
+  // A signer that isn't told to: the Session header's requests only, as 1.0 has it.
+  await hosted(w, "session");
+  w.sent.length = 0;
+  await deviceSignIn(w);
+  await w.transport.request("GET", TASKS_URL, { session: await session(w) });
+  assert.deepEqual(
+    w.sent.filter((request) => "signature" in request.headers).map((request) => request.url.pathname),
+    ["/poppy/tasks"],
+  );
+  assert.ok(w.sent.every((request) => !("content-digest" in request.headers)));
 
   await hosted(w, true);
   w.sent.length = 0;
@@ -872,7 +898,7 @@ test("a company limits new User IDs by client_id and links none to an account", 
 
 test("listed tasks as a personal agent reads them", () => {
   const feedback = (tasks) => parseTasksResponse({ feedback: { endpoint: FEEDBACK_URL, ...(tasks === undefined ? {} : { tasks }) } }).feedback;
-  assert.deepEqual(feedback().tasks, []);
+  assert.equal(feedback().tasks, undefined);
   assert.deepEqual(feedback(LISTED).tasks, LISTED);
   // More than 50: the first 50. Two with one ID: the first.
   const many = Array.from({ length: 60 }, (_, n) => ({ id: `task-${n}`, task: `Task ${n}` }));
@@ -934,8 +960,8 @@ test("what a company may list", () => {
 });
 
 test("a listed task is reported by its ID", async () => {
-  const w = await world({ config: { feedbackTasks: LISTED } });
-  const started = await session(w);
+  const w = await world({ config: { feedbackTasks: LISTED, protocolVersions: ["1.1"] } });
+  const started = await session(w, { versions: ["1.1"] });
   const tasks = await new TasksClient({ transport: w.transport }).get(w.company, { session: started });
   assert.deepEqual(tasks.listedTasks.map((task) => [task.id, task.task]), LISTED.map((task) => [task.id, task.task]));
   // Never both listed and excluded.
@@ -986,9 +1012,9 @@ test("a listed task is reported by its ID", async () => {
 });
 
 test("nothing of listed tasks goes to a peer at 1.0", async () => {
-  const w = await world({ config: { feedbackTasks: LISTED } });
+  const w = await world({ config: { feedbackTasks: LISTED, protocolVersions: ["1.1"] } });
   // A 1.0 agent at the 1.1 company: no `feedback.tasks`, and its reports are 1.0's.
-  const published = await session(w, { versions: ["1.0"] });
+  const published = await session(w);
   const answer = await w.transport.request("GET", TASKS_URL, { session: published });
   assert.deepEqual((await answer.json()).feedback, { endpoint: FEEDBACK_URL });
   const tasks = await new TasksClient({ transport: w.transport }).get(w.company, { session: published });
@@ -1010,8 +1036,8 @@ test("nothing of listed tasks goes to a peer at 1.0", async () => {
   assert.deepEqual(w.shop.tasksDocument().feedback.tasks, LISTED);
 
   // A company that serves only 1.0 lists none, whatever the request names.
-  serving(w, { feedbackTasks: LISTED, protocolVersions: ["1.0"] });
-  const started = await session(w);
+  serving(w, { feedbackTasks: LISTED });
+  const started = await session(w, { versions: ["1.1"] });
   assert.equal(started.protocolVersion, "1.0");
   const newer = PapSession.fromJson({ ...started.toJson(), protocol_version: "1.1" });
   const served = await w.transport.request("GET", TASKS_URL, { session: newer });
@@ -1020,7 +1046,7 @@ test("nothing of listed tasks goes to a peer at 1.0", async () => {
   // A document at 1.0 whose tasks response lists tasks all the same: the agent reads it as
   // 1.0 defines, and reports nothing by ID.
   const document = { ...w.company.document, protocol_version: "1.0" };
-  serving(w, { feedbackTasks: LISTED });
+  serving(w, { feedbackTasks: LISTED, protocolVersions: ["1.1"] });
   const wrong = await new TasksClient({ transport: w.transport }).get(document, { session: newer });
   assert.ok(wrong.available);
   assert.deepEqual([wrong.listedTasks, wrong.feedbackEndpoint], [[], FEEDBACK_URL]);

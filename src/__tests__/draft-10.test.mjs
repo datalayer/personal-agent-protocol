@@ -43,7 +43,7 @@ import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./suppor
 const TENANT = "atlas-demo";
 const PAIRWISE = "usr_ada_at_manzanita_000000";
 const CONVERSATIONS = "https://manzanita.example/poppy/conversations";
-const BOTH = [DRAFT_PROTOCOL_VERSION, PROTOCOL_PROFILE];
+const BOTH = [PUBLISHED_PROTOCOL_VERSION, PROTOCOL_PROFILE];
 
 /** Manzanita serving `versions` (its default for none), and Atlas's host on the same network. */
 async function world(versions) {
@@ -81,26 +81,27 @@ const hello = () => ({ id: `req_draft10_${String((requests += 1)).padStart(10, "
 
 // Protocol version 1.0, the default (§3.1, §3.4) --------------------------------------
 
-test("the draft is the default and the published version is available", () => {
+test("1.0 is the default and 0.4 and the draft are available", () => {
   assert.deepEqual([PROTOCOL_PROFILE, PUBLISHED_PROTOCOL_VERSION, DRAFT_PROTOCOL_VERSION], ["0.4", "1.0", "1.1"]);
-  assert.equal(DEFAULT_PROTOCOL_VERSION, DRAFT_PROTOCOL_VERSION);
+  assert.equal(DEFAULT_PROTOCOL_VERSION, PUBLISHED_PROTOCOL_VERSION);
   assert.deepEqual([PUBLISHED_PROTOCOL_REVISION, DRAFT_PROTOCOL_REVISION], ["2026-11-14", "2026-11-18"]);
-  assert.deepEqual([...SUPPORTED_PROTOCOL_VERSIONS], ["1.1"]);
+  assert.deepEqual([...SUPPORTED_PROTOCOL_VERSIONS], ["1.0"]);
   assert.deepEqual([...AVAILABLE_PROTOCOL_VERSIONS].sort(), ["0.4", "1.0", "1.1"]);
-  assert.deepEqual([...implementedProtocolVersions()], ["1.1"]);
+  assert.deepEqual([...implementedProtocolVersions()], ["1.0"]);
   assert.deepEqual([...implementedProtocolVersions(["0.4"])], ["0.4"]);
-  assert.deepEqual([...implementedProtocolVersions(["1.0"])], ["1.0"]);
-  assert.deepEqual([...implementedProtocolVersions(BOTH)].sort(), ["0.4", "1.1"]);
+  assert.deepEqual([...implementedProtocolVersions(["1.1"])], ["1.1"]);
+  assert.deepEqual([...implementedProtocolVersions(BOTH)].sort(), ["0.4", "1.0"]);
   for (const unknown of [["0.3"], ["2.0"], ["1.2"], []]) {
     assert.throws(() => implementedProtocolVersions(unknown), RangeError);
   }
   // The version a Session names: the newest implemented, compatible with the chosen one and
   // never later than it.
-  assert.equal(implementedVersionFor("1.1"), "1.1");
-  assert.equal(implementedVersionFor("1.4"), "1.1");
+  assert.equal(implementedVersionFor("1.1"), "1.0");
+  assert.equal(implementedVersionFor("1.4"), "1.0");
+  assert.equal(implementedVersionFor("1.1", ["1.1"]), "1.1");
+  assert.equal(implementedVersionFor("1.4", ["1.1"]), "1.1");
+  assert.equal(implementedVersionFor("1.0", ["1.1"]), "1.0");
   assert.equal(implementedVersionFor("1.0"), "1.0");
-  assert.equal(implementedVersionFor("1.4", ["1.0"]), "1.0");
-  assert.equal(implementedVersionFor("1.1", ["0.4", "1.0"]), "1.0");
   assert.equal(implementedVersionFor("0.4", ["0.4", "1.1"]), "0.4");
   for (const [chosen, mine] of [["0.3", ["0.4", "1.1"]], ["0.4", ["1.1"]], ["1.1", ["0.4"]]]) {
     assert.throws(() => implementedVersionFor(chosen, mine), RangeError);
@@ -125,10 +126,10 @@ test("the reference company serves the draft only by default", async () => {
   assert.deepEqual(CONFIG.protocolVersions, [DEFAULT_PROTOCOL_VERSION]);
   const w = await world();
   const { company, session: started } = await session(w, BOTH);
-  assert.deepEqual([companyProtocolVersion(company), started.protocolVersion], ["1.1", "1.1"]);
+  assert.deepEqual([companyProtocolVersion(company), started.protocolVersion], ["1.0", "1.0"]);
   assert.deepEqual(company.document.supported_versions, {});
   const headers = await sessionHeaders(w.host.reactor, "POST", CONVERSATIONS, { session: started });
-  assert.equal(headers["Poppy-Version"], "1.1");
+  assert.equal(headers["Poppy-Version"], "1.0");
   const refused = await w.fetch(CONVERSATIONS, {
     method: "POST",
     headers: { ...headers, "Poppy-Version": "0.4", "Content-Type": "application/json" },
@@ -153,14 +154,14 @@ test("a company that serves both versions is used at the newest the agent implem
     const w = await world(preferred);
     const other = preferred[1];
     const byDefault = await session(w);
-    assert.deepEqual([companyProtocolVersion(byDefault.company), byDefault.session.protocolVersion], ["1.1", "1.1"]);
+    assert.deepEqual([companyProtocolVersion(byDefault.company), byDefault.session.protocolVersion], ["1.0", "1.0"]);
     // poppy.json itself when it is 1.0's, else 1.0's own document, which lists none.
-    assert.equal(Object.keys(byDefault.company.document.supported_versions).length > 0, preferred[0] === "1.1");
+    assert.equal(Object.keys(byDefault.company.document.supported_versions).length > 0, preferred[0] === "1.0");
     const published = await session(w, [PROTOCOL_PROFILE]);
     assert.deepEqual([companyProtocolVersion(published.company), published.session.protocolVersion], ["0.4", "0.4"]);
     assert.equal(companySessionVersion(published.company), "0.4");
     const both = await session(w, BOTH);
-    assert.deepEqual([companyProtocolVersion(both.company), both.session.protocolVersion], ["1.1", "1.1"]);
+    assert.deepEqual([companyProtocolVersion(both.company), both.session.protocolVersion], ["1.0", "1.0"]);
     const served = await (await w.fetch("https://manzanita.example/.well-known/poppy.json")).json();
     assert.equal(served.protocol_version, preferred[0]);
     assert.deepEqual(served.supported_versions, { [other]: `https://manzanita.example/poppy/${other}.json` });
@@ -184,7 +185,7 @@ test("a conversation started in the draft can be refused in the published versio
   const published = await session(w, [PROTOCOL_PROFILE]);
   await assert.rejects(
     w.conversations.send(CONVERSATIONS, receipt.conversation_id, hello(), { session: published.session }),
-    (error) => error.code === "version_mismatch" && error.statusCode === 409 && error.details.protocol_version === "1.1",
+    (error) => error.code === "version_mismatch" && error.statusCode === 409 && error.details.protocol_version === "1.0",
   );
 });
 
@@ -192,7 +193,7 @@ test("a Session names the version given, else the company's, else the default on
   const w = await world();
   const sessions = new SessionClient({ reactor: w.host.reactor, fetch: w.fetch });
   const who = { clientId: w.identity.clientId, pairwiseUserId: PAIRWISE, issuer: "https://manzanita.example", tenantId: TENANT };
-  assert.equal((await sessions.start(who)).protocolVersion, "1.1");
+  assert.equal((await sessions.start(who)).protocolVersion, "1.0");
   assert.equal((await sessions.start({ ...who, protocolVersion: "0.4" })).protocolVersion, "0.4");
   await assert.rejects(sessions.start({ ...who, protocolVersion: "0.3" }));
   assert.throws(() => new PapSession({ sid: "s".repeat(22), sub: PAIRWISE, issuer: who.issuer, clientId: who.clientId, tenantId: TENANT, protocolVersion: "2.0" }));

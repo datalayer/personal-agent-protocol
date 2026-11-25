@@ -237,17 +237,27 @@ export interface WebBotAuthSignerOptions {
   readonly now?: () => Date;
   readonly randomBytes?: (length: number) => Uint8Array;
   readonly lifetimeSeconds?: number;
+  /**
+   * Also sign the agent's requests to the Company's pushed authorization request, token, device
+   * authorization and revocation endpoints, over their content digest (upstream's draft 1.1,
+   * §5.3). Off by default: it is not in 1.0 as published, and may change until upstream
+   * publishes 1.1.
+   */
+  readonly oauthEndpoints?: boolean;
 }
 
 /**
  * `pap.operatorSigner`: a fresh Web Bot Auth signature for each request (§5.3).
  *
  * It signs for every tenant with its one key: a host with a key per tenant contributes a signer
- * of its own over `signOperatorRequest`.
+ * of its own over `signOperatorRequest`. With `oauthEndpoints`, `signOauthRequest` signs
+ * requests to the OAuth endpoints with it too.
  */
 export class WebBotAuthSigner implements OperatorSigner {
   readonly key: OperatorSigningKey;
   readonly signatureAgent: string;
+  /** Whether `signOauthRequest` signs requests to the OAuth endpoints with it. */
+  readonly signsOauthEndpoints: boolean;
   readonly #now: () => Date;
   readonly #randomBytes: (length: number) => Uint8Array;
   readonly #lifetimeSeconds: number;
@@ -257,6 +267,7 @@ export class WebBotAuthSigner implements OperatorSigner {
     if (lifetime <= 0) throw new RangeError("an operator signature's lifetime must be positive");
     this.key = key;
     this.signatureAgent = options.signatureAgent;
+    this.signsOauthEndpoints = options.oauthEndpoints === true;
     this.#now = options.now ?? (() => new Date());
     this.#randomBytes = options.randomBytes ?? ((length) => crypto.getRandomValues(new Uint8Array(length)));
     this.#lifetimeSeconds = lifetime;
@@ -297,8 +308,11 @@ export interface OauthRequest {
 
 /**
  * Sign a request to the Company's pushed authorization request, token, device authorization or
- * revocation endpoint as its operator (§5.3), when the host contributes `pap.operatorSigner`;
- * the request as given otherwise.
+ * revocation endpoint as its operator (§5.3 of upstream's draft 1.1), when the host contributes
+ * a `pap.operatorSigner` that says it signs them (`signsOauthEndpoints`, as
+ * `new WebBotAuthSigner(key, { oauthEndpoints: true })` does); the request as given otherwise.
+ * Off by default: 1.0 as published signs only requests with the Session header, and the draft
+ * can change until upstream publishes 1.1.
  *
  * Such a request carries no Session header, so the signature covers `content-digest`, which
  * this adds over the body as it is sent: the form as text, with its `Content-Type`. That binds
@@ -311,7 +325,9 @@ export async function signOauthRequest(
   request: OauthRequest,
 ): Promise<{ readonly headers: Record<string, string>; readonly body: URLSearchParams | string }> {
   const operator = optionalContribution(reactor, OperatorSigners, "operator signer");
-  if (operator === undefined) return { headers: { ...request.headers }, body: request.body };
+  if (operator === undefined || operator.signsOauthEndpoints !== true) {
+    return { headers: { ...request.headers }, body: request.body };
+  }
   const body = request.body.toString();
   const digest = await contentDigest(body);
   const signed = await operator.sign({

@@ -43,6 +43,11 @@ from .urls import browser_safe
 def _key_part(value: str, label: str) -> str:
     if not value or len(value) > 256 or "\x00" in value:
         raise ValueError(f"{label} must contain between 1 and 256 safe characters")
+    try:
+        value.encode()
+    except UnicodeEncodeError as exc:
+        # An unpaired surrogate has no UTF-8 form: two such values must never be one key.
+        raise ValueError(f"{label} must be well-formed Unicode") from exc
     return value
 
 

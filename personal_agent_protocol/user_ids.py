@@ -106,7 +106,11 @@ class UserIdData(Protocol):
 
     `in_use` says whether a task is using the ID now: a Session with it is open in a
     task the agent is working on. An ID is replaced between tasks, never in the middle
-    of one.
+    of one. The SDK can't see the host's tasks, so the reservation is the host's: while
+    `replace_user_id` is awaited for a User at a Company, the host starts no task and no
+    sign-in for them there, and takes up again with the ID `replace_user_id` returns, or
+    the old one when it raised. `replace_user_id` itself runs one replacement at a time
+    for a User at a Company, and refuses an ID that is no longer theirs.
 
     `discard` removes everything the host kept under the ID, so none of it is ever sent
     to the Company again: the User's Agent IDs, the Sessions and their `sid`s, access

@@ -822,7 +822,13 @@ async def test_a_keyed_hash_replaces_one_users_id_with_a_counter(tmp_path: Path)
         ),
     ]
     assert len({first, *different}) == 7
-    for bad in ({"key": b"short"}, {"counter": -1}, {"counter": True}):
+    for bad in (
+        {"key": b"short"},
+        {"counter": -1},
+        {"counter": True},
+        {"local_user_id": "user_\ud800"},
+        {"tenant_id": "t\udc00"},
+    ):
         with pytest.raises(ValueError):
             derive_pairwise_user_id(**{"key": key, **WHO, **bad})  # type: ignore[arg-type]
 

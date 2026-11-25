@@ -679,7 +679,7 @@ test("a keyed hash replaces one user's ID with a counter", async () => {
     await derivePairwiseUserId(key, { ...WHO, tenantId: `${TENANT}u`, localUserId: "ser-ada" }),
   ];
   assert.equal(new Set([first, ...different]).size, 7);
-  for (const bad of [{ key: new Uint8Array(5) }, { counter: -1 }, { counter: 1.5 }, { companyIssuer: "http://manzanita.example" }, { localUserId: "" }]) {
+  for (const bad of [{ key: new Uint8Array(5) }, { counter: -1 }, { counter: 1.5 }, { companyIssuer: "http://manzanita.example" }, { localUserId: "" }, { localUserId: "user_\uD800" }, { tenantId: "t\uDC00" }]) {
     const { key: badKey = key, ...rest } = bad;
     await assert.rejects(derivePairwiseUserId(badKey, { ...WHO, ...rest }), RangeError);
   }

@@ -37,6 +37,10 @@ function keyPart(value: string, label: string): string {
   if (typeof value !== "string" || value.length === 0 || value.length > 256 || value.includes("\0")) {
     throw new RangeError(`${label} must contain between 1 and 256 safe characters`);
   }
+  if (/\p{Cs}/u.test(value)) {
+    // An unpaired surrogate is encoded as U+FFFD: two such values must never be one key.
+    throw new RangeError(`${label} must be well-formed Unicode`);
+  }
   return value;
 }
 

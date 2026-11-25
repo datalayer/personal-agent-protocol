@@ -22,7 +22,9 @@
  *
  * `replaceUserId` does it in the order §5.1 asks:
  *
- * 1. **Between tasks.** It refuses while a Session uses the ID (`UserIdData.inUse`).
+ * 1. **The current ID, between tasks.** It refuses an ID that is no longer the User's at the
+ *    Company (`user_id_stale`), one replacement at a time, and while a Session uses the ID
+ *    (`UserIdData.inUse`).
  * 2. **Sign out first.** With a refresh token for the User at the Company, the account would
  *    link the old ID and the new one: every refresh token is revoked, and the replacement stops
  *    if the Company doesn't acknowledge one.
@@ -87,7 +89,12 @@ export interface UserIdAtCompany {
  * What the host holds under a User ID that the SDK can't reach (§5.1).
  *
  * `inUse` says whether a task is using the ID now: a Session with it is open in a task the
- * agent is working on. An ID is replaced between tasks, never in the middle of one.
+ * agent is working on. An ID is replaced between tasks, never in the middle of one. The SDK
+ * can't see the host's tasks, so the reservation is the host's: while `replaceUserId` is
+ * awaited for a User at a Company, the host starts no task and no sign-in for them there, and
+ * takes up again with the ID `replaceUserId` returns, or the old one when it threw.
+ * `replaceUserId` itself runs one replacement at a time for a User at a Company, and refuses
+ * an ID that is no longer theirs.
  *
  * `discard` removes everything the host kept under the ID, so none of it is ever sent to the
  * Company again: the User's Agent IDs, the Sessions and their `sid`s, access tokens, the

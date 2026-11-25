@@ -684,6 +684,10 @@ test("a keyed hash replaces one user's ID with a counter", async () => {
     await assert.rejects(derivePairwiseUserId(badKey, { ...WHO, ...rest }), RangeError);
   }
 
+  // A length is counted in code points, as in Python: 256 astral characters are accepted.
+  assert.match(await derivePairwiseUserId(key, { ...WHO, localUserId: "\u{1F600}".repeat(256) }), /^usr_/u);
+  await assert.rejects(derivePairwiseUserId(key, { ...WHO, localUserId: "\u{1F600}".repeat(257) }), RangeError);
+
   const counters = new Counters();
   const ids = new DerivedPairwiseUserIds(key, { counters });
   assert.equal(await ids.getOrCreate(WHO), first);

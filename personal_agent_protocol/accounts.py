@@ -37,11 +37,12 @@ from typing import TYPE_CHECKING, Literal, cast
 import httpx
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
-from .auth import _https_url, _scopes
+from .auth import _https_url, _scopes, request_scope
 from .crypto import DPOP_ALGORITHM
 from .errors import AuthorizationError, PersonalAgentProtocolError, ProtocolValidationError
 from .json import loads_strict
 from .models import DiscoveredCompany, ProtectedResourceMetadata, ProtocolModel
+from .operator_signatures import sign_oauth_request
 from .reactor import (
     REFRESH_TOKEN_LOCKS,
     TOKEN_STORES,
@@ -96,6 +97,8 @@ class RefreshTokenContext:
     `dpop_signing_algs` is the issuer's `dpop_signing_alg_values_supported`: a refresh
     sends a DPoP proof when it includes ES256 (§4.5), by the DPoP key of
     `pairwise_user_id`, the User ID the refresh token is for, which proving needs.
+    `scopes_supported` is the issuer's too: when it lists `offline_access`, a refresh that
+    asks for fewer scopes names it in `scope` (§4.4).
     """
 
     token_endpoint: str
@@ -105,6 +108,7 @@ class RefreshTokenContext:
     revocation_endpoint: str | None = None
     dpop_signing_algs: Sequence[str] | None = None
     pairwise_user_id: str | None = None
+    scopes_supported: Sequence[str] | None = None
 
 
 class RefreshTokenClient:
@@ -142,8 +146,9 @@ class RefreshTokenClient:
         """An access token from the refresh token behind `reference` (§4.4).
 
         `scopes` narrows the request; omitted, the company grants what the token
-        holds. `resource` asks for a token for one service (RFC 8707, §4.5), used
-        only there.
+        holds. A narrowed request also names `offline_access` when the issuer lists it
+        (`context.scopes_supported`, §4.4), which is never one of the scopes granted.
+        `resource` asks for a token for one service (RFC 8707, §4.5), used only there.
         """
 
         requested = _scopes(scopes) if scopes is not None else None
@@ -161,7 +166,11 @@ class RefreshTokenClient:
             form = {
                 "grant_type": REFRESH_TOKEN_GRANT,
                 "refresh_token": refresh_token.get_secret_value(),
-                **({"scope": " ".join(requested)} if requested is not None else {}),
+                **(
+                    {"scope": request_scope(requested, context.scopes_supported)}
+                    if requested is not None
+                    else {}
+                ),
                 **({"resource": resource_url} if resource_url is not None else {}),
             }
             try:
@@ -260,21 +269,20 @@ class RefreshTokenClient:
             client = await self.sessions.client_authentication(
                 client_id=context.client_id, issuer=context.issuer
             )
+            request = self.http.build_request(
+                "POST",
+                endpoint,
+                data={
+                    "token": refresh_token.get_secret_value(),
+                    "token_type_hint": REFRESH_TOKEN_GRANT,
+                    **client,
+                },
+                headers={"Accept": "application/json"},
+            )
+            # Signed as its operator too, with a `pap.operatorSigner` (§5.3).
+            await sign_oauth_request(self.reactor, request, tenant_id=context.tenant_id)
             try:
-                response = await send_bounded(
-                    self.http,
-                    self.http.build_request(
-                        "POST",
-                        endpoint,
-                        data={
-                            "token": refresh_token.get_secret_value(),
-                            "token_type_hint": REFRESH_TOKEN_GRANT,
-                            **client,
-                        },
-                        headers={"Accept": "application/json"},
-                    ),
-                    max_bytes=self.max_response_bytes,
-                )
+                response = await send_bounded(self.http, request, max_bytes=self.max_response_bytes)
             except httpx.HTTPError as exc:
                 raise AuthorizationError("request_failed", "Revocation request failed") from exc
             refuse_redirect(response, AuthorizationError)

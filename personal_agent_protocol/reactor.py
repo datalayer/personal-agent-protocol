@@ -235,16 +235,30 @@ class DpopProver(Protocol):
 class OperatorSignatureRequest:
     """What one operator signature is signed for (§5.3, RFC 9421).
 
-    `method` and `url` are the request's, `session_jwt` the value of its `Poppy-Session`
-    header and `authorization` of its `Authorization` header, when it has one. A
-    signature covers both. `tenant_id` says for whom, for a host with a key per tenant.
+    `method` and `url` are the request's. A request with the Session header gives
+    `session_jwt`, the value of its `Poppy-Session` header, and `authorization`, of its
+    `Authorization` header when it has one: a signature covers both. A request to the
+    Company's pushed authorization request, token, device authorization or revocation
+    endpoint carries neither, and gives `content_digest`, the value of its
+    `Content-Digest` header (RFC 9530): covering it binds the signature to the client
+    assertion in the body. `tenant_id` says for whom, for a host with a key per tenant.
     """
 
     method: str
     url: str
     tenant_id: str
-    session_jwt: SecretStr
+    session_jwt: SecretStr | None = None
     authorization: SecretStr | None = None
+    content_digest: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.session_jwt is None) == (self.content_digest is None):
+            raise ValueError(
+                "an operator signature covers the Session header, or the content digest "
+                "of a request to an OAuth endpoint"
+            )
+        if self.content_digest is not None and self.authorization is not None:
+            raise ValueError("a request to an OAuth endpoint carries no access token")
 
 
 @dataclass(frozen=True)
@@ -258,7 +272,9 @@ class OperatorSignature:
 
 @runtime_checkable
 class OperatorSigner(Protocol):
-    """Sign one request that carries the Session header, as its operator (§5.3).
+    """Sign one request, as its operator (§5.3): one that carries the Session header, or
+    one to the Company's pushed authorization request, token, device authorization or
+    revocation endpoint.
 
     Never with a delegated key, a DPoP key or a key from `jwks_uri`: an operator
     signature is a fourth signature, by a key the operator publishes in its directory.
@@ -1094,7 +1110,7 @@ def build_pap_reactor(
     platform.register_plugin(
         PluginManifest(
             name="personal-agent-protocol.core",
-            version="1.0.4",
+            version="1.1.0a1",
             contribution_points=[
                 DISCOVERY_TRANSPORTS.id,
                 URL_SAFETY_POLICIES.id,

@@ -79,22 +79,41 @@ def test_the_packages_and_the_docs_state_it() -> None:
     ) in report
 
 
+def _npm_version(version: str) -> str:
+    """A Python version as npm writes it: `1.1.0a1` is `1.1.0-alpha.1` (PEP 440, semver)."""
+
+    match = re.fullmatch(r"(\d+\.\d+\.\d+)(?:(a|b|rc)(\d+))?", version)
+    assert match is not None, f"{version} is no release or pre-release version"
+    if match[2] is None:
+        return match[1]
+    return f"{match[1]}-{ {'a': 'alpha', 'b': 'beta', 'rc': 'rc'}[match[2]] }.{match[3]}"
+
+
 def test_the_docs_are_versioned_with_the_release() -> None:
     from personal_agent_protocol.__version__ import __version__
 
     docs = ROOT / "docs" / "docs"
+    npm = _npm_version(__version__)
+    assert json.loads((ROOT / "package.json").read_text())["version"] == npm
     compatibility = (docs / "releases" / "compatibility.mdx").read_text()
-    assert f"it describes **SDK {__version__}**." in compatibility
     assert f"| `{__version__}` | `{PROTOCOL_PROFILE}` | {PROTOCOL_REVISION} |" in compatibility
-    minor = ".".join(__version__.split(".")[:2])
-    assert f"| `{minor}.x` | Yes" in (docs / "releases" / "support.mdx").read_text()
-    for manifest in (
-        "personal_agent_protocol/reactor.py",
-        "personal_agent_protocol/company/__init__.py",
-        "src/reactor.ts",
-        "src/company/index.ts",
+    if npm == __version__:
+        assert f"it describes **SDK {__version__}**." in compatibility
+        minor = ".".join(__version__.split(".")[:2])
+        assert f"| `{minor}.x` | Yes" in (docs / "releases" / "support.mdx").read_text()
+    else:
+        # A pre-release: the page keeps describing the stable release, and says what the
+        # pre-release is, by both registries' names for it.
+        assert f"pre-release **{__version__}** (npm `{npm}`)" in compatibility
+        assert "it describes **SDK " in compatibility
+        assert f"it describes **SDK {__version__}**." not in compatibility
+    for manifest, version in (
+        ("personal_agent_protocol/reactor.py", __version__),
+        ("personal_agent_protocol/company/__init__.py", __version__),
+        ("src/reactor.ts", npm),
+        ("src/company/index.ts", npm),
     ):
-        assert re.search(rf'version[=:] ?"{re.escape(__version__)}"', (ROOT / manifest).read_text())
+        assert re.search(rf'version[=:] ?"{re.escape(version)}"', (ROOT / manifest).read_text())
     changelog = (ROOT / "CHANGELOG.md").read_text()
     assert f"## {__version__} (" in changelog
     assert (

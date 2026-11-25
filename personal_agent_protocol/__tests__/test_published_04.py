@@ -89,7 +89,9 @@ async def test_poppy_json_names_a_tasks_endpoint_and_nothing_it_moved() -> None:
     assert tasks_endpoint(world.company.document) == TASKS
     # A company with nothing to say there lists no endpoint and serves none.
     quiet = World()
-    quiet.shop.config = dataclasses.replace(CONFIG, excluded_tasks=(), feedback=False)
+    quiet.shop.config = dataclasses.replace(
+        CONFIG, excluded_tasks=(), feedback=False, feedback_tasks=()
+    )
     assert "tasks" not in quiet.shop.discovery_document()
     answered = await quiet.http.get(TASKS)
     assert answered.status_code == 404

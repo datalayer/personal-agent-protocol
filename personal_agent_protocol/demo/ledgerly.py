@@ -173,6 +173,7 @@ class LedgerlyAsPersonalAgent:
                 organization=company.document.organization,
                 dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
                 pairwise_user_id=link.pairwise_user_id,
+                scopes_supported=metadata.scopes_supported,
             )
             link.device_reference, link.user_code = started.reference, started.user_code
             return link

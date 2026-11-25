@@ -19,6 +19,7 @@ import {
   parseDiscoveryDocument,
   parseOAuthServerMetadata,
   parseProtectedResourceMetadata,
+  parseVersion,
   protectedResourceMetadataUrl,
   splitDomain,
   urlDomain,
@@ -58,9 +59,11 @@ export interface DiscoveryOptions {
   readonly fresh?: boolean;
   /**
    * The protocol versions this Personal Agent implements (§3.4): `SUPPORTED_PROTOCOL_VERSIONS`,
-   * 1.0, by default. Name `PROTOCOL_PROFILE` among them to use Companies that serve only 0.4 as
-   * published, such as `["0.4", "1.0"]`; the newest compatible version a Company serves is
-   * chosen.
+   * 1.0 as published, by default, which uses a Company whose document is a later 1.x as 1.0
+   * defines. Name `DRAFT_PROTOCOL_VERSION`, `["1.1"]`, to use what upstream's unpublished draft
+   * 1.1 adds with Companies that serve it, and `PROTOCOL_PROFILE` among them to use Companies
+   * that serve only 0.4 as published, such as `["0.4", "1.0"]`; the newest compatible version a
+   * Company serves is chosen.
    */
   readonly protocolVersions?: Iterable<string>;
   /**
@@ -321,6 +324,10 @@ async function discover(domain: string, options: DiscoveryOptions): Promise<Disc
   }
   const raw = discovery.value;
   const implemented = implementedProtocolVersions(options.protocolVersions);
+  const implementedVersions = [...implemented].sort((a, b) => {
+    const [one, other] = [parseVersion(a), parseVersion(b)];
+    return one[0] - other[0] || one[1] - other[1];
+  });
   if (typeof raw === "object" && raw !== null && !Array.isArray(raw) && chosenOf(raw as Record<string, unknown>, implemented) === undefined) {
     // Neither its own version nor one it links to is compatible with one this SDK
     // implements: none of the documents is used (§3.1, §3.4).
@@ -360,6 +367,7 @@ async function discover(domain: string, options: DiscoveryOptions): Promise<Disc
       discoveryUrl: discovery.finalUrl.toString(),
       document,
       ...(resourceMetadata === undefined ? {} : { resourceMetadata }),
+      implementedVersions,
     };
   }
 
@@ -391,6 +399,7 @@ async function discover(domain: string, options: DiscoveryOptions): Promise<Disc
     document,
     resourceMetadata,
     oauthMetadata,
+    implementedVersions,
   };
 }
 

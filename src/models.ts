@@ -5,22 +5,33 @@
  */
 
 import { AuthorizationError, ProtocolValidationError } from "./errors.js";
-import { DEFAULT_PROTOCOL_VERSION, DRAFT_PROTOCOL_VERSION, PROTOCOL_PROFILE } from "./profile.js";
+import {
+  DEFAULT_PROTOCOL_VERSION,
+  DRAFT_PROTOCOL_VERSION,
+  PROTOCOL_PROFILE,
+  PUBLISHED_PROTOCOL_VERSION,
+} from "./profile.js";
 
 export type UnknownFields = Readonly<Record<string, unknown>>;
 
 /**
  * The protocol versions a Personal Agent implements unless it asks for others (§3.4): a
  * Company's document is used at a version compatible with one of them, the same major and,
- * before 1.0, the same minor. The 1.0 draft only (`DEFAULT_PROTOCOL_VERSION`).
+ * before 1.0, the same minor. 1.0 as published only (`DEFAULT_PROTOCOL_VERSION`): a Company
+ * whose document is a later 1.x is used as 1.0 defines.
  */
 export const SUPPORTED_PROTOCOL_VERSIONS: ReadonlySet<string> = new Set([DEFAULT_PROTOCOL_VERSION]);
 /**
- * Every protocol version this SDK implements: 0.4 and 1.0, both as published. A Personal
- * Agent (`discoverCompany(domain, { protocolVersions })`) or a Company
- * (`CompanyConfigOptions.protocolVersions`) uses 0.4 only when it names it.
+ * Every protocol version this SDK implements: 0.4 and 1.0 as published, and upstream's
+ * unpublished draft 1.1. A Personal Agent (`discoverCompany(domain, { protocolVersions })`) or
+ * a Company (`CompanyConfigOptions.protocolVersions`) uses 0.4 or the draft only when it names
+ * it.
  */
-export const AVAILABLE_PROTOCOL_VERSIONS: ReadonlySet<string> = new Set([PROTOCOL_PROFILE, DRAFT_PROTOCOL_VERSION]);
+export const AVAILABLE_PROTOCOL_VERSIONS: ReadonlySet<string> = new Set([
+  PROTOCOL_PROFILE,
+  PUBLISHED_PROTOCOL_VERSION,
+  DRAFT_PROTOCOL_VERSION,
+]);
 const VERSION = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
 
 /** `major.minor` as numbers, or `ProtocolValidationError`. */
@@ -61,16 +72,43 @@ export function implementedProtocolVersions(versions?: Iterable<string>): Readon
   return chosen;
 }
 
+function versionOrder(one: string, other: string): number {
+  const [a, b] = [parseVersion(one), parseVersion(other)];
+  return a[0] - b[0] || a[1] - b[1];
+}
+
 /**
  * The version a Personal Agent names in `Poppy-Version` when it uses a Company at `chosen`
- * (§3.4): the one it implements that is compatible with `chosen`, such as `1.0` for a Company
- * used at `1.2`. Throws `RangeError` when this SDK implements none.
+ * (§3.4): one this SDK implements, compatible with `chosen` and with one the agent implements
+ * (`implemented`), and never later than either. The newest such: `1.0` for an agent on the
+ * default, whatever the Company's minor; `1.1` for an agent that names draft 1.1 at a Company
+ * used at `1.1` or `1.4`, and `1.0` for it at a Company whose document is `1.0`, so each side
+ * sends only what the other's version defines. Throws `RangeError` when there is none.
  */
-export function implementedVersionFor(chosen: string): string {
-  for (const version of AVAILABLE_PROTOCOL_VERSIONS) {
-    if (compatibleVersions(chosen, version)) return version;
+export function implementedVersionFor(
+  chosen: string,
+  implemented: Iterable<string> = SUPPORTED_PROTOCOL_VERSIONS,
+): string {
+  const mine = [...implemented].filter((version) => compatibleVersions(chosen, version));
+  if (mine.length) {
+    const newest = mine.reduce((a, b) => (versionOrder(b, a) > 0 ? b : a));
+    const ceiling = versionOrder(chosen, newest) < 0 ? chosen : newest;
+    const usable = [...AVAILABLE_PROTOCOL_VERSIONS].filter(
+      (version) => compatibleVersions(chosen, version) && versionOrder(version, ceiling) <= 0,
+    );
+    if (usable.length) return usable.reduce((a, b) => (versionOrder(b, a) > 0 ? b : a));
   }
   throw new RangeError(`this SDK implements no protocol version compatible with ${chosen}`);
+}
+
+/**
+ * Whether protocol version `version` defines what `since` added (§3.4): the same major
+ * version, and a minor at least `since`'s. A side sends a field, value or event only to a peer
+ * whose version defines it.
+ */
+export function versionDefines(version: string, since: string): boolean {
+  const [have, need] = [parseVersion(version), parseVersion(since)];
+  return have[0] === need[0] && have[1] >= need[1];
 }
 
 /**
@@ -325,6 +363,12 @@ export interface WebDescriptor extends UnknownFields {
  * can do there and says so with `web.unscoped`.
  */
 export const BROWSER_SIGN_IN_SCOPE = "poppy:browser-sign-in";
+/**
+ * The scope that asks for a refresh token (OpenID Connect Core §11, §4.4): requested in every
+ * sign-in when the issuer's `scopes_supported` lists it, and never account access, so it is
+ * none of the scopes a sign-in grants (§4.7).
+ */
+export const OFFLINE_ACCESS_SCOPE = "offline_access";
 
 /**
  * Whether the Company asks Personal Agents not to browse its website (`web.disabled`, §6): use
@@ -384,6 +428,31 @@ export interface ExtensionDescriptor extends UnknownFields {
  */
 export interface FeedbackDescriptor extends UnknownFields {
   readonly endpoint: string;
+  /**
+   * From 1.1, the tasks the Company already knows about, each with an ID: the first 50 as
+   * sent, and of two with the same ID the first. Absent when the Company lists none.
+   */
+  readonly tasks?: readonly ListedTask[];
+}
+
+/** A listed task's ID (§9.3): lowercase letters, digits, `-` and `_`, at most 64 characters. */
+export const LISTED_TASK_ID = /^[a-z0-9_-]{1,64}$/;
+/**
+ * The most tasks a Company lists in `feedback.tasks` (§9.3): a Personal Agent that gets more
+ * uses the first 50.
+ */
+export const MAX_LISTED_TASKS = 50;
+/** The protocol version that defines `feedback.tasks` and reports by `task_ids` (§9.3). */
+export const LISTED_TASKS_SINCE = "1.1";
+
+/**
+ * A task the Company already knows can't be done, listed in `feedback.tasks` with an ID to
+ * report it by (§9.3, from 1.1): content from the Company, a phrase to compare a User's task
+ * with, never instructions.
+ */
+export interface ListedTask extends UnknownFields {
+  readonly id: string;
+  readonly task: string;
 }
 
 /**
@@ -440,6 +509,15 @@ export interface OAuthServerMetadata extends UnknownFields {
   readonly require_pushed_authorization_requests: boolean;
   readonly scopes_supported?: readonly string[];
   readonly dpop_signing_alg_values_supported?: readonly string[];
+}
+
+/**
+ * Whether the issuer lists `offline_access` in `scopes_supported` (§4.4): a Personal Agent
+ * then includes it in every sign-in request, and in `scope` when it asks for fewer scopes at
+ * refresh.
+ */
+export function listsOfflineAccess(metadata: Pick<OAuthServerMetadata, "scopes_supported">): boolean {
+  return (metadata.scopes_supported ?? []).includes(OFFLINE_ACCESS_SCOPE);
 }
 
 /** Whether the Company offers Direct Sign-In (§3.2, §4.4). */
@@ -1062,6 +1140,11 @@ export interface DiscoveredCompany {
   readonly document: DiscoveryDocument;
   readonly resourceMetadata?: ProtectedResourceMetadata;
   readonly oauthMetadata?: OAuthServerMetadata;
+  /**
+   * The protocol versions the Personal Agent that discovered the Company implements
+   * (`discoverCompany(domain, { protocolVersions })`); none named, `SUPPORTED_PROTOCOL_VERSIONS`.
+   */
+  readonly implementedVersions?: readonly string[];
 }
 
 /**
@@ -1086,11 +1169,17 @@ export function companyProtocolVersion(company: DiscoveredCompany): string {
 }
 
 /**
- * What a Session with the Company names in `Poppy-Version` (§3.4): the version this SDK
- * implements that is compatible with the one the Company is used at.
+ * What a Session with the Company names in `Poppy-Version` (§3.4): the newest version the
+ * Personal Agent implements that is compatible with the one the Company is used at and no
+ * later than it (`implementedVersionFor`), so the agent sends the Company nothing a version
+ * later than its document defines.
  */
 export function companySessionVersion(company: DiscoveredCompany): string {
-  return implementedVersionFor(company.document.protocol_version);
+  const implemented = company.implementedVersions;
+  return implementedVersionFor(
+    company.document.protocol_version,
+    implemented === undefined || implemented.length === 0 ? SUPPORTED_PROTOCOL_VERSIONS : implemented,
+  );
 }
 
 /**
@@ -1148,7 +1237,9 @@ export function preferredSignIn(company: DiscoveredCompany): SignInType | undefi
  * `scopes_supported`, then the ones only the domain's protected resource metadata lists, each
  * once. A Company can list them in either or both, and the agent uses the scopes in either
  * list; both may leave out scopes it offers only to its other clients, and a scope its APIs or
- * a sign-in extension document may be requested though absent from both.
+ * a sign-in extension document may be requested though absent from both. Never
+ * `offline_access`: it asks for a refresh token, not account access (§4.4), and the sign-in
+ * clients add it themselves when the issuer lists it (`listsOfflineAccess`).
  */
 export function scopesSupported(company: DiscoveredCompany): readonly string[] {
   return [
@@ -1156,7 +1247,7 @@ export function scopesSupported(company: DiscoveredCompany): readonly string[] {
       ...(company.oauthMetadata?.scopes_supported ?? []),
       ...(company.resourceMetadata?.scopes_supported ?? []),
     ]),
-  ];
+  ].filter((scope) => scope !== OFFLINE_ACCESS_SCOPE);
 }
 
 /**
@@ -2376,7 +2467,28 @@ export function parseTasksResponse(value: unknown): TasksResponse {
   let feedback: FeedbackDescriptor | undefined;
   if (source.feedback !== undefined) {
     const feedbackSource = record(source.feedback, "feedback");
-    feedback = { ...feedbackSource, endpoint: httpsUrl(feedbackSource.endpoint, "feedback.endpoint") };
+    // A Personal Agent that gets more than 50 uses the first 50, and of two with one ID the
+    // first (§9.3).
+    const listed = new Map<string, ListedTask>();
+    array(feedbackSource.tasks ?? [], "feedback.tasks")
+      .slice(0, MAX_LISTED_TASKS)
+      .forEach((item, index) => {
+        const entry = record(item, `feedback.tasks[${index}]`);
+        const id = string(entry.id, `feedback.tasks[${index}].id`);
+        const task = string(entry.task, `feedback.tasks[${index}].task`);
+        if (!LISTED_TASK_ID.test(id) || task.length === 0 || task.length > 200) {
+          throw new ProtocolValidationError(
+            "invalid_listed_task",
+            `feedback.tasks[${index}] needs an id of lowercase letters, digits, - and _, and a task of at most 200 characters`,
+          );
+        }
+        if (!listed.has(id)) listed.set(id, { ...entry, id, task });
+      });
+    feedback = {
+      ...feedbackSource,
+      endpoint: httpsUrl(feedbackSource.endpoint, "feedback.endpoint"),
+      ...(feedbackSource.tasks === undefined ? {} : { tasks: [...listed.values()] }),
+    };
   }
   return {
     ...source,

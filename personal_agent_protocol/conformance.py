@@ -38,7 +38,7 @@ import re
 import secrets
 import time
 from collections.abc import Awaitable, Callable, Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Protocol, cast, runtime_checkable
 from urllib.parse import parse_qsl, urlencode, urlsplit
@@ -83,6 +83,10 @@ from .feedback import FeedbackClient, FeedbackReport
 from .mcp import McpClient, McpError, fetch_mcp_server_metadata, mcp_api
 from .models import (
     BROWSER_SIGN_IN_SCOPE,
+    LISTED_TASK_ID,
+    LISTED_TASKS_SINCE,
+    MAX_LISTED_TASKS,
+    OFFLINE_ACCESS_SCOPE,
     Approval,
     ApprovalDeclined,
     Author,
@@ -94,6 +98,8 @@ from .models import (
     implemented_protocol_versions,
     operations_content,
     parse_version,
+    protected_resource_metadata_url,
+    version_defines,
 )
 from .operations import (
     APPROVAL_HEADER,
@@ -572,6 +578,7 @@ class ConformanceContext:
             organization=(await self.company()).document.organization,
             dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
             pairwise_user_id=session.sub,
+            scopes_supported=metadata.scopes_supported,
         )
         await self.driver.approve_device(
             started.user_code, account=account or self.driver.accounts[0], scopes=granted
@@ -609,6 +616,7 @@ class ConformanceContext:
             tenant_id=self.tenant_id,
             dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
             pairwise_user_id=session.sub,
+            scopes_supported=metadata.scopes_supported,
             # Pushed whenever the issuer takes PAR, as 1.0 asks (§4.2, RFC 9126).
             pushed_authorization_request_endpoint=metadata.pushed_authorization_request_endpoint,
             require_pushed_authorization_requests=metadata.require_pushed_authorization_requests,
@@ -633,6 +641,7 @@ class ConformanceContext:
             revocation_endpoint=metadata.revocation_endpoint,
             dpop_signing_algs=metadata.dpop_signing_alg_values_supported,
             pairwise_user_id=user,
+            scopes_supported=metadata.scopes_supported,
         )
 
     async def refresh_token(self, reference: str) -> SecretStr:
@@ -1263,6 +1272,37 @@ async def _signed_out_challenge(ctx: ConformanceContext, _: FixtureCase) -> None
     with _raises(ApiError) as raised:
         await ctx.agent.api.call("GET", url, session=session)
     check(raised.value.code == "insufficient_scope", "the SDK reads it as insufficient_scope")
+
+
+@case("lifecycle.offline-access-kept-from-resources")
+async def _offline_access_kept_from_resources(ctx: ConformanceContext, _: FixtureCase) -> None:
+    """`offline_access` is the issuer's alone (§4.4): no resource lists it, no challenge
+    names it, and a sign-in that asks for it grants account scopes and a refresh token."""
+
+    company = await ctx.company()
+    listed = await ctx.send("GET", protected_resource_metadata_url(company.resource))
+    if listed.status_code == 200:
+        check(
+            OFFLINE_ACCESS_SCOPE not in listed.json().get("scopes_supported", []),
+            "protected resource metadata doesn't list offline_access",
+        )
+    user = ctx.new_user()
+    session = await ctx.session(user)
+    url = ctx.url(ctx.scenario.read_path)
+    response = await ctx.send("GET", url, headers=await ctx.auth(session, "GET", url))
+    challenge = challenge_parameters(response.headers.get("www-authenticate", ""))
+    check(
+        OFFLINE_ACCESS_SCOPE not in str(challenge.get("scope", "")).split(" "),
+        "a challenge never names offline_access",
+    )
+    metadata = await ctx.metadata()
+    if not metadata.lists_offline_access:
+        return
+    # The issuer lists it: the SDK asked for it, and the sign-in gave a refresh token and
+    # account scopes, never offline_access alone.
+    signed = await ctx.sign_in(user, session)
+    check(bool(signed.token.scopes), "the sign-in grants at least one account scope")
+    check(OFFLINE_ACCESS_SCOPE not in signed.token.scopes, "offline_access is no scope granted")
 
 
 @case("lifecycle.sign-in-scopes")
@@ -2966,6 +3006,138 @@ async def _feedback(ctx: ConformanceContext, _: FixtureCase) -> None:
         "POST", endpoint, headers={"Content-Type": "application/json"}, content=b"{}"
     )
     expect_refusal(bare, 400, "invalid_session", "a report needs the Session header")
+
+
+def _lists_tasks(ctx: ConformanceContext) -> bool:
+    """Whether the suite runs at a version that defines listed tasks (§3.4, §9.3)."""
+
+    return version_defines(ctx.profile, LISTED_TASKS_SINCE)
+
+
+async def _post_report(
+    ctx: ConformanceContext, session: PapSession, endpoint: str, body: object
+) -> httpx.Response:
+    return await ctx.send(
+        "POST",
+        endpoint,
+        headers={**await ctx.auth(session, "POST", endpoint), "Content-Type": "application/json"},
+        content=json.dumps(body).encode(),
+    )
+
+
+@case("protocol.feedback-listed-tasks")
+async def _feedback_listed_tasks(ctx: ConformanceContext, _: FixtureCase) -> None:
+    """`feedback.tasks` as §9.3 writes it, and a report that names listed tasks: 202. Before
+    1.1, which defines them, the tasks response carries none (§3.4)."""
+
+    session = await ctx.session(ctx.new_user())
+    endpoint = await _feedback_endpoint(ctx, session)
+    listed_at = cast(str, tasks_endpoint((await ctx.company()).document))
+    answered = await ctx.send("GET", listed_at, headers=await ctx.auth(session, "GET", listed_at))
+    body = answered.json()
+    listed = body.get("feedback", {}).get("tasks")
+    if not _lists_tasks(ctx):
+        check(
+            listed is None, f"feedback.tasks is not sent at {ctx.profile}, which doesn't define it"
+        )
+        return
+    if not listed:
+        raise SkipCase("the company lists no feedback tasks")
+    check(
+        isinstance(listed, list)
+        and len(listed) <= MAX_LISTED_TASKS
+        and all(isinstance(task, dict) for task in listed),
+        "at most 50 tasks, each an object",
+    )
+    ids = [task.get("id") for task in listed]
+    check(
+        all(isinstance(task_id, str) and LISTED_TASK_ID.fullmatch(task_id) for task_id in ids),
+        "an id is lowercase letters, digits, - and _, at most 64 characters",
+    )
+    check(len(set(ids)) == len(ids), "each id is unique in the list")
+    check(
+        all(isinstance(task.get("task"), str) and 0 < len(task["task"]) <= 200 for task in listed),
+        "a task is a phrase of at most 200 characters",
+    )
+    excluded = {str(task.get("task", "")).casefold() for task in body.get("excluded_tasks", [])}
+    check(
+        not any(task["task"].casefold() in excluded for task in listed),
+        "no task is both listed and excluded",
+    )
+    for task_ids in (ids[:1], ids[:2], [*ids[:1], "conformance-not-listed"]):
+        accepted = await _post_report(ctx, session, endpoint, {"task_ids": task_ids})
+        check(
+            accepted.status_code == 202,
+            f"a report of listed tasks is 202, got {accepted.status_code}",
+        )
+    # The SDK reads the same list, and reports by ID.
+    tasks = await TasksClient(transport=ctx.agent.transport).get(
+        (await ctx.company()).document, session=session, fresh=True
+    )
+    check([task.id for task in tasks.listed_tasks] == ids, "the SDK reads the listed tasks")
+    reported = await FeedbackClient(transport=ctx.agent.transport).report(
+        endpoint, FeedbackReport.listed(*ids[:2]), session=session
+    )
+    check(reported is None, "the SDK's report by ID is accepted")
+
+
+@case("protocol.feedback-report-forms")
+async def _feedback_report_forms(ctx: ConformanceContext, _: FixtureCase) -> None:
+    """A report has one form or the other: anything else is `invalid_request` (§9.3).
+    Before 1.1 it has `task` and `description`, and `task_ids` alone is malformed."""
+
+    session = await ctx.session(ctx.new_user())
+    endpoint = await _feedback_endpoint(ctx, session)
+    free_text = {"task": "Conformance task", "description": "Not offered."}
+    if not _lists_tasks(ctx):
+        before: tuple[tuple[str, dict[str, Any]], ...] = (
+            ("neither field", {}),
+            ("task_ids alone", {"task_ids": ["conformance-not-listed"]}),
+        )
+        for label, report in before:
+            expect_refusal(
+                await _post_report(ctx, session, endpoint, report), 400, "invalid_request", label
+            )
+        return
+    forms: tuple[tuple[str, dict[str, Any]], ...] = (
+        ("both forms", {**free_text, "task_ids": ["conformance-not-listed"]}),
+        ("neither form", {}),
+        ("an empty task_ids", {"task_ids": []}),
+        ("an id named twice", {"task_ids": ["conformance-not-listed", "conformance-not-listed"]}),
+    )
+    for label, report in forms:
+        expect_refusal(
+            await _post_report(ctx, session, endpoint, report), 400, "invalid_request", label
+        )
+    # IDs the company doesn't list are ignored: the list can change during a Session.
+    unknown = await _post_report(ctx, session, endpoint, {"task_ids": ["conformance-not-listed"]})
+    check(unknown.status_code == 202, f"unknown IDs are ignored with 202: {unknown.status_code}")
+
+
+@case("protocol.listed-tasks-not-at-10")
+async def _listed_tasks_not_at_10(ctx: ConformanceContext, _: FixtureCase) -> None:
+    """A request that names 1.0 is handled as 1.0 defines (§3.4): no `feedback.tasks`, and
+    a report needs `task` and `description`."""
+
+    if parse_version(ctx.profile)[0] != 1:
+        raise SkipCase(f"the suite runs at {ctx.profile}, where 1.0 is not served")
+    session = replace(await ctx.session(ctx.new_user()), protocol_version="1.0")
+    endpoint = tasks_endpoint((await ctx.company()).document)
+    if endpoint is None:
+        raise SkipCase("the company lists no tasks endpoint")
+    answered = await ctx.send("GET", endpoint, headers=await ctx.auth(session, "GET", endpoint))
+    check(answered.status_code == 200, f"a 1.0 request is served, got {answered.status_code}")
+    feedback = answered.json().get("feedback")
+    if feedback is None:
+        raise SkipCase("the company's tasks response lists no feedback endpoint")
+    check("tasks" not in feedback, "feedback.tasks is not sent to a request that names 1.0")
+    by_id = await _post_report(
+        ctx, session, feedback["endpoint"], {"task_ids": ["conformance-not-listed"]}
+    )
+    expect_refusal(by_id, 400, "invalid_request", "task_ids alone, in 1.0")
+    free_text = {"task": "Conformance task", "description": "Not offered.", "task_ids": ["x"]}
+    accepted = await _post_report(ctx, session, feedback["endpoint"], free_text)
+    check(accepted.status_code in {200, 202}, "in 1.0, task_ids is a member it ignores")
 
 
 @case("conversations.read-fields")

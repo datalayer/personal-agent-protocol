@@ -28,9 +28,11 @@ import {
 import type { SecretValue } from "./secret.js";
 import {
   SessionClient,
+  accountScopes,
   finishSignIn,
   opaqueId,
   provesWithDpop,
+  requestScope,
   type AccessToken,
   type TokenResponse,
 } from "./sessions.js";
@@ -126,6 +128,11 @@ export interface MediatedSignInOptions {
   readonly tenantId: string;
   /** The User ID the sign-in is for: its DPoP key proves the grant, so proving needs it (§4.5). */
   readonly pairwiseUserId?: string | undefined;
+  /**
+   * Ask for the `offline_access` scope when the issuer's `scopes_supported` lists it (upstream's
+   * draft 1.1, §4.4). Off by default.
+   */
+  readonly offlineAccess?: boolean;
   readonly signal?: AbortSignal;
 }
 
@@ -195,10 +202,7 @@ export class MediatedSignInClient {
     const metadata = requireOauth(options.company);
     provesWithDpop(metadata.dpop_signing_alg_values_supported, options.pairwiseUserId);
     const organization = options.company.document.organization;
-    const requested = [...new Set(options.scopes)];
-    if (requested.length === 0) {
-      throw new AuthorizationError("invalid_scope", "At least one valid OAuth scope is required");
-    }
+    const requested = accountScopes(options.scopes);
     const credentials = await this.#collect(
       {
         purpose: "credentials",
@@ -213,7 +217,7 @@ export class MediatedSignInClient {
     try {
       form = {
         grant_type: MEDIATED_GRANT,
-        scope: requested.join(" "),
+        scope: requestScope(requested, options.offlineAccess === true ? metadata.scopes_supported : undefined),
         ...Object.fromEntries(Object.entries(credentials).map(([name, value]) => [name, value.reveal()])),
       };
     } finally {

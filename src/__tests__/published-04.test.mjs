@@ -73,7 +73,7 @@ test("poppy.json names a tasks endpoint and nothing it moved", async () => {
   assert.equal(tasksEndpoint(w.company.document), TASKS);
   assert.deepEqual(Object.keys(w.shop.tasksDocument()).sort(), ["excluded_tasks", "feedback", "skill_index"]);
   // A company with nothing to say there lists no endpoint and serves none.
-  const quiet = await shopWorld({ config: { excludedTasks: [], feedback: false } });
+  const quiet = await shopWorld({ config: { excludedTasks: [], feedback: false, feedbackTasks: [] } });
   assert.equal(quiet.shop.config.servesTasks, false);
   assert.equal("tasks" in quiet.shop.discoveryDocument(), false);
   assert.equal(tasksEndpoint(quiet.company.document), undefined);

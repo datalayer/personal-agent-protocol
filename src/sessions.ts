@@ -17,16 +17,23 @@
 import type { ReactorPlatformView } from "@datalayer/reactor";
 
 import { DPOP_ALGORITHM, SESSION_ID } from "./crypto.js";
-import { PersonalAgentProtocolError, ProtocolValidationError, SessionError } from "./errors.js";
+import {
+  AuthorizationError,
+  PersonalAgentProtocolError,
+  ProtocolValidationError,
+  SessionError,
+} from "./errors.js";
 import { parseJsonStrict } from "./json.js";
 import { readLimitedText } from "./limits.js";
 import { negotiateExtensions } from "./extensions.js";
 import {
   AVAILABLE_PROTOCOL_VERSIONS,
+  OFFLINE_ACCESS_SCOPE,
   compatibleVersions,
   companySessionVersion,
   type DiscoveredCompany,
 } from "./models.js";
+import { signOauthRequest } from "./operator-signatures.js";
 import { DEFAULT_PROTOCOL_VERSION, PROTOCOL_PROFILE } from "./profile.js";
 import {
   Clocks,
@@ -384,25 +391,61 @@ export function parseTokenResponse(value: unknown): TokenResponse {
   };
 }
 
+const SCOPE_TOKEN = /^[\x21\x23-\x5b\x5d-\x7e]+$/;
+
+/**
+ * The account scopes of a request, each once. `offline_access` is none of them (§4.4): it is
+ * left out here, and `requestScope` adds it when the issuer lists it. `AuthorizationError`
+ * (`invalid_scope`) for none, or one that is no scope token.
+ */
+export function accountScopes(values: Iterable<string>): string[] {
+  const scopes = [...new Set(values)].filter((scope) => scope !== OFFLINE_ACCESS_SCOPE);
+  if (scopes.length === 0 || scopes.some((scope) => typeof scope !== "string" || !SCOPE_TOKEN.test(scope))) {
+    throw new AuthorizationError("invalid_scope", "At least one valid OAuth scope is required");
+  }
+  return scopes;
+}
+
+/**
+ * The `scope` parameter of a sign-in request, or of a refresh that asks for fewer scopes
+ * (§4.4, §4.7): `scopes`, then `offline_access` when the issuer's `scopes_supported` lists it.
+ * Some authorization servers issue a refresh token only when it is requested, and such a
+ * Company lists it in its issuer's metadata.
+ */
+export function requestScope(
+  scopes: Iterable<string>,
+  scopesSupported: Iterable<string> | undefined,
+): string {
+  const requested = accountScopes(scopes);
+  if (scopesSupported !== undefined && [...scopesSupported].includes(OFFLINE_ACCESS_SCOPE)) {
+    requested.push(OFFLINE_ACCESS_SCOPE);
+  }
+  return requested.join(" ");
+}
+
 /**
  * An access token from a token response (§4.7).
  *
  * A response without `scope` granted exactly `requestedScopes`, and one that grants none is
- * refused: approving none is a decline.
+ * refused: approving none, or `offline_access` alone, is a decline. `offline_access` asks for a
+ * refresh token, not account access: it is none of the scopes granted, and is ignored when they
+ * are compared with those requested (§4.4).
  */
 export function accessTokenFromResponse(
   response: TokenResponse,
   options: { readonly requestedScopes?: readonly string[]; readonly resource?: string } = {},
 ): AccessToken {
-  const scope = response.scope ?? (options.requestedScopes ?? []).join(" ");
-  if (!scope.trim()) {
+  const granted = (response.scope === undefined ? [...(options.requestedScopes ?? [])] : response.scope.split(" "))
+    .filter((item) => item !== "" && item !== OFFLINE_ACCESS_SCOPE);
+  // Whitespace alone grants nothing either.
+  if (granted.join(" ").trim() === "") {
     throw new ProtocolValidationError("invalid_token_response", "A token response grants no scope");
   }
   return {
     accessToken: response.accessToken,
     tokenType: response.tokenType,
     ...(response.expiresIn === undefined ? {} : { expiresIn: response.expiresIn }),
-    scopes: scope.split(" ").filter(Boolean),
+    scopes: granted,
     ...(options.resource === undefined ? {} : { resource: options.resource }),
   };
 }
@@ -434,7 +477,8 @@ export type TokenErrorClass = new (
 /**
  * Check a sign-in's token response and keep its refresh token behind a reference.
  *
- * At least one scope is granted, and none beyond those requested (§4.7).
+ * At least one scope is granted, and none beyond those requested (§4.7); `offline_access`
+ * counts as neither (§4.4), so `requested` are the account scopes.
  */
 export async function finishSignIn(
   reactor: ReactorPlatformView,
@@ -583,7 +627,9 @@ export class SessionClient {
   /**
    * POST one grant to the token endpoint with a fresh client assertion (§4.1, §4.4).
    *
-   * `form` gives the grant's own fields. No Session header goes to an OAuth endpoint (§5.2).
+   * `form` gives the grant's own fields. No Session header goes to an OAuth endpoint (§5.2);
+   * with a `pap.operatorSigner` the request is signed as its operator, over its content digest
+   * (§5.3).
    * `dpopSigningAlgs` is the issuer's `dpop_signing_alg_values_supported`: when it includes
    * ES256 a DPoP proof goes with the request, so the Company can bind the tokens (§4.5), and a
    * `use_dpop_nonce` refusal is retried once, with a fresh proof and client assertion. Throws
@@ -648,7 +694,10 @@ export class SessionClient {
     });
   }
 
-  /** One POST of a grant, with a fresh client assertion: its response and JSON body. */
+  /**
+   * One POST of a grant, with a fresh client assertion and, with a `pap.operatorSigner`, the
+   * operator signature over its content digest (§5.3): its response and JSON body.
+   */
   async #postGrant(
     fields: Record<string, string>,
     tokenEndpoint: string,
@@ -660,12 +709,18 @@ export class SessionClient {
       ...fields,
       ...(await this.clientAuthentication({ clientId: options.clientId, issuer: options.issuer })),
     });
+    const signed = await signOauthRequest(this.#reactor, {
+      url: tokenEndpoint,
+      tenantId: options.tenantId,
+      headers: { Accept: "application/json", ...(proof === undefined ? {} : { [DPOP_HEADER]: proof.reveal() }) },
+      body,
+    });
     let response: Response;
     try {
       response = await this.#fetch(tokenEndpoint, {
         method: "POST",
-        headers: { Accept: "application/json", ...(proof === undefined ? {} : { [DPOP_HEADER]: proof.reveal() }) },
-        body,
+        headers: signed.headers,
+        body: signed.body,
         credentials: "omit",
         redirect: "manual",
         ...(options.signal === undefined ? {} : { signal: options.signal }),

@@ -23,6 +23,8 @@ from personal_agent_protocol import (
     DRAFT_PROTOCOL_REVISION,
     DRAFT_PROTOCOL_VERSION,
     PROTOCOL_PROFILE,
+    PUBLISHED_PROTOCOL_REVISION,
+    PUBLISHED_PROTOCOL_VERSION,
     SUPPORTED_PROTOCOL_VERSIONS,
     PapSession,
     SessionClient,
@@ -45,7 +47,7 @@ from personal_agent_protocol.transport import session_headers
 
 from .test_company_end_to_end import PAIRWISE, TENANT, World
 
-BOTH = (DRAFT_PROTOCOL_VERSION, PROTOCOL_PROFILE)
+BOTH = (PUBLISHED_PROTOCOL_VERSION, PROTOCOL_PROFILE)
 
 
 def _serving(world: World, *versions: str) -> None:
@@ -80,26 +82,37 @@ async def _session(world: World, *versions: str) -> PapSession:
 # Protocol version 1.0, the default (§3.1, §3.4) -----------------------------------------
 
 
-def test_the_draft_is_the_default_and_the_published_version_is_available() -> None:
-    assert (PROTOCOL_PROFILE, DRAFT_PROTOCOL_VERSION) == ("0.4", "1.0")
-    assert DEFAULT_PROTOCOL_VERSION == DRAFT_PROTOCOL_VERSION
-    assert DRAFT_PROTOCOL_REVISION == "2026-11-14"
+def test_10_is_the_default_and_04_and_the_draft_are_available() -> None:
+    assert (PROTOCOL_PROFILE, PUBLISHED_PROTOCOL_VERSION, DRAFT_PROTOCOL_VERSION) == (
+        "0.4",
+        "1.0",
+        "1.1",
+    )
+    assert DEFAULT_PROTOCOL_VERSION == PUBLISHED_PROTOCOL_VERSION
+    assert (PUBLISHED_PROTOCOL_REVISION, DRAFT_PROTOCOL_REVISION) == ("2026-11-14", "2026-11-18")
     assert SUPPORTED_PROTOCOL_VERSIONS == {"1.0"}
-    assert AVAILABLE_PROTOCOL_VERSIONS == {"0.4", "1.0"}
+    assert AVAILABLE_PROTOCOL_VERSIONS == {"0.4", "1.0", "1.1"}
     assert implemented_protocol_versions() == {"1.0"}
     assert implemented_protocol_versions(["0.4"]) == {"0.4"}
+    assert implemented_protocol_versions(["1.1"]) == {"1.1"}
     assert implemented_protocol_versions(BOTH) == {"0.4", "1.0"}
-    for unknown in (["0.3"], ["2.0"], ["1.1"], []):
+    for unknown in (["0.3"], ["2.0"], ["1.2"], []):
         with pytest.raises(ValueError):
             implemented_protocol_versions(unknown)
     with pytest.raises(ValueError):
-        DiscoveryClient(protocol_versions=["1.1"])
-    # The version a Session names: the one implemented compatible with the chosen one.
+        DiscoveryClient(protocol_versions=["1.2"])
+    # The version a Session names: the newest implemented, compatible with the chosen one
+    # and never later than it. On the default, 1.0 whatever the Company's minor.
     assert implemented_version_for("1.0") == "1.0"
+    assert implemented_version_for("1.1") == "1.0"
     assert implemented_version_for("1.4") == "1.0"
-    assert implemented_version_for("0.4") == "0.4"
-    with pytest.raises(ValueError):
-        implemented_version_for("0.3")
+    assert implemented_version_for("1.1", ["1.1"]) == "1.1"
+    assert implemented_version_for("1.4", ["1.1"]) == "1.1"
+    assert implemented_version_for("1.0", ["1.1"]) == "1.0"
+    assert implemented_version_for("0.4", ["0.4", "1.1"]) == "0.4"
+    for chosen, mine in (("0.3", ["0.4", "1.1"]), ("0.4", ["1.1"]), ("1.1", ["0.4"])):
+        with pytest.raises(ValueError):
+            implemented_version_for(chosen, mine)
 
 
 def test_a_published_document_is_used_only_by_an_agent_that_implements_it() -> None:

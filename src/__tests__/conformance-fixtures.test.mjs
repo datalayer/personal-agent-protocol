@@ -55,6 +55,9 @@ import {
   parseOperation,
   parseProtectedResourceMetadata,
   operatorKeyFrom,
+  contentDigest,
+  operatorDirectory,
+  verifyOperatorSignature,
   operatorSignatureBase,
   signOperatorRequest,
 } from "../../lib/index.js";
@@ -423,6 +426,54 @@ const CHECKS = {
         signatureInput: wanted.signature_input,
         signature: wanted.signature,
       });
+    }
+  },
+
+  /**
+   * A request to an OAuth endpoint: both SDKs write this digest and these headers, covering
+   * `content-digest`, and verify them over the body alone (§5.3, RFC 9530).
+   */
+  async operator_signature_oauth(given, expect) {
+    for (const [index, item] of given.entries()) {
+      const key = await operatorKeyFrom({ kty: "OKP", crv: "Ed25519", x: "JrQLj5P_89iXES9-vFgrIy29clF9CC_oPPsw3c5D0bs", d: item.d });
+      const body = new TextEncoder().encode(item.body);
+      const digest = await contentDigest(body);
+      const signed = await signOperatorRequest(
+        { method: item.method, url: item.url, tenantId: "vector", contentDigest: digest },
+        key,
+        { signatureAgent: item.signature_agent, created: item.created, expires: item.expires, nonce: item.nonce },
+      );
+      const wanted = expect[index];
+      assert.deepEqual(
+        { contentDigest: digest, ...signed },
+        {
+          contentDigest: wanted.content_digest,
+          signatureAgent: wanted.signature_agent,
+          signatureInput: wanted.signature_input,
+          signature: wanted.signature,
+        },
+      );
+      const headers = {
+        "content-digest": wanted.content_digest,
+        "signature-agent": wanted.signature_agent,
+        "signature-input": wanted.signature_input,
+        signature: wanted.signature,
+      };
+      const outcome = async (content) =>
+        (
+          await verifyOperatorSignature({
+            method: item.method,
+            url: item.url,
+            headers,
+            keys: async () => operatorDirectory([key]).keys,
+            now: new Date(item.created * 1000),
+            content,
+          })
+        ).outcome;
+      assert.equal(await outcome(body), "verified");
+      // Another body, or no body to check the digest against: nothing is bound.
+      assert.equal(await outcome(new TextEncoder().encode(`${item.body}&scope=more`)), "invalid");
+      assert.equal(await outcome(undefined), "invalid");
     }
   },
 

@@ -5,7 +5,10 @@
 # Each registry trusts this workflow through its own GitHub environment; the
 # PyPI distributions carry attestations and the npm package provenance. The
 # tag must name both package versions; versions already published are skipped.
-# See RELEASE.md.
+# A pre-release tag (vX.Y.ZaN, bN or rcN: the Python version, as PEP 440 writes
+# it) names the npm version X.Y.Z-alpha.N, -beta.N or -rc.N: PyPI takes it as a
+# pre-release, npm publishes it under the dist-tag alpha, beta or rc, never
+# latest, and the GitHub release is marked a pre-release. See RELEASE.md.
 
 name: Release
 
@@ -27,6 +30,8 @@ jobs:
     outputs:
       python: ${{ steps.plan.outputs.python }}
       typescript: ${{ steps.plan.outputs.typescript }}
+      npm_version: ${{ steps.versions.outputs.npm_version }}
+      dist_tag: ${{ steps.versions.outputs.dist_tag }}
     steps:
       - uses: actions/checkout@v6
 
@@ -44,14 +49,34 @@ jobs:
         run: npm install --global npm@latest
 
       - name: Check the tag names both package versions
+        id: versions
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME#v}"
           python_version="$(python -c "import re;print(re.search(r'__version__\s*=\s*[\"\']([^\"\']+)', open('personal_agent_protocol/__version__.py').read())[1])")"
           typescript_version="$(node -p "require('./package.json').version")"
-          echo "tag=$tag python=$python_version typescript=$typescript_version"
+          # The tag is the Python version. A release is X.Y.Z on both registries; a
+          # pre-release X.Y.ZaN, bN or rcN is X.Y.Z-alpha.N, -beta.N or -rc.N on npm,
+          # published under that dist-tag so `latest` stays the last release.
+          if [[ "$tag" =~ ^([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            npm_version="$tag"
+            dist_tag="latest"
+          elif [[ "$tag" =~ ^([0-9]+\.[0-9]+\.[0-9]+)(a|b|rc)([0-9]+)$ ]]; then
+            case "${BASH_REMATCH[2]}" in
+              a) dist_tag="alpha" ;;
+              b) dist_tag="beta" ;;
+              rc) dist_tag="rc" ;;
+            esac
+            npm_version="${BASH_REMATCH[1]}-$dist_tag.${BASH_REMATCH[3]}"
+          else
+            echo "the tag $GITHUB_REF_NAME names no release (vX.Y.Z) or pre-release (vX.Y.ZaN, bN, rcN)"
+            exit 1
+          fi
+          echo "tag=$tag python=$python_version typescript=$typescript_version npm=$npm_version dist-tag=$dist_tag"
           test "$tag" = "$python_version"
-          test "$tag" = "$typescript_version"
+          test "$npm_version" = "$typescript_version"
+          echo "npm_version=$npm_version" >> "$GITHUB_OUTPUT"
+          echo "dist_tag=$dist_tag" >> "$GITHUB_OUTPUT"
 
       - name: Find which packages need publishing
         id: plan
@@ -66,11 +91,12 @@ jobs:
             echo "PyPI: personal-agent-protocol $version will be published"
             echo "python=yes" >> "$GITHUB_OUTPUT"
           fi
-          if npm view "@datalayer/personal-agent-protocol@$version" version --json >/dev/null 2>&1; then
-            echo "npm: @datalayer/personal-agent-protocol $version is already published, skipping"
+          npm_version="${{ steps.versions.outputs.npm_version }}"
+          if npm view "@datalayer/personal-agent-protocol@$npm_version" version --json >/dev/null 2>&1; then
+            echo "npm: @datalayer/personal-agent-protocol $npm_version is already published, skipping"
             echo "typescript=" >> "$GITHUB_OUTPUT"
           else
-            echo "npm: @datalayer/personal-agent-protocol $version will be published"
+            echo "npm: @datalayer/personal-agent-protocol $npm_version will be published"
             echo "typescript=yes" >> "$GITHUB_OUTPUT"
           fi
 
@@ -177,9 +203,13 @@ jobs:
           name: npm
           path: npm-dist
       # Trusted publishing (OIDC, no token) with a provenance statement naming
-      # this workflow run and tag.
+      # this workflow run and tag. The dist-tag is `latest` for a release and
+      # `alpha`, `beta` or `rc` for a pre-release, which `npm install` without a
+      # tag never picks.
       - name: Publish with npm trusted publishing and provenance
-        run: npm publish ./npm-dist/*.tgz --access public --provenance
+        run: npm publish ./npm-dist/*.tgz --access public --provenance --tag "$DIST_TAG"
+        env:
+          DIST_TAG: ${{ needs.build.outputs.dist_tag }}
 
   release:
     name: GitHub release
@@ -200,8 +230,17 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && exit 0
-          gh release create "$GITHUB_REF_NAME" --title "Release $version" --generate-notes \
+          title="Release $version"
+          flags=()
+          if [ "$DIST_TAG" != "latest" ]; then
+            # A pre-release: marked as one, and never the repository's latest release.
+            title="Pre-release $version"
+            flags=(--prerelease --latest=false)
+          fi
+          gh release create "$GITHUB_REF_NAME" --title "$title" --generate-notes "${flags[@]}" \
             --notes "- [PyPI personal-agent-protocol](https://pypi.org/project/personal-agent-protocol/$version/)
-          - [npm @datalayer/personal-agent-protocol](https://www.npmjs.com/package/@datalayer/personal-agent-protocol/v/$version)"
+          - [npm @datalayer/personal-agent-protocol](https://www.npmjs.com/package/@datalayer/personal-agent-protocol/v/$NPM_VERSION)"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DIST_TAG: ${{ needs.build.outputs.dist_tag }}
+          NPM_VERSION: ${{ needs.build.outputs.npm_version }}

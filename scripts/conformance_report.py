@@ -68,8 +68,9 @@ def _version() -> str:
 _PROFILE = _constant("profile.py", "PROTOCOL_PROFILE")
 _REVISION = _constant("profile.py", "PROTOCOL_REVISION")
 _OPERATIONS = _constant("operations.py", "OPERATIONS_VERSION")
+_DEFAULT = _constant("profile.py", "PUBLISHED_PROTOCOL_VERSION")
+_DEFAULT_REVISION = _constant("profile.py", "PUBLISHED_PROTOCOL_REVISION")
 _DRAFT = _constant("profile.py", "DRAFT_PROTOCOL_VERSION")
-_DRAFT_REVISION = _constant("profile.py", "DRAFT_PROTOCOL_REVISION")
 
 
 def _load(directory: Path) -> dict[str, dict[str, Any]]:
@@ -137,8 +138,9 @@ def render(reports: dict[str, dict[str, Any]]) -> str:
         "",
         f"SDK version **{_version()}**, PAP profile **{_PROFILE}** (as published "
         f"{_REVISION}), Operations extension **v{_OPERATIONS}**; the pairings run at "
-        f"protocol version **{_DRAFT}**, the default ({_DRAFT} as published "
-        f"{_DRAFT_REVISION}); the suite also runs at 0.4 in every pairing. Each pairing runs every "
+        f"protocol version **{_DEFAULT}**, the default ({_DEFAULT} as published "
+        f"{_DEFAULT_REVISION}); the suite also runs at 0.4 in every pairing, and in each SDK at "
+        f"upstream's unpublished draft {_DRAFT}, used only when named. Each pairing runs every "
         "positive, negative and recovery fixture case over real TCP and TLS, the personal "
         "agent in one language and the reference company (Manzanita) in the other. A case "
         "is skipped, never passed, when a side lacks what it needs; the reason is listed "

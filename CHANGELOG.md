@@ -6,6 +6,58 @@
 
 # Changelog
 
+## 1.1.0a1 (2026-11-25)
+
+A pre-release (PyPI `1.1.0a1`, npm `1.1.0-alpha.1` under the dist-tag `alpha`): `pip install`
+and `npm install` without a version keep giving 1.0.4. It adds what upstream's unpublished
+draft 1.1 adds to Poppy 1.0 (upstream commit `589743a`, 18 November 2026), in both SDKs. The
+draft says of itself that it can change until 1.1 is published, and so can this.
+
+Nothing changes on the wire unless a caller turns it on. The default protocol version stays
+1.0 as published: a Personal Agent names `Poppy-Version: 1.0` and a Company publishes
+`protocol_version` `1.0`. A request that names 1.1 is compatible with 1.0 and is handled as
+1.0 defines (spec 3.4).
+
+- **Draft 1.1 as a named version.** `DRAFT_PROTOCOL_VERSION` is `1.1`; a Personal Agent
+  (`DiscoveryClient(protocol_versions=("1.1",))`) or a Company
+  (`CompanyConfig(protocol_versions=("1.1",))`) uses it only when it names it. Each side
+  sends only what the other's version defines: an agent that names 1.1 names 1.0 at a
+  Company whose document is 1.0. `PUBLISHED_PROTOCOL_VERSION` is `1.0`, the default.
+- **`offline_access` (draft 4.4, 4.7).** Some authorization servers issue a refresh token
+  only when a sign-in asks for this scope. Give the sign-in clients the issuer's
+  `scopes_supported` (`DirectSignInClient.begin`, `DeviceSignInClient.begin`,
+  `RefreshTokenContext`; `offline_access=True` for Mediated Sign-In): when it lists
+  `offline_access`, the request includes it, pushed or not, and so does a refresh that asks
+  for fewer scopes. It is never one of the scopes granted: a sign-in that grants nothing else
+  is a decline. A company whose refresh tokens need it sets `CompanyConfig.offline_access`,
+  which lists it in the issuer's metadata only, never in a resource's metadata, a challenge
+  or an `authorization` event.
+- **Operator signatures at the authorization server (draft 5.3).** With
+  `WebBotAuthSigner(..., oauth_endpoints=True)` the agent also signs its requests to the
+  pushed authorization request, token, device authorization and revocation endpoints, over
+  their `Content-Digest` (RFC 9530), which binds the signature to the client assertion in the
+  body. A company accepts the agents a verified operator speaks for with a client policy
+  that has `allows_operator`, such as `OperatorVerifiedAgents`, beside its allowlist and
+  blocklist; the client assertion is verified all the same. Require Pushed Authorization
+  Requests with it, so the company decides before its sign-in page is shown.
+- **Replacing a User ID (draft 5.1).** `replace_user_id` replaces one User's ID at one
+  Company when the User asks, or once it went unused for 28 days with no refresh token held:
+  between tasks, signing out first, discarding the old ID's DPoP and delegated keys and what
+  the host holds under it (`UserIdData`), the new ID last. `SqlitePairwiseUserIdStore` gains
+  `replace`, `mark_used` and `last_used` (Python); `derive_pairwise_user_id` and
+  `DerivedPairwiseUserIds` derive IDs with a keyed hash and replace one with a counter. A
+  company limits how many new User IDs a `client_id` sends with
+  `CompanyConfig.new_user_ids_per_client`.
+- **Listed tasks in feedback (draft 9, 9.3).** Only between two sides that name 1.1: a
+  company lists up to 50 tasks it already knows can't be done (`CompanyConfig.feedback_tasks`,
+  sent as `feedback.tasks`), the agent reads them (`SessionTasks.listed_tasks`) and reports a
+  match by ID (`FeedbackReport.listed(...)`), several in one report; the company answers 202,
+  ignores IDs it doesn't list, and counts the others (`feedback_task_counts`). A report with
+  both forms or neither is `invalid_request`.
+- **The release workflow** publishes a pre-release tag (`vX.Y.ZaN`) to PyPI as a pre-release,
+  to npm as `X.Y.Z-alpha.N` under the dist-tag `alpha`, and marks the GitHub release a
+  pre-release.
+
 ## 1.0.4 (2026-11-24)
 
 The follow-up to 1.0.3, in the Python SDK, from the review of its fix. The TypeScript SDK

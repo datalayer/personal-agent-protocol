@@ -77,6 +77,11 @@ DELEGATED_KEY = "delegated_key"
 PUBLIC_CLIENT = "public_client"
 #: How many clients one address registered in the current window (RFC 7591 §5).
 REGISTRATION_COUNT = "registration_count"
+#: A User ID one `client_id` sent before, by agent and User ID, while it is remembered:
+#: one it hasn't sent counts against `new_user_ids_per_client` (§5.1; guides, *Rate limits*).
+USER_ID = "user_id"
+#: How many User IDs the company hadn't seen one `client_id` sent in the current window.
+NEW_USER_ID_COUNT = "new_user_id_count"
 
 RECORD_KINDS = (
     SESSION,
@@ -106,6 +111,8 @@ RECORD_KINDS = (
     DELEGATED_KEY,
     PUBLIC_CLIENT,
     REGISTRATION_COUNT,
+    USER_ID,
+    NEW_USER_ID_COUNT,
 )
 
 
@@ -370,6 +377,37 @@ class RegistrationCount:
 
     @classmethod
     def from_json(cls, value: JsonObject) -> RegistrationCount:
+        return cls(count=value["count"])
+
+
+@dataclass(frozen=True)
+class KnownUserId:
+    """A User ID a `client_id` sent before: the record is its presence, until its expiry.
+
+    Nothing links it to an account: a User or account doesn't keep one User ID (§5.1).
+    """
+
+    def to_json(self) -> JsonObject:
+        return {}
+
+    @classmethod
+    def from_json(cls, value: JsonObject) -> KnownUserId:
+        if value:
+            raise ValueError("a known User ID has no members")
+        return cls()
+
+
+@dataclass(frozen=True)
+class NewUserIdCount:
+    """The new User IDs one `client_id` sent in the window its record lasts."""
+
+    count: int
+
+    def to_json(self) -> JsonObject:
+        return {"count": self.count}
+
+    @classmethod
+    def from_json(cls, value: JsonObject) -> NewUserIdCount:
         return cls(count=value["count"])
 
 
@@ -712,6 +750,10 @@ class PushedAuthorization:
     parameters: dict[str, str]
     expires_at: datetime
     dpop_jkt: str | None = None
+    #: The operator whose verified signature on the push the company accepted the agent
+    #: by (§5.3), when its policy didn't allow the `client_id` itself: the authorization
+    #: endpoint, which a browser opens with no signature, asks the policy with it.
+    accepted_by: str | None = None
 
     def to_json(self) -> JsonObject:
         return {
@@ -719,6 +761,7 @@ class PushedAuthorization:
             "parameters": dict(self.parameters),
             "expires_at": _time(self.expires_at),
             "dpop_jkt": self.dpop_jkt,
+            "accepted_by": self.accepted_by,
         }
 
     @classmethod
@@ -728,6 +771,7 @@ class PushedAuthorization:
             parameters=dict(value["parameters"]),
             expires_at=_parse(value["expires_at"]),
             dpop_jkt=value.get("dpop_jkt"),
+            accepted_by=value.get("accepted_by"),
         )
 
 
@@ -1137,6 +1181,10 @@ class WebSession:
     #: The extensions step 2 of the join declared: the browser's requests declare them
     #: (§6, Operations 2, Browser Control 3).
     extensions: Mapping[str, str] = field(default_factory=dict)
+    #: The operator whose verified signature on step 2 of the join the company accepted
+    #: the agent by (§5.3), when its policy didn't allow the `client_id` itself: the
+    #: browser's own request carries no signature.
+    accepted_by: str | None = None
 
     def to_json(self) -> JsonObject:
         return {
@@ -1150,6 +1198,7 @@ class WebSession:
             "family": self.family,
             "protocol_version": self.protocol_version,
             "extensions": dict(self.extensions),
+            "accepted_by": self.accepted_by,
         }
 
     @classmethod
@@ -1165,6 +1214,7 @@ class WebSession:
             family=value["family"],
             protocol_version=value.get("protocol_version"),
             extensions=dict(value.get("extensions") or {}),
+            accepted_by=value.get("accepted_by"),
         )
 
 
@@ -1243,17 +1293,20 @@ class SignInAttempts:
 
 @dataclass(frozen=True)
 class StoredFeedback:
-    """A feedback report as the company received it (§8): data, never instructions.
+    """A feedback report as the company received it (§9.3): data, never instructions.
 
-    `client_id` and `pairwise_user_id` are the Session's, which sent it.
+    In free text, `task` and `description`; or, from 1.1, `task_ids`, the IDs of the
+    listed tasks it named that the company listed then, with no text. `client_id` and
+    `pairwise_user_id` are the Session's, which sent it.
     """
 
     report_id: str
-    task: str
-    description: str
+    task: str | None
+    description: str | None
     client_id: str
     pairwise_user_id: str
     received_at: datetime
+    task_ids: tuple[str, ...] = ()
 
     def to_json(self) -> JsonObject:
         return {
@@ -1263,6 +1316,7 @@ class StoredFeedback:
             "client_id": self.client_id,
             "pairwise_user_id": self.pairwise_user_id,
             "received_at": _time(self.received_at),
+            "task_ids": list(self.task_ids),
         }
 
     @classmethod
@@ -1274,6 +1328,7 @@ class StoredFeedback:
             client_id=value["client_id"],
             pairwise_user_id=value["pairwise_user_id"],
             received_at=_parse(value["received_at"]),
+            task_ids=tuple(value.get("task_ids") or ()),
         )
 
 
@@ -1341,4 +1396,6 @@ RECORD_TYPES: dict[str, Callable[[JsonObject], Any]] = {
     DELEGATED_KEY: DelegatedKeyUse.from_json,
     PUBLIC_CLIENT: RegisteredClient.from_json,
     REGISTRATION_COUNT: RegistrationCount.from_json,
+    USER_ID: KnownUserId.from_json,
+    NEW_USER_ID_COUNT: NewUserIdCount.from_json,
 }

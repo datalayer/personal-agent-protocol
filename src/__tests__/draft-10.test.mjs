@@ -19,6 +19,8 @@ import {
   DEFAULT_PROTOCOL_VERSION,
   DRAFT_PROTOCOL_REVISION,
   DRAFT_PROTOCOL_VERSION,
+  PUBLISHED_PROTOCOL_REVISION,
+  PUBLISHED_PROTOCOL_VERSION,
   PROTOCOL_PROFILE,
   PapSession,
   SUPPORTED_PROTOCOL_VERSIONS,
@@ -41,7 +43,7 @@ import { MutableClock, agentHost, agentIdentity, inProcessFetch } from "./suppor
 const TENANT = "atlas-demo";
 const PAIRWISE = "usr_ada_at_manzanita_000000";
 const CONVERSATIONS = "https://manzanita.example/poppy/conversations";
-const BOTH = [DRAFT_PROTOCOL_VERSION, PROTOCOL_PROFILE];
+const BOTH = [PUBLISHED_PROTOCOL_VERSION, PROTOCOL_PROFILE];
 
 /** Manzanita serving `versions` (its default for none), and Atlas's host on the same network. */
 async function world(versions) {
@@ -79,21 +81,31 @@ const hello = () => ({ id: `req_draft10_${String((requests += 1)).padStart(10, "
 
 // Protocol version 1.0, the default (§3.1, §3.4) --------------------------------------
 
-test("the draft is the default and the published version is available", () => {
-  assert.deepEqual([PROTOCOL_PROFILE, DRAFT_PROTOCOL_VERSION, DRAFT_PROTOCOL_REVISION], ["0.4", "1.0", "2026-11-14"]);
-  assert.equal(DEFAULT_PROTOCOL_VERSION, DRAFT_PROTOCOL_VERSION);
+test("1.0 is the default and 0.4 and the draft are available", () => {
+  assert.deepEqual([PROTOCOL_PROFILE, PUBLISHED_PROTOCOL_VERSION, DRAFT_PROTOCOL_VERSION], ["0.4", "1.0", "1.1"]);
+  assert.equal(DEFAULT_PROTOCOL_VERSION, PUBLISHED_PROTOCOL_VERSION);
+  assert.deepEqual([PUBLISHED_PROTOCOL_REVISION, DRAFT_PROTOCOL_REVISION], ["2026-11-14", "2026-11-18"]);
   assert.deepEqual([...SUPPORTED_PROTOCOL_VERSIONS], ["1.0"]);
-  assert.deepEqual([...AVAILABLE_PROTOCOL_VERSIONS].sort(), ["0.4", "1.0"]);
+  assert.deepEqual([...AVAILABLE_PROTOCOL_VERSIONS].sort(), ["0.4", "1.0", "1.1"]);
   assert.deepEqual([...implementedProtocolVersions()], ["1.0"]);
   assert.deepEqual([...implementedProtocolVersions(["0.4"])], ["0.4"]);
+  assert.deepEqual([...implementedProtocolVersions(["1.1"])], ["1.1"]);
   assert.deepEqual([...implementedProtocolVersions(BOTH)].sort(), ["0.4", "1.0"]);
-  for (const unknown of [["0.3"], ["2.0"], ["1.1"], []]) {
+  for (const unknown of [["0.3"], ["2.0"], ["1.2"], []]) {
     assert.throws(() => implementedProtocolVersions(unknown), RangeError);
   }
-  assert.equal(implementedVersionFor("1.0"), "1.0");
+  // The version a Session names: the newest implemented, compatible with the chosen one and
+  // never later than it.
+  assert.equal(implementedVersionFor("1.1"), "1.0");
   assert.equal(implementedVersionFor("1.4"), "1.0");
-  assert.equal(implementedVersionFor("0.4"), "0.4");
-  assert.throws(() => implementedVersionFor("0.3"), RangeError);
+  assert.equal(implementedVersionFor("1.1", ["1.1"]), "1.1");
+  assert.equal(implementedVersionFor("1.4", ["1.1"]), "1.1");
+  assert.equal(implementedVersionFor("1.0", ["1.1"]), "1.0");
+  assert.equal(implementedVersionFor("1.0"), "1.0");
+  assert.equal(implementedVersionFor("0.4", ["0.4", "1.1"]), "0.4");
+  for (const [chosen, mine] of [["0.3", ["0.4", "1.1"]], ["0.4", ["1.1"]], ["1.1", ["0.4"]]]) {
+    assert.throws(() => implementedVersionFor(chosen, mine), RangeError);
+  }
 });
 
 test("a published document is used only by an agent that implements it", () => {

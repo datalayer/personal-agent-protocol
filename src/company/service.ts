@@ -119,6 +119,11 @@ import {
   type Operation,
   type PublicClientMetadata,
   compatibleVersions,
+  versionDefines,
+  LISTED_TASK_ID,
+  LISTED_TASKS_SINCE,
+  MAX_LISTED_TASKS,
+  OFFLINE_ACCESS_SCOPE,
   domainHost,
   effectiveContext,
   httpsUrl,
@@ -199,6 +204,8 @@ import {
   type PublicClient,
   type PushedAuthorization,
   type RegisteredClient,
+  type KnownUserId,
+  type NewUserIdCount,
   type RegistrationCount,
   type Acceptance,
   type SignInAttempts,
@@ -331,6 +338,17 @@ export interface CompanyConfigOptions {
    */
   readonly bindRefreshTokens?: boolean;
   /**
+   * Whether the issuer issues a refresh token only when a sign-in request includes the
+   * `offline_access` scope (OpenID Connect Core §11, §4.4). Such a company lists it in the
+   * issuer's `scopes_supported`, where a Personal Agent reads that it includes it in every
+   * sign-in request; a sign-in that leaves it out gets an access token and no refresh token. It
+   * is no account access: it is in no consent page, `auth.scopes`, protected resource metadata,
+   * challenge or `authorization` event, and a sign-in grants at least one other scope (§4.7).
+   * Off by default: every sign-in then returns a refresh token, and `offline_access` is an
+   * unknown scope.
+   */
+  readonly offlineAccess?: boolean;
+  /**
    * Pushed Authorization Requests for Direct Sign-In (RFC 9126, §4.2, a MAY from 1.0): `offered`
    * lists `pushed_authorization_request_endpoint` (`/oauth/par`), and `required` also sets
    * `require_pushed_authorization_requests`, so the authorization endpoint takes only a
@@ -375,14 +393,26 @@ export interface CompanyConfigOptions {
    * response (§9.1): each a `task` and an optional `alternative`.
    */
   readonly excludedTasks?: readonly Readonly<Record<string, unknown>>[];
+  /**
+   * The tasks the company already knows can't be done and wants reports about, listed in the
+   * tasks response's `feedback.tasks` (§9, §9.3, from 1.1): each an `id` (lowercase letters,
+   * digits, `-` and `_`, at most 64 characters, unique, and the same for as long as the gap
+   * lasts) and a `task` phrase of at most 200 characters. At most 50, with `feedback` on, and
+   * none that is also in `excludedTasks` or has an answer in `feedbackAnswers`. Sent only to a
+   * Personal Agent whose request names 1.1 or later (§3.4), which reports them by ID
+   * (`feedbackTaskCounts`).
+   */
+  readonly feedbackTasks?: readonly Readonly<Record<string, string>>[];
   /** An HTTPS URL of the company's logo, published as `organization.logo_uri` (§3.1). */
   readonly logoUri?: string;
   /**
    * The protocol versions the company serves (§3.4), the first the one it prefers:
    * `poppy.json` is that version's document, and each other version's document is served at
    * `/poppy/{version}.json` and listed in `supported_versions`. A request whose `Poppy-Version`
-   * is none of them is `version_unsupported`. By default the 1.0 draft (`DEFAULT_PROTOCOL_VERSION`);
-   * `["1.0", "0.4"]` also serves 0.4 as published, and `["0.4"]` 0.4 only.
+   * is none of them is `version_unsupported`. By default 1.0 as published
+   * (`DEFAULT_PROTOCOL_VERSION`), which also takes requests that name a later 1.x and handles
+   * them as 1.0 defines; `["1.1"]` serves upstream's unpublished draft 1.1 instead, which may
+   * change; `["1.0", "0.4"]` also serves 0.4 as published, and `["0.4"]` 0.4 only.
    */
   readonly protocolVersions?: readonly string[];
   /**
@@ -549,6 +579,20 @@ export interface CompanyConfigOptions {
    * `pap.company.rateLimit` allows besides (RFC 7591 §5).
    */
   readonly clientRegistrationsPerHour?: number;
+  /**
+   * How many User IDs it hasn't seen before the company accepts from one `client_id` in
+   * `newUserIdWindowSeconds` (§5.1; guides, *Rate limits*). A User ID can change: a Personal
+   * Agent replaces it when the User asks or after 28 days unused, anonymous browsing sessions get
+   * new ones, and none of these can be told from a new User, so a company limits how many new
+   * ones each `client_id` sends. Past the limit, a request that starts a Session with a new User
+   * ID is HTTP 429 with `Retry-After` and no body (§5.6); User IDs seen before are served.
+   * Counted only once the Session JWT's signature verified. Absent, the default: no limit.
+   */
+  readonly newUserIdsPerClient?: number;
+  /** The window `newUserIdsPerClient` counts in, in seconds (default an hour). */
+  readonly newUserIdWindowSeconds?: number;
+  /** How long a User ID stays one the company has seen, after its first request (default 400 days). */
+  readonly userIdMemorySeconds?: number;
 }
 
 function hostedPage(name: string, value: string | undefined): string | undefined {
@@ -635,6 +679,11 @@ export class CompanyConfig {
   readonly publicClientScopes: readonly string[] | undefined;
   readonly clientRegistrationLifetimeSeconds: number;
   readonly clientRegistrationsPerHour: number;
+  readonly offlineAccess: boolean;
+  readonly feedbackTasks: readonly Readonly<Record<string, string>>[];
+  readonly newUserIdsPerClient: number | undefined;
+  readonly newUserIdWindowSeconds: number;
+  readonly userIdMemorySeconds: number;
 
   constructor(options: CompanyConfigOptions) {
     this.name = options.name;
@@ -740,6 +789,11 @@ export class CompanyConfig {
       options.publicClientScopes === undefined ? undefined : [...options.publicClientScopes];
     this.clientRegistrationLifetimeSeconds = options.clientRegistrationLifetimeSeconds ?? 90 * 24 * 60 * 60;
     this.clientRegistrationsPerHour = options.clientRegistrationsPerHour ?? 10;
+    this.offlineAccess = options.offlineAccess ?? false;
+    this.feedbackTasks = (options.feedbackTasks ?? []).map((task) => ({ ...task }));
+    this.newUserIdsPerClient = options.newUserIdsPerClient;
+    this.newUserIdWindowSeconds = options.newUserIdWindowSeconds ?? 60 * 60;
+    this.userIdMemorySeconds = options.userIdMemorySeconds ?? 400 * 24 * 60 * 60;
     for (const [name, lifetime] of Object.entries({
       idempotencyLifetimeSeconds: this.idempotencyLifetimeSeconds,
       sessionLifetimeSeconds: this.sessionLifetimeSeconds,
@@ -752,8 +806,14 @@ export class CompanyConfig {
       pushedRequestLifetimeSeconds: this.pushedRequestLifetimeSeconds,
       publicClientRefreshLifetimeSeconds: this.publicClientRefreshLifetimeSeconds,
       clientRegistrationLifetimeSeconds: this.clientRegistrationLifetimeSeconds,
+      newUserIdWindowSeconds: this.newUserIdWindowSeconds,
+      userIdMemorySeconds: this.userIdMemorySeconds,
     })) {
       if (!(lifetime > 0)) throw new RangeError(`${name} must be positive`);
+    }
+    checkFeedbackTasks(this);
+    if (this.newUserIdsPerClient !== undefined && !(this.newUserIdsPerClient >= 1)) {
+      throw new RangeError("newUserIdsPerClient is at least 1, or absent for no limit");
     }
     if (this.publicClients && !(this.oauth && this.direct)) {
       throw new RangeError("publicClients sign in at the authorization endpoint: direct is on");
@@ -973,6 +1033,24 @@ export class CompanyConfig {
     return `${this.base}/poppy/${version}.json`;
   }
 
+  /**
+   * Whether a request in `version` is handled with what protocol version `since` added (§3.4):
+   * the request's version defines it, and so does a version the company serves that is
+   * compatible with it. A 1.0 request is handled as 1.0 defines, and a company that serves only
+   * 1.0 sends nothing of 1.1 to anyone.
+   */
+  defines(version: string | undefined, since: string): boolean {
+    if (version === undefined) return false;
+    try {
+      return (
+        versionDefines(version, since) &&
+        this.protocolVersions.some((served) => compatibleVersions(version, served) && versionDefines(served, since))
+      );
+    } catch {
+      return false;
+    }
+  }
+
   /** Whether a request's `Poppy-Version` is compatible with a version served (§3.4). */
   servesVersion(version: string | undefined): boolean {
     if (version === undefined) return false;
@@ -1166,9 +1244,58 @@ interface Exchange {
   replayed: boolean;
   /** The request's verified `Poppy-Version` (§3.4), once checked. */
   protocolVersion?: string;
+  /** The request itself, for its operator signature (§5.3). */
+  readonly request: CompanyRequest;
+  /**
+   * Per `client_id` the policy doesn't allow itself: the operator whose verified signature on
+   * this request the policy accepts it by, or `undefined` (§5.3).
+   */
+  readonly acceptedBy: Map<string, string | undefined>;
+}
+
+/**
+ * `feedbackTasks` as §9.3 writes them: at most 50, each an `id` and a `task`, IDs unique, and
+ * no task also excluded (§9.1) or answered with an alternative (§9.2).
+ */
+function checkFeedbackTasks(config: CompanyConfig): void {
+  const listed = config.feedbackTasks;
+  if (listed.length === 0) return;
+  if (!config.feedback) throw new RangeError("feedbackTasks are listed with the feedback endpoint");
+  if (listed.length > MAX_LISTED_TASKS) {
+    throw new RangeError(`a company lists at most ${MAX_LISTED_TASKS} feedback tasks`);
+  }
+  for (const entry of listed) {
+    const keys = Object.keys(entry);
+    if (keys.length !== 2 || !("id" in entry) || !("task" in entry)) {
+      throw new RangeError("a feedback task has an id and a task");
+    }
+    if (typeof entry.id !== "string" || !LISTED_TASK_ID.test(entry.id)) {
+      throw new RangeError("a feedback task's id is lowercase letters, digits, - and _, at most 64");
+    }
+    if (typeof entry.task !== "string" || entry.task.length === 0 || entry.task.length > 200) {
+      throw new RangeError("a feedback task's task is a phrase of at most 200 characters");
+    }
+  }
+  if (new Set(listed.map((entry) => entry.id)).size !== listed.length) {
+    throw new RangeError("each feedback task has an id of its own");
+  }
+  const elsewhere = new Set([
+    ...config.excludedTasks.map((task) => String(task.task ?? "").toLowerCase()),
+    ...Object.keys(config.feedbackAnswers).map((task) => task.toLowerCase()),
+  ]);
+  if (listed.some((entry) => elsewhere.has((entry.task as string).toLowerCase()))) {
+    throw new RangeError(
+      "a task is listed for feedback, or excluded, or answered with an alternative: never two of them",
+    );
+  }
 }
 
 const exchanges = new AsyncLocalStorage<Exchange>();
+
+function bodyBytes(body: Uint8Array | string | undefined): Uint8Array {
+  if (body === undefined) return new Uint8Array();
+  return typeof body === "string" ? new TextEncoder().encode(body) : body;
+}
 
 function routeOf(path: string): string {
   const parts = path.split("/").filter((part) => part !== "");
@@ -1769,6 +1896,8 @@ export class CompanyService {
       started: performance.now(),
       route: routeOf(new URL(request.url).pathname),
       replayed: false,
+      request,
+      acceptedBy: new Map(),
     };
     return exchanges.run(exchange, async () => {
       const response = await this.#dispatch(request);
@@ -2137,11 +2266,14 @@ export class CompanyService {
 
   /**
    * The tasks response (§9): the excluded tasks, the pinned Agent Skills discovery index with
-   * absolute URLs (§9.4), and the feedback endpoint. The same for every Session of this
-   * company.
+   * absolute URLs (§9.4), the feedback endpoint and, from 1.1, the tasks listed for feedback
+   * (§9.3). The same for every Session of this company at one protocol version:
+   * `protocolVersion` is the request's `Poppy-Version`, the company's preferred version when
+   * not given, and a request in 1.0 gets no `feedback.tasks`, which 1.0 doesn't define (§3.4).
    */
-  tasksDocument(): Record<string, unknown> {
+  tasksDocument(protocolVersion?: string): Record<string, unknown> {
     const config = this.config;
+    const version = protocolVersion ?? config.preferredVersion;
     const document: Record<string, unknown> = {};
     if (config.excludedTasks.length) document.excluded_tasks = config.excludedTasks.map((task) => ({ ...task }));
     if (config.skills.length) {
@@ -2156,7 +2288,14 @@ export class CompanyService {
         })),
       };
     }
-    if (config.feedback) document.feedback = { endpoint: config.feedbackEndpoint };
+    if (config.feedback) {
+      document.feedback = {
+        endpoint: config.feedbackEndpoint,
+        ...(config.feedbackTasks.length && config.defines(version, LISTED_TASKS_SINCE)
+          ? { tasks: config.feedbackTasks.map((task) => ({ id: task.id, task: task.task })) }
+          : {}),
+      };
+    }
     return document;
   }
 
@@ -2169,8 +2308,12 @@ export class CompanyService {
    * company that varies it MUST ensure.
    */
   async #tasks(request: CompanyRequest): Promise<CompanyResponse> {
-    await this.#caller(request);
-    return { status: 200, body: this.tasksDocument(), headers: { "Cache-Control": "private, max-age=300" } };
+    const [, session] = await this.#caller(request);
+    return {
+      status: 200,
+      body: this.tasksDocument(session.protocolVersion),
+      headers: { "Cache-Control": "private, max-age=300" },
+    };
   }
 
   /**
@@ -2235,7 +2378,9 @@ export class CompanyService {
       // Every client authenticates with an assertion (§4.1): UCP's identity linking needs it
       // said (UCP extension 4).
       token_endpoint_auth_methods_supported: ["private_key_jwt"],
-      scopes_supported: [...config.offeredScopes],
+      // With `offline_access` when refresh tokens need it (§4.4): here only, never in a
+      // resource's metadata.
+      scopes_supported: [...config.offeredScopes, ...(config.offlineAccess ? [OFFLINE_ACCESS_SCOPE] : [])],
       protected_resources: resources,
     };
     if (this.#mcp() !== undefined) resources.push(config.mcpUrl);
@@ -2321,9 +2466,54 @@ export class CompanyService {
    * The company's policy on this agent, asked before anything is fetched for it: a
    * blocked `client_id` is never resolved (no metadata or keys fetched from its domain),
    * and a blocked agent's tokens stop working at once.
+   *
+   * A policy with `allowsOperator` may also accept a `client_id` it doesn't allow itself
+   * because a verified operator speaks for it (§5.3): the operator of this request's signature,
+   * or `acceptedBy`, the one an earlier signed request of the same sign-in or join was accepted
+   * by, for a request the User's browser sends. The client assertion or Session JWT is verified
+   * all the same.
    */
-  async #allowed(clientId: string): Promise<boolean> {
-    return firstContribution(this.reactor, ClientPolicies, "policy").allows(clientId);
+  async #allowed(clientId: string, acceptedBy?: string): Promise<boolean> {
+    const policy = firstContribution(this.reactor, ClientPolicies, "policy");
+    if (await policy.allows(clientId)) return true;
+    if (policy.allowsOperator === undefined) return false;
+    const operator = acceptedBy ?? (await this.#acceptingOperator(clientId));
+    return operator !== undefined && (await policy.allowsOperator(clientId, operator));
+  }
+
+  /**
+   * The operator whose verified signature on this request the policy accepts `clientId` by
+   * (§5.3; guides, *Accepting personal agents your bot defenses verify*), or `undefined`: no
+   * such policy, no signature, one that fails, or an operator the policy doesn't link to this
+   * `client_id`. Decided once for a request.
+   *
+   * A request with the Session header covers it; one to an OAuth endpoint covers its content
+   * digest, checked against the body. The policy is asked before a directory is read, so only
+   * an operator the company knows makes it fetch one.
+   */
+  async #acceptingOperator(clientId: string): Promise<string | undefined> {
+    const exchange = exchanges.getStore();
+    if (exchange === undefined) return undefined;
+    if (exchange.acceptedBy.has(clientId)) return exchange.acceptedBy.get(clientId);
+    const request = exchange.request;
+    const policy = firstContribution(this.reactor, ClientPolicies, "policy");
+    let operator: string | undefined;
+    if (policy.allowsOperator !== undefined && request.headers["signature-input"]) {
+      const directory = firstContribution(this.reactor, OperatorDirectories, "operator directory");
+      const verdict = await verifyOperatorSignature({
+        method: request.method,
+        url: request.url,
+        headers: request.headers,
+        keys: (url, keyid) => directory.keys(url, keyid),
+        now: this.#now(),
+        windowSeconds: this.config.operatorSignatureWindowSeconds,
+        content: request.headers[SESSION_HEADER] ? undefined : bodyBytes(request.body),
+        trusts: async (agent) => (await policy.allowsOperator?.(clientId, agent)) === true,
+      });
+      if (verdict.outcome === "verified") operator = verdict.operator;
+    }
+    exchange.acceptedBy.set(clientId, operator);
+    return operator;
   }
 
   /** Whether the agent listed this version of Operations when it last authenticated. */
@@ -2350,6 +2540,16 @@ export class CompanyService {
    * `agentScopes` leaves some out, as RFC 6749 §3.3 allows; the response's `scope` says
    * which. None of them is `invalid_scope`.
    */
+  /**
+   * The account scopes a request asks for (§4.4, §4.7): `asked` without `offline_access` at a
+   * company whose refresh tokens need it, since that scope asks for a refresh token and is
+   * granted as none. Elsewhere it is a scope like any other, which the company doesn't offer.
+   */
+  #accountScopesAsked(asked: readonly string[]): string[] {
+    if (!this.config.offlineAccess) return [...asked];
+    return asked.filter((scope) => scope !== OFFLINE_ACCESS_SCOPE);
+  }
+
   #grantedToAgents(scopes: readonly string[]): string[] {
     const allowed = this.config.agentScopes;
     const granted = scopes.filter((scope) => allowed === undefined || allowed.includes(scope));
@@ -2775,10 +2975,12 @@ export class CompanyService {
       throw new Refused(400, "invalid_grant");
     }
     const requested = words(form.scope);
-    if (requested.length && requested.some((scope) => !grant.scopes.includes(scope))) {
+    // Fewer scopes, named with `offline_access` where refresh tokens need it (§4.4).
+    const narrowed = this.#accountScopesAsked(requested);
+    if (narrowed.length && narrowed.some((scope) => !grant.scopes.includes(scope))) {
       throw new Refused(400, "invalid_scope");
     }
-    if (!this.#offers(requested.length ? requested : grant.scopes)) {
+    if (!this.#offers(narrowed.length ? narrowed : grant.scopes)) {
       // A scope the company no longer offers (a rollback, a narrower version): asked
       // within what it offers now, the same refresh token still serves.
       throw new Refused(400, "invalid_scope");
@@ -2810,7 +3012,7 @@ export class CompanyService {
     const response = await this.#issue({
       clientId,
       accountId: grant.accountId,
-      scopes: requested.length ? requested : grant.scopes,
+      scopes: narrowed.length ? narrowed : grant.scopes,
       family: grant.family,
       ...(resource === undefined ? {} : { resource }),
       refreshToken: rotated,
@@ -2833,10 +3035,12 @@ export class CompanyService {
     const clientId = await this.#client(form);
     if (!(await this.#signInAllowed(clientId, DEVICE_CODE_GRANT))) throw new Refused(400, "unauthorized_client");
     const asked = words(form.scope);
-    if (!asked.length || asked.some((scope) => !this.config.offeredScopes.includes(scope))) {
+    const account = this.#accountScopesAsked(asked);
+    if (!account.length || account.some((scope) => !this.config.offeredScopes.includes(scope))) {
+      // None, an unknown one, or `offline_access` alone (§4.7).
       throw new Refused(400, "invalid_scope");
     }
-    const scopes = this.#grantedToAgents(asked);
+    const scopes = this.#grantedToAgents(account);
     const deviceCode = this.#id("dev");
     const lifetime = 600;
     const expiresAt = this.#later(lifetime);
@@ -3438,7 +3642,9 @@ export class CompanyService {
       scopes,
       family,
       ...(resource === undefined ? {} : { resource }),
-      refreshToken,
+      // Where refresh tokens need `offline_access`, only a sign-in that asked for it gets one
+      // (§4.4): the others get an access token alone.
+      ...(!this.config.offlineAccess || requested.includes(OFFLINE_ACCESS_SCOPE) ? { refreshToken } : {}),
       requested,
       jkt,
       isPublic: publicClient !== undefined,
@@ -3531,9 +3737,15 @@ export class CompanyService {
       expires_in: Math.max(1, Math.trunc((expiresAt.getTime() - this.#now().getTime()) / 1000)),
     };
     const asked = new Set(requested);
-    const granted = new Set(scopes);
+    // Asked for and given: the refresh token below. It is no account scope, and is kept with
+    // no grant or access token (§4.4).
+    const given =
+      this.config.offlineAccess && refreshToken !== undefined && asked.has(OFFLINE_ACCESS_SCOPE)
+        ? [...scopes, OFFLINE_ACCESS_SCOPE]
+        : [...scopes];
+    const granted = new Set(given);
     if (granted.size !== asked.size || [...granted].some((scope) => !asked.has(scope))) {
-      body.scope = scopes.join(" ");
+      body.scope = given.join(" ");
     }
     if (refreshToken !== undefined) body.refresh_token = refreshToken;
     return { status: 200, body, headers: { ...NO_STORE } };
@@ -3572,8 +3784,16 @@ export class CompanyService {
    * (`clientId`) and its `scopes`, which the service enforces. With `publicClients`, the
    * record's `public` says the token is a public client's (an MCP client's), never a personal
    * agent's: the service gives it no Session and takes no operation approval from it.
+   *
+   * `operator` is the `Signature-Agent` URL of the operator signature the service verified on
+   * the request that carried the token, when it did (§5.3): a policy with `allowsOperator`
+   * accepts by it an agent it doesn't allow by `client_id`.
    */
-  async accessTokenFor(token: string, resource: string): Promise<IssuedAccessToken | undefined> {
+  async accessTokenFor(
+    token: string,
+    resource: string,
+    options: { readonly operator?: string } = {},
+  ): Promise<IssuedAccessToken | undefined> {
     if (!this.config.resourceServers.includes(resource)) {
       throw new RangeError(`${resource} is not one of this company's resourceServers`);
     }
@@ -3586,7 +3806,9 @@ export class CompanyService {
     // tokens stop working at once, and so does one for a service the policy has since left out
     // for this agent (§4.5).
     const allowed =
-      issued.public === true ? await this.#publicAllowed(issued.clientId) : await this.#allowed(issued.clientId);
+      issued.public === true
+        ? await this.#publicAllowed(issued.clientId)
+        : await this.#allowed(issued.clientId, options.operator);
     if (!allowed || !(await this.#resourceAllowed(issued.clientId, resource))) return undefined;
     return issued;
   }
@@ -3632,7 +3854,7 @@ export class CompanyService {
     if (!metadata.redirect_uris.some((entry) => redirectUriMatches(entry, redirectUri))) {
       throw new Refused(400, "invalid_request");
     }
-    const scopes = words(form.scope);
+    const scopes = this.#accountScopesAsked(words(form.scope));
     if (form.response_type !== "code") throw new Refused(400, "unsupported_response_type");
     if (form.code_challenge_method !== "S256" || !form.code_challenge) throw new Refused(400, "invalid_request");
     if (!scopes.length || scopes.some((scope) => !this.config.offeredScopes.includes(scope))) {
@@ -3646,11 +3868,15 @@ export class CompanyService {
     );
     const requestUri = `urn:ietf:params:oauth:request_uri:${this.#id("par")}`;
     const expiresAt = this.#later(this.config.pushedRequestLifetimeSeconds);
+    const acceptedBy = await this.#acceptingOperator(clientId);
     const pushed: PushedAuthorization = {
       clientId,
       parameters,
       expiresAt: expiresAt.toISOString(),
       ...(jkt === undefined ? {} : { dpopJkt: jkt }),
+      // Decided here, before the sign-in page: the browser's request to the authorization
+      // endpoint carries no operator signature (§5.3, guides).
+      ...(acceptedBy === undefined ? {} : { acceptedBy }),
     };
     await this.store.put(RecordKinds.pushedRequest, requestUri, json(pushed), expiry(expiresAt));
     return {
@@ -3661,20 +3887,21 @@ export class CompanyService {
   }
 
   /**
-   * The authorization request a `request_uri` names, taken once, and the DPoP key that pushed it
-   * (RFC 9126 §4); `undefined` for an unknown, used or expired one, or one another agent pushed.
-   * Every other query parameter but `client_id` is ignored.
+   * The authorization request a `request_uri` names, taken once, the DPoP key that pushed it
+   * (RFC 9126 §4), and the operator the push was accepted by (§5.3); `undefined` for an unknown,
+   * used or expired one, or one another agent pushed. Every other query parameter but
+   * `client_id` is ignored.
    */
   async #pushedParameters(
     query: Readonly<Record<string, string>>,
-  ): Promise<readonly [Record<string, string>, string | undefined] | undefined> {
+  ): Promise<readonly [Record<string, string>, string | undefined, string | undefined] | undefined> {
     const pushed = (await this.store.take(RecordKinds.pushedRequest, query.request_uri ?? "")) as unknown as
       | PushedAuthorization
       | undefined;
     if (pushed === undefined || this.#passed(pushed.expiresAt) || pushed.clientId !== query.client_id) {
       return undefined;
     }
-    return [{ ...pushed.parameters }, pushed.dpopJkt];
+    return [{ ...pushed.parameters }, pushed.dpopJkt, pushed.acceptedBy];
   }
 
   /**
@@ -3688,10 +3915,11 @@ export class CompanyService {
   async #authorize(request: CompanyRequest): Promise<CompanyResponse> {
     let query = pairs(new URL(request.url).search);
     let pushedBy: string | undefined;
+    let acceptedBy: string | undefined;
     if ("request_uri" in query && this.config.pushedAuthorizationRequests !== "off") {
       const pushed = await this.#pushedParameters(query);
       if (pushed === undefined) return page(400, "This sign-in request is not valid or has expired.");
-      [query, pushedBy] = pushed;
+      [query, pushedBy, acceptedBy] = pushed;
     } else if (this.config.pushedAuthorizationRequests === "required") {
       // Only a pushed request (RFC 9126 §5): nothing the browser carried is trusted.
       return page(400, "This sign-in request is not valid.");
@@ -3699,7 +3927,7 @@ export class CompanyService {
     const clientId = query.client_id ?? "";
     const redirectUri = query.redirect_uri ?? "";
     if (!clientId) return page(400, "This sign-in request is not valid.");
-    const client = await this.#authorizingClient(clientId);
+    const client = await this.#authorizingClient(clientId, acceptedBy);
     if (client === undefined) return page(400, "This agent could not be verified.");
     // An unknown client or redirect is never redirected to: that would be an open redirector.
     // Exactly, but a loopback redirect URI matches with any port (§4.5, RFC 8252 §7.3).
@@ -3715,7 +3943,10 @@ export class CompanyService {
       if (!client.verified) return page(400, "This sign-in request is not valid.");
       return this.#redirect(redirectUri, { error, state });
     };
-    const scopes = words(query.scope);
+    const asked = words(query.scope);
+    // The account scopes: `offline_access`, where refresh tokens need it, asks for a refresh
+    // token and is on no consent page (§4.4).
+    const scopes = this.#accountScopesAsked(asked);
     if (query.response_type !== "code") return refuse("unsupported_response_type");
     const codeChallenge = query.code_challenge;
     if (query.code_challenge_method !== "S256" || !codeChallenge) return refuse("invalid_request");
@@ -3763,7 +3994,7 @@ export class CompanyService {
       clientId,
       redirectUri,
       scopes: granted,
-      requested: scopes,
+      requested: asked,
       state,
       codeChallenge,
       expiresAt: expiresAt.toISOString(),
@@ -3838,14 +4069,14 @@ export class CompanyService {
    * nothing. No document is both, so which class a client is of is its own domain's to say, and
    * never the request's. Anything else is the `client_id` of a client that registered itself.
    */
-  async #authorizingClient(clientId: string): Promise<AuthorizingClient | undefined> {
+  async #authorizingClient(clientId: string, acceptedBy?: string): Promise<AuthorizingClient | undefined> {
     if (!clientId.startsWith("https://")) {
       if (!this.config.clientRegistration || !(await this.#publicAllowed(clientId))) return undefined;
       return this.#registeredClient(clientId);
     }
     // The policy before anything is fetched: as a personal agent, then as a public client. A
     // `client_id` neither allows is never resolved.
-    if (await this.#allowed(clientId)) {
+    if (await this.#allowed(clientId, acceptedBy)) {
       const resolver = firstContribution(this.reactor, ClientResolvers, "client");
       try {
         const [metadata] = await resolver.resolve(clientId);
@@ -4636,6 +4867,7 @@ export class CompanyService {
     for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt += 1) {
       const known = await this.#read<StoredSession>(RecordKinds.session, key);
       if (known === undefined) {
+        await this.#newUserIdAdmitted(verified.clientId, verified.sub);
         const endsAt = this.#later(this.config.sessionLifetimeSeconds);
         const started: StoredSession = {
           clientId: verified.clientId,
@@ -4656,6 +4888,61 @@ export class CompanyService {
         throw new SessionError("session_ended", "The Session has ended", { statusCode: 400 });
       }
       return key;
+    }
+    throw new Refused(503, "temporarily_unavailable");
+  }
+
+  /**
+   * Count a User ID this `client_id` hasn't sent before against `newUserIdsPerClient`, or HTTP
+   * 429 once the window's count is reached (§5.1, §5.6; guides, *Rate limits*).
+   *
+   * Called when a Session starts, after its Session JWT verified, so no one can use up another
+   * agent's count by naming it. A replaced User ID can't be told from a new User, and nothing
+   * here links a User ID to an account or to another one.
+   */
+  async #newUserIdAdmitted(clientId: string, pairwiseUserId: string): Promise<void> {
+    const limit = this.config.newUserIdsPerClient;
+    if (limit === undefined) return;
+    const now = this.#now().getTime();
+    const known = composite(clientId, pairwiseUserId);
+    if ((await this.store.get(RecordKinds.userId, known)) !== undefined) return;
+    const window = this.config.newUserIdWindowSeconds * 1000;
+    for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt += 1) {
+      const entry = await this.store.get(RecordKinds.newUserIdCount, clientId);
+      let counted: boolean;
+      if (entry === undefined) {
+        const first: NewUserIdCount = { count: 1 };
+        counted = await this.store.create(
+          RecordKinds.newUserIdCount,
+          clientId,
+          json(first),
+          expiry(new Date(now + window)),
+        );
+      } else {
+        const count = (entry.value as unknown as NewUserIdCount).count;
+        if (count >= limit) {
+          const ends = entry.expiresAt === undefined ? now + window : new Date(entry.expiresAt).getTime();
+          throw new RateLimitedRefusal(Math.max(1, Math.ceil((ends - now) / 1000)));
+        }
+        const next: NewUserIdCount = { count: count + 1 };
+        counted = await this.store.replace(
+          RecordKinds.newUserIdCount,
+          clientId,
+          entry.version,
+          json(next),
+          expiry(entry.expiresAt),
+        );
+      }
+      if (counted) {
+        const seen: KnownUserId = {};
+        await this.store.put(
+          RecordKinds.userId,
+          known,
+          json(seen),
+          expiry(new Date(now + this.config.userIdMemorySeconds * 1000)),
+        );
+        return;
+      }
     }
     throw new Refused(503, "temporarily_unavailable");
   }
@@ -4766,11 +5053,12 @@ export class CompanyService {
     const config = this.config;
     if (!(await this.#signInAllowed(clientId, MEDIATED_GRANT))) throw new Refused(400, "unauthorized_client");
     const asked = words(form.scope);
-    if (!asked.length || asked.some((scope) => !config.mediatedGrantScopes.includes(scope))) {
+    const account = this.#accountScopesAsked(asked);
+    if (!account.length || account.some((scope) => !config.mediatedGrantScopes.includes(scope))) {
       // Missing or unknown scopes are refused (§4.7).
       throw new Refused(400, "invalid_scope");
     }
-    const granted = this.#grantedToAgents(asked);
+    const granted = this.#grantedToAgents(account);
     const credentials: Record<string, string> = {};
     for (const [name] of config.mediatedFields) {
       const value = form[name];
@@ -5662,6 +5950,9 @@ export class CompanyService {
     const [, session] = await this.#caller(request);
     const body = jsonObject(request.body);
     const { task, description } = body;
+    if (this.config.defines(session.protocolVersion, LISTED_TASKS_SINCE) && "task_ids" in body) {
+      return this.#listedFeedback(body, session);
+    }
     if (
       typeof task !== "string" ||
       !(task.length > 0 && task.length <= 200) ||
@@ -5688,6 +5979,52 @@ export class CompanyService {
       return { status: 200, body: { ...alternative }, headers: { ...NO_STORE } };
     }
     return { status: 202, headers: { ...NO_STORE } };
+  }
+
+  /** A report of listed tasks (§9.3): `task_ids` and nothing of the other form. */
+  async #listedFeedback(body: Readonly<Record<string, unknown>>, session: CallerSession): Promise<CompanyResponse> {
+    const taskIds = body.task_ids;
+    if (
+      "task" in body ||
+      "description" in body ||
+      !Array.isArray(taskIds) ||
+      taskIds.length === 0 ||
+      taskIds.some((taskId) => typeof taskId !== "string" || !LISTED_TASK_ID.test(taskId)) ||
+      new Set(taskIds).size !== taskIds.length
+    ) {
+      // Both forms, an empty list, something that is no ID, or an ID twice.
+      throw new Refused(400, "invalid_request");
+    }
+    const listed = new Set(this.config.feedbackTasks.map((task) => task.id));
+    const known = (taskIds as string[]).filter((taskId) => listed.has(taskId));
+    if (known.length) {
+      const report: StoredFeedback = {
+        reportId: this.#id("fb"),
+        taskIds: known,
+        clientId: session.clientId,
+        pairwiseUserId: session.pairwiseUserId,
+        receivedAt: this.#now().toISOString(),
+      };
+      await this.store.put(RecordKinds.feedback, report.reportId, json(report));
+    }
+    return { status: 202, headers: { ...NO_STORE } };
+  }
+
+  /**
+   * How many reports named each task the company lists (§9.3), by its ID: reports by ID need no
+   * reading, so the company sees which gaps to close first. Every listed task is there, at 0
+   * when none named it; IDs no longer listed are left out.
+   */
+  async feedbackTaskCounts(): Promise<Record<string, number>> {
+    const counts: Record<string, number> = Object.fromEntries(
+      this.config.feedbackTasks.map((task) => [task.id as string, 0]),
+    );
+    for (const report of await this.feedbackReports()) {
+      for (const taskId of report.taskIds ?? []) {
+        if (Object.hasOwn(counts, taskId)) counts[taskId] = (counts[taskId] as number) + 1;
+      }
+    }
+    return counts;
   }
 
   /**
@@ -6258,6 +6595,7 @@ export class CompanyService {
       session.sessionKey,
     );
     if (stored === undefined) throw new Refused(400, "invalid_request");
+    const joinAcceptedBy = await this.#acceptingOperator(session.clientId);
     const authorized: WebSession = {
       clientId: session.clientId,
       sid: session.sid,
@@ -6271,6 +6609,7 @@ export class CompanyService {
       // requests declare the extensions this request declared (§6).
       protocolVersion: session.protocolVersion,
       extensions: { ...session.extensions },
+      ...(joinAcceptedBy === undefined ? {} : { acceptedBy: joinAcceptedBy }),
     };
     const changed = await this.#change<JoinCode>(RecordKinds.joinCode, digest(code), (current) => {
       if (current.authorized !== undefined) throw new Refused(400, "invalid_request");
@@ -6303,7 +6642,7 @@ export class CompanyService {
       return refused;
     }
     const joined = issued.authorized;
-    if (!(await this.#allowed(joined.clientId)) || this.#passed(joined.expiresAt)) return refused;
+    if (!(await this.#allowed(joined.clientId, joined.acceptedBy)) || this.#passed(joined.expiresAt)) return refused;
     const replaced = cookie(request, WEB_COOKIE);
     if (replaced !== undefined) await this.store.delete(RecordKinds.browserCookie, digest(replaced));
     const webCookie = this.#id("web");

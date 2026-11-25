@@ -38,10 +38,11 @@ without touching the service:
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Literal, Protocol, runtime_checkable
+from urllib.parse import urlsplit
 
 from pydantic import SecretStr
 from reactor import define_contribution_point  # type: ignore[import-untyped]
@@ -55,6 +56,7 @@ from ..models import (
     PublicClientMetadata,
 )
 from ..reactor import Clock, SystemClock
+from ..urls import browser_safe
 from .store import (
     REPLAY,
     AccountGrant,
@@ -291,6 +293,17 @@ class ClientPolicy(Protocol):
     apart, with `allows_public(client_id)`: a company that lists the personal agents it
     serves takes public clients all the same, or none. Without the method, `allows`
     answers for both classes.
+
+    A policy may also accept the agents an operator speaks for (§5.3; guides, *Accepting
+    personal agents your bot defenses verify*), with `allows_operator(client_id,
+    operator)`: asked for a `client_id` that `allows` refuses, when the request carries a
+    Web Bot Auth signature, with its `Signature-Agent` URL. It is asked first before the
+    operator's directory is read, so the company reads only directories of operators it
+    knows, then the agent is accepted for that request once the signature verified.
+    Which `client_id` values an operator speaks for is the company's policy: a verified
+    signature proves control of the operator's key, never of a `client_id`, whose client
+    assertion or Session JWT is verified all the same. Without the method, an operator
+    signature accepts no one. `OperatorVerifiedAgents` is such a policy.
     """
 
     async def allows(self, client_id: str) -> bool: ...
@@ -302,6 +315,67 @@ class AllowEveryAgent:
 
     async def allows(self, client_id: str) -> bool:
         return True
+
+    async def allows_sign_in(self, client_id: str, grant_type: str) -> bool:
+        return True
+
+    async def allows_resource(self, client_id: str, resource: str) -> bool:
+        return True
+
+
+class OperatorVerifiedAgents:
+    """A policy that accepts the personal agents it lists and the ones a verified
+    operator speaks for (§5.3; guides, *Accepting personal agents your bot defenses
+    verify*), and never one it blocks.
+
+    `agents` is the allowlist of `client_id` values. `operators` maps the
+    `Signature-Agent` URL of each operator the company trusts to the `client_id` values
+    it speaks for, or to `None` for every `client_id` on the host of that URL: never
+    `None` for a host others can publish on, such as a hosting provider's shared domain,
+    unless the operator controls every client there. `blocked` wins over both.
+
+    An agent accepted by its operator alone is accepted on requests that carry the
+    operator's verified signature: at the pushed authorization request, token, device
+    authorization and revocation endpoints, and with the Session header. The
+    authorization endpoint is opened by the User's browser, with no signature, so such
+    an agent signs in directly only through a Pushed Authorization Request: set
+    `pushed_authorization_requests="required"`, and the company decides before its
+    sign-in page is shown.
+    """
+
+    def __init__(
+        self,
+        *,
+        agents: Collection[str] = (),
+        operators: Mapping[str, Collection[str] | None] | None = None,
+        blocked: Collection[str] = (),
+    ) -> None:
+        self.agents = frozenset(agents)
+        self.operators = {
+            operator: None if speaks_for is None else frozenset(speaks_for)
+            for operator, speaks_for in (operators or {}).items()
+        }
+        self.blocked = frozenset(blocked)
+        for operator in self.operators:
+            if not operator.startswith("https://") or not browser_safe(operator):
+                raise ValueError("an operator is named by its HTTPS Signature-Agent URL")
+
+    async def allows(self, client_id: str) -> bool:
+        return client_id not in self.blocked and client_id in self.agents
+
+    async def allows_operator(self, client_id: str, operator: str) -> bool:
+        if client_id in self.blocked or operator not in self.operators:
+            return False
+        speaks_for = self.operators[operator]
+        if speaks_for is not None:
+            return client_id in speaks_for
+        host = urlsplit(operator).hostname
+        return (
+            client_id.startswith("https://")
+            and browser_safe(client_id)
+            and host is not None
+            and urlsplit(client_id).hostname == host
+        )
 
     async def allows_sign_in(self, client_id: str, grant_type: str) -> bool:
         return True

@@ -137,7 +137,7 @@ async def test_feedback_refusals_carry_their_code_and_retry_after() -> None:
 @pytest.mark.asyncio
 async def test_a_company_without_feedback_neither_lists_nor_accepts_it() -> None:
     world = World()
-    world.shop.config = dataclasses.replace(world.shop.config, feedback=False)
+    world.shop.config = dataclasses.replace(world.shop.config, feedback=False, feedback_tasks=())
     session = await world.signed_out_session()
     tasks = await TasksClient(transport=world.transport).get(world.company, session=session)
     assert tasks.available and tasks.feedback_endpoint is None

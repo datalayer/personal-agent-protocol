@@ -11,7 +11,16 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { OPERATIONS_VERSION, PROTOCOL_PROFILE, PROTOCOL_REVISION } from "../../lib/index.js";
+import {
+  DEFAULT_PROTOCOL_VERSION,
+  DRAFT_PROTOCOL_REVISION,
+  DRAFT_PROTOCOL_VERSION,
+  OPERATIONS_VERSION,
+  PROTOCOL_PROFILE,
+  PROTOCOL_REVISION,
+  PUBLISHED_PROTOCOL_REVISION,
+  PUBLISHED_PROTOCOL_VERSION,
+} from "../../lib/index.js";
 
 const ROOT = new URL("../../", import.meta.url);
 
@@ -26,6 +35,15 @@ test("the Python SDK declares the same profile, revision, and Operations version
   assert.equal(PROTOCOL_PROFILE, python("profile.py", "PROTOCOL_PROFILE"));
   assert.equal(PROTOCOL_REVISION, python("profile.py", "PROTOCOL_REVISION"));
   assert.equal(OPERATIONS_VERSION, python("operations.py", "OPERATIONS_VERSION"));
+});
+
+test("the Python SDK declares the same published and draft versions", () => {
+  assert.equal(PUBLISHED_PROTOCOL_VERSION, python("profile.py", "PUBLISHED_PROTOCOL_VERSION"));
+  assert.equal(PUBLISHED_PROTOCOL_REVISION, python("profile.py", "PUBLISHED_PROTOCOL_REVISION"));
+  assert.equal(DRAFT_PROTOCOL_VERSION, python("profile.py", "DRAFT_PROTOCOL_VERSION"));
+  assert.equal(DRAFT_PROTOCOL_REVISION, python("profile.py", "DRAFT_PROTOCOL_REVISION"));
+  assert.equal(DEFAULT_PROTOCOL_VERSION, PUBLISHED_PROTOCOL_VERSION);
+  assert.equal(DEFAULT_PROTOCOL_VERSION, python("profile.py", "PUBLISHED_PROTOCOL_VERSION"));
 });
 
 test("the npm package states the profile and the Operations version", () => {

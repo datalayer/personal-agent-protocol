@@ -71,7 +71,16 @@ import {
   buildPapReactor,
   challengeParameters,
   companyIdentifier,
+  companyResource,
   companySessionVersion,
+  listedReport,
+  listsOfflineAccess,
+  protectedResourceMetadataUrl,
+  versionDefines,
+  LISTED_TASK_ID,
+  LISTED_TASKS_SINCE,
+  MAX_LISTED_TASKS,
+  OFFLINE_ACCESS_SCOPE,
   conversationEndpoint,
   delegationClaims,
   discoverCompany,
@@ -464,6 +473,7 @@ export class Context {
       organization: (await this.company()).document.organization,
       dpopSigningAlgs: metadata.dpop_signing_alg_values_supported,
       pairwiseUserId: session.sub,
+      scopesSupported: metadata.scopes_supported,
     });
     await this.driver.approveDevice(started.userCode, { account: account ?? this.driver.accounts[0], scopes: granted });
     for (let attempt = 0; attempt < 10; attempt += 1) {
@@ -491,6 +501,7 @@ export class Context {
       tenantId: this.tenantId,
       dpopSigningAlgs: metadata.dpop_signing_alg_values_supported,
       pairwiseUserId: session.sub,
+      scopesSupported: metadata.scopes_supported,
       // Pushed whenever the issuer takes PAR, as 1.0 asks (§4.2, RFC 9126).
       pushedAuthorizationRequestEndpoint: metadata.pushed_authorization_request_endpoint,
       requirePushedAuthorizationRequests: metadata.require_pushed_authorization_requests,
@@ -514,6 +525,7 @@ export class Context {
       ...(metadata.revocation_endpoint ? { revocationEndpoint: metadata.revocation_endpoint } : {}),
       dpopSigningAlgs: metadata.dpop_signing_alg_values_supported,
       pairwiseUserId: user,
+      scopesSupported: metadata.scopes_supported,
     };
   }
 
@@ -962,6 +974,35 @@ caseFor("lifecycle.signed-out-challenge")(async (ctx) => {
   check("scope" in challenge && !("error" in challenge), "the challenge names scopes only");
   const error = await refused(ctx.agent.api.call("GET", url, { session }), "a signed-out read");
   check(error.code === "insufficient_scope", "the SDK reads it as insufficient_scope");
+});
+
+caseFor("lifecycle.offline-access-kept-from-resources")(async (ctx) => {
+  // `offline_access` is the issuer's alone (§4.4): no resource lists it, no challenge names it,
+  // and a sign-in that asks for it grants account scopes and a refresh token.
+  const company = await ctx.company();
+  const listed = await ctx.send("GET", protectedResourceMetadataUrl(companyResource(company)));
+  if (listed.status === 200) {
+    check(
+      !((await listed.json()).scopes_supported ?? []).includes(OFFLINE_ACCESS_SCOPE),
+      "protected resource metadata doesn't list offline_access",
+    );
+  }
+  const user = ctx.newUser();
+  const session = await ctx.session(user);
+  const url = ctx.url(ctx.scenario.read_path);
+  const response = await ctx.send("GET", url, { headers: await ctx.auth(session, "GET", url) });
+  const challenge = challengeParameters(response.headers.get("www-authenticate") ?? "");
+  check(
+    !String(challenge.scope ?? "").split(" ").includes(OFFLINE_ACCESS_SCOPE),
+    "a challenge never names offline_access",
+  );
+  const metadata = await ctx.metadata();
+  if (!listsOfflineAccess(metadata)) return;
+  // The issuer lists it: the SDK asked for it, and the sign-in gave a refresh token and account
+  // scopes, never offline_access alone.
+  const signed = await ctx.signIn(user, session);
+  check(signed.token.scopes.length > 0, "the sign-in grants at least one account scope");
+  check(!signed.token.scopes.includes(OFFLINE_ACCESS_SCOPE), "offline_access is no scope granted");
 });
 
 caseFor("lifecycle.sign-in-scopes")(async (ctx) => {
@@ -2155,6 +2196,121 @@ caseFor("protocol.feedback-report")(async (ctx) => {
   await expectRefusal(await post({ ...report, task: "x".repeat(201) }), 400, "invalid_request", "too long");
   const bare = await ctx.send("POST", endpoint, { headers: { "Content-Type": "application/json" }, body: "{}" });
   await expectRefusal(bare, 400, "invalid_session", "a report needs the Session header");
+});
+
+/** Whether the suite runs at a version that defines listed tasks (§3.4, §9.3). */
+function listsTasks(ctx) {
+  return versionDefines(ctx.profile, LISTED_TASKS_SINCE);
+}
+
+async function postReport(ctx, session, endpoint, body) {
+  return ctx.send("POST", endpoint, {
+    headers: { ...(await ctx.auth(session, "POST", endpoint)), "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+caseFor("protocol.feedback-listed-tasks")(async (ctx) => {
+  // `feedback.tasks` as §9.3 writes it, and a report that names listed tasks: 202. Before
+  // 1.1, which defines them, the tasks response carries none (§3.4).
+  const session = await ctx.session(ctx.newUser());
+  const endpoint = await feedbackEndpointOf(ctx, session);
+  const listedAt = tasksEndpoint((await ctx.company()).document);
+  const answered = await ctx.send("GET", listedAt, { headers: await ctx.auth(session, "GET", listedAt) });
+  const body = await answered.json();
+  const listed = body.feedback?.tasks;
+  if (!listsTasks(ctx)) {
+    check(listed === undefined, `feedback.tasks is not sent at ${ctx.profile}, which doesn't define it`);
+    return;
+  }
+  if (!Array.isArray(listed) || listed.length === 0) throw new SkipCase("the company lists no feedback tasks");
+  check(
+    listed.length <= MAX_LISTED_TASKS && listed.every((task) => typeof task === "object" && task !== null && !Array.isArray(task)),
+    "at most 50 tasks, each an object",
+  );
+  const ids = listed.map((task) => task.id);
+  check(
+    ids.every((id) => typeof id === "string" && LISTED_TASK_ID.test(id)),
+    "an id is lowercase letters, digits, - and _, at most 64 characters",
+  );
+  check(new Set(ids).size === ids.length, "each id is unique in the list");
+  check(
+    listed.every((task) => typeof task.task === "string" && task.task.length > 0 && task.task.length <= 200),
+    "a task is a phrase of at most 200 characters",
+  );
+  const excluded = new Set((body.excluded_tasks ?? []).map((task) => String(task.task ?? "").toLowerCase()));
+  check(!listed.some((task) => excluded.has(task.task.toLowerCase())), "no task is both listed and excluded");
+  for (const taskIds of [ids.slice(0, 1), ids.slice(0, 2), [...ids.slice(0, 1), "conformance-not-listed"]]) {
+    const accepted = await postReport(ctx, session, endpoint, { task_ids: taskIds });
+    check(accepted.status === 202, `a report of listed tasks is 202, got ${accepted.status}`);
+  }
+  // The SDK reads the same list, and reports by ID.
+  const tasks = await new TasksClient({ transport: ctx.agent.transport }).get((await ctx.company()).document, {
+    session,
+    fresh: true,
+  });
+  check(
+    JSON.stringify(tasks.listedTasks.map((task) => task.id)) === JSON.stringify(ids),
+    "the SDK reads the listed tasks",
+  );
+  const reported = await new FeedbackClient({ transport: ctx.agent.transport }).report(
+    endpoint,
+    listedReport(...ids.slice(0, 2)),
+    { session },
+  );
+  check(reported === undefined, "the SDK's report by ID is accepted");
+});
+
+caseFor("protocol.feedback-report-forms")(async (ctx) => {
+  // A report has one form or the other: anything else is `invalid_request` (§9.3). Before 1.1
+  // it has `task` and `description`, and `task_ids` alone is malformed.
+  const session = await ctx.session(ctx.newUser());
+  const endpoint = await feedbackEndpointOf(ctx, session);
+  const freeText = { task: "Conformance task", description: "Not offered." };
+  if (!listsTasks(ctx)) {
+    for (const [label, body] of [
+      ["neither field", {}],
+      ["task_ids alone", { task_ids: ["conformance-not-listed"] }],
+    ]) {
+      await expectRefusal(await postReport(ctx, session, endpoint, body), 400, "invalid_request", label);
+    }
+    return;
+  }
+  for (const [label, body] of [
+    ["both forms", { ...freeText, task_ids: ["conformance-not-listed"] }],
+    ["neither form", {}],
+    ["an empty task_ids", { task_ids: [] }],
+    ["an id named twice", { task_ids: ["conformance-not-listed", "conformance-not-listed"] }],
+  ]) {
+    await expectRefusal(await postReport(ctx, session, endpoint, body), 400, "invalid_request", label);
+  }
+  // IDs the company doesn't list are ignored: the list can change during a Session.
+  const unknown = await postReport(ctx, session, endpoint, { task_ids: ["conformance-not-listed"] });
+  check(unknown.status === 202, `unknown IDs are ignored with 202: ${unknown.status}`);
+});
+
+caseFor("protocol.listed-tasks-not-at-10")(async (ctx) => {
+  // A request that names 1.0 is handled as 1.0 defines (§3.4): no `feedback.tasks`, and a
+  // report needs `task` and `description`.
+  if (parseVersion(ctx.profile)[0] !== 1) {
+    throw new SkipCase(`the suite runs at ${ctx.profile}, where 1.0 is not served`);
+  }
+  const started = await ctx.session(ctx.newUser());
+  const session = PapSession.fromJson({ ...started.toJson(), protocol_version: "1.0" });
+  const endpoint = tasksEndpoint((await ctx.company()).document);
+  if (endpoint === undefined) throw new SkipCase("the company lists no tasks endpoint");
+  const answered = await ctx.send("GET", endpoint, { headers: await ctx.auth(session, "GET", endpoint) });
+  check(answered.status === 200, `a 1.0 request is served, got ${answered.status}`);
+  const feedback = (await answered.json()).feedback;
+  if (feedback === undefined || feedback === null) {
+    throw new SkipCase("the company's tasks response lists no feedback endpoint");
+  }
+  check(!("tasks" in feedback), "feedback.tasks is not sent to a request that names 1.0");
+  const byId = await postReport(ctx, session, feedback.endpoint, { task_ids: ["conformance-not-listed"] });
+  await expectRefusal(byId, 400, "invalid_request", "task_ids alone, in 1.0");
+  const freeText = { task: "Conformance task", description: "Not offered.", task_ids: ["x"] };
+  const accepted = await postReport(ctx, session, feedback.endpoint, freeText);
+  check(accepted.status === 200 || accepted.status === 202, "in 1.0, task_ids is a member it ignores");
 });
 
 caseFor("conversations.read-fields")(async (ctx) => {

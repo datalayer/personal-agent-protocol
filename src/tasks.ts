@@ -39,11 +39,14 @@ import { PersonalAgentProtocolError, TransportError } from "./errors.js";
 import { parseJsonStrict } from "./json.js";
 import { DEFAULT_CACHE_BOUNDS, cacheLifetime, checkCacheBounds, readLimited, type CacheBounds } from "./limits.js";
 import {
+  LISTED_TASKS_SINCE,
   parseTasksResponse,
   usableSkills,
+  versionDefines,
   type DiscoveredCompany,
   type DiscoveryDocument,
   type ExcludedTask,
+  type ListedTask,
   type SkillEntry,
   type TasksResponse,
 } from "./models.js";
@@ -81,6 +84,23 @@ export interface SessionTasks {
   readonly skills: readonly SkillEntry[];
   /** Where to report a task that can't be done (§9.3), when the Company takes feedback. */
   readonly feedbackEndpoint?: string;
+  /**
+   * The tasks the Company already knows can't be done, each with the ID to report it by
+   * (§9.3): `feedback.tasks`, at most 50. Whether the User's task is one of them is the agent's
+   * judgment, since each `task` is a phrase; a match is reported with `listedReport(id, ...)`,
+   * not described in free text. Always empty before 1.1, which defines them: for a Session that
+   * names 1.0, or a Company whose document is 1.0.
+   */
+  readonly listedTasks: readonly ListedTask[];
+}
+
+/** A tasks response without `feedback.tasks`, as a version before 1.1 reads it. */
+function withoutListedTasks(payload: unknown): unknown {
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return payload;
+  const feedback = (payload as Record<string, unknown>).feedback;
+  if (typeof feedback !== "object" || feedback === null || Array.isArray(feedback)) return payload;
+  const { tasks: _tasks, ...rest } = feedback as Record<string, unknown>;
+  return { ...(payload as Record<string, unknown>), feedback: rest };
 }
 
 const EMPTY: TasksResponse = Object.freeze({ excluded_tasks: Object.freeze([]) as readonly ExcludedTask[] });
@@ -96,6 +116,7 @@ function sessionTasks(session: string, endpoint?: string, response?: TasksRespon
     excludedTasks: [...kept.excluded_tasks],
     skills: endpoint === undefined ? [] : usableSkills(kept, endpoint),
     ...(feedback === undefined ? {} : { feedbackEndpoint: feedback }),
+    listedTasks: [...(kept.feedback?.tasks ?? [])],
   });
 }
 
@@ -171,7 +192,17 @@ export class TasksClient {
       try {
         const bytes = await readLimited(response, this.#maxResponseBytes);
         if (bytes.byteLength <= this.#maxResponseBytes) {
-          const payload = parseJsonStrict(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+          let payload = parseJsonStrict(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+          if (
+            !(
+              versionDefines(session.protocolVersion, LISTED_TASKS_SINCE) &&
+              versionDefines(document.protocol_version, LISTED_TASKS_SINCE)
+            )
+          ) {
+            // Listed tasks are 1.1's: at 1.0 the field is one this version doesn't define,
+            // and is ignored (§3.4).
+            payload = withoutListedTasks(payload);
+          }
           tasks = sessionTasks(session.sid, endpoint, parseTasksResponse(payload));
         }
       } catch {

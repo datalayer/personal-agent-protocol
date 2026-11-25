@@ -2,7 +2,7 @@
 #
 # BSD 3-Clause License
 
-"""Feedback: telling a company what its users couldn't do through the protocol (§8).
+"""Feedback: telling a company what its users couldn't do through the protocol (§9.3).
 
 A company that wants to know lists `feedback.endpoint` in its tasks response,
 which the agent gets per Session from `tasks.endpoint` (§9, `TasksClient`).
@@ -22,11 +22,24 @@ if endpoint is not None:
     )
 ```
 
-The report describes the task, never the user: no names, contact details,
-order or account numbers (SHOULD NOT), and never a secret (MUST NOT). The
-Session already tells the company which personal agent and which user sent
-it. Errors are reported, never retried here: send one report per task, not
-one per attempt.
+From 1.1 a company can list the tasks it already knows can't be done
+(`SessionTasks.listed_tasks`, each an `id` and a `task` phrase). When the user's task
+matches one, the agent reports its ID instead of describing it, and may gather the IDs
+of a Session into one report, sent before the Session ends:
+
+```python
+matched = [listed.id for listed in tasks.listed_tasks if is_the_users_task(listed.task)]
+if matched:
+    await FeedbackClient(transport=transport).report(
+        endpoint, FeedbackReport.listed(*matched), session=session
+    )
+```
+
+A report has one form or the other, never both. A free-text report describes the
+task, never the user: no names, contact details, order or account numbers (SHOULD
+NOT), and never a secret (MUST NOT). The Session already tells the company which
+personal agent and which user sent it. Errors are reported, never retried here: report
+each task once, not once per attempt.
 """
 
 from __future__ import annotations
@@ -34,11 +47,23 @@ from __future__ import annotations
 import json
 
 import httpx
-from pydantic import ConfigDict, Field
+from pydantic import (
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from .errors import PersonalAgentProtocolError
 from .json import loads_strict
-from .models import Alternative, ProtocolModel
+from .models import (
+    LISTED_TASK_ID,
+    LISTED_TASKS_SINCE,
+    Alternative,
+    ProtocolModel,
+    version_defines,
+)
 from .refusals import refusal_code, refusal_details
 from .sessions import AccessToken, PapSession
 from .transport import SessionHttpClient
@@ -54,15 +79,54 @@ class FeedbackError(PersonalAgentProtocolError):
 
 
 class FeedbackReport(ProtocolModel):
-    """One report of a task the company offers no way to do through the protocol (§8).
+    """One report of what the company offers no way to do through the protocol (§9.3).
 
-    Exactly these two fields: nothing about the user, no identifiers, no secret.
+    In one of two forms, never both: `task` and `description`, a task in free text
+    (nothing about the user, no identifiers, no secret), or, from 1.1, `task_ids`, the
+    IDs of one or more tasks the company lists in `feedback.tasks`, each once
+    (`FeedbackReport.listed`).
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    task: str = Field(min_length=1, max_length=FEEDBACK_TASK_MAX_LENGTH)
-    description: str = Field(min_length=1, max_length=FEEDBACK_DESCRIPTION_MAX_LENGTH)
+    task: str | None = Field(default=None, min_length=1, max_length=FEEDBACK_TASK_MAX_LENGTH)
+    description: str | None = Field(
+        default=None, min_length=1, max_length=FEEDBACK_DESCRIPTION_MAX_LENGTH
+    )
+    task_ids: tuple[str, ...] | None = None
+
+    @model_validator(mode="after")
+    def validate_form(self) -> FeedbackReport:
+        free_text = self.task is not None or self.description is not None
+        if self.task_ids is None:
+            if self.task is None or self.description is None:
+                raise ValueError("a report has task_ids, or task and description")
+            return self
+        if free_text:
+            raise ValueError("a report has task_ids, or task and description, not both")
+        if not self.task_ids:
+            raise ValueError("task_ids names at least one listed task")
+        if len(set(self.task_ids)) != len(self.task_ids):
+            raise ValueError("task_ids names each listed task once")
+        if any(not LISTED_TASK_ID.fullmatch(task_id) for task_id in self.task_ids):
+            raise ValueError("a listed task's ID is lowercase letters, digits, - and _")
+        return self
+
+    @classmethod
+    def listed(cls, *task_ids: str) -> FeedbackReport:
+        """A report of listed tasks, by their IDs from `SessionTasks.listed_tasks` (§9.3)."""
+
+        return cls(task_ids=tuple(task_ids))
+
+    @model_serializer(mode="wrap")
+    def _one_form(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        # The one form the report has, and nothing of the other: `model_dump` is the body.
+        return {name: value for name, value in handler(self).items() if value is not None}
+
+    def body(self) -> dict[str, object]:
+        """The request body: the one form the report has, and nothing else."""
+
+        return self.model_dump(mode="json")
 
 
 class FeedbackClient:
@@ -84,16 +148,29 @@ class FeedbackClient:
         session: PapSession,
         token: AccessToken | None = None,
     ) -> Alternative | None:
-        """`POST {feedback.endpoint}`: accepted, or answered with a way to do it (§8.3).
+        """`POST {feedback.endpoint}`: accepted, or answered with a way to do it (§9.3).
 
-        `202` with no body returns `None`; `200` with an alternative (§8.2) returns it,
+        `202` with no body returns `None`; `200` with an alternative (§9.2) returns it,
         as content from the company, its references for the caller to filter with
         `Alternative.usable_references`. Anything else is a `FeedbackError`. Don't
-        report a task the company lists as excluded (§8.1).
+        report a task the company lists as excluded (§9.1).
+
+        A report of listed tasks (`task_ids`) is 1.1's: `ValueError` in a Session that
+        names an earlier version, which sends a Company nothing its version doesn't
+        define (§3.4). The company answers it with `202`, and ignores IDs it no longer
+        lists.
 
         A refusal is never retried here: a 429 carries its `Retry-After` in
-        `details["retry_after"]`, and the caller waits at least that long (§4.3).
+        `details["retry_after"]`, and the caller waits at least that long (§5.6).
         """
+
+        if report.task_ids is not None and not version_defines(
+            session.protocol_version, LISTED_TASKS_SINCE
+        ):
+            raise ValueError(
+                f"listed tasks are reported by ID from {LISTED_TASKS_SINCE}: this Session "
+                f"names {session.protocol_version}"
+            )
 
         response = await self.transport.request(
             "POST",
@@ -101,7 +178,7 @@ class FeedbackClient:
             session=session,
             token=token,
             headers={"Content-Type": "application/json", "Accept": "application/json"},
-            content=json.dumps(report.model_dump(mode="json"), separators=(",", ":")).encode(),
+            content=json.dumps(report.body(), separators=(",", ":")).encode(),
         )
         if response.status_code == 202:
             return None

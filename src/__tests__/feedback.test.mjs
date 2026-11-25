@@ -169,7 +169,7 @@ test("feedback refusals carry their code and Retry-After", async () => {
 });
 
 test("a company without feedback neither lists nor accepts it", async () => {
-  const w = await world({ config: { feedback: false } });
+  const w = await world({ config: { feedback: false, feedbackTasks: [] } });
   const session = await w.start();
   const tasks = await new TasksClient({ transport: w.transport }).get(w.company, { session });
   assert.deepEqual([tasks.available, tasks.feedbackEndpoint], [true, undefined]);

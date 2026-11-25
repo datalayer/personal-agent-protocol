@@ -115,10 +115,25 @@ test("the conformance cases at 0.4 as published: TypeScript agent ↔ TypeScript
   const failed = Object.fromEntries(report.cases.filter((item) => item.outcome === "failed").map((item) => [item.id, item.message]));
   assert.deepEqual(failed, {});
   assert.equal(report.profile, "0.4");
-  // What only 1.0 defines has nothing to check at 0.4.
+  // What only 1.0 or 1.1 defines has nothing to check at 0.4.
   const skipped = report.cases.filter((item) => item.outcome === "skipped").map((item) => item.id);
-  assert.deepEqual(skipped, ["protocol.agent-protocols-described"]);
-  assert.deepEqual(report.summary, { passed: report.cases.length - 1, failed: 0, skipped: 1 });
+  assert.deepEqual(skipped.sort(), ["protocol.agent-protocols-described", "protocol.listed-tasks-not-at-10"]);
+  assert.deepEqual(report.summary, { passed: report.cases.length - 2, failed: 0, skipped: 2 });
+});
+
+test("the conformance cases at draft 1.1: TypeScript agent ↔ TypeScript company over TLS", async () => {
+  // Both sides opt in: the company serves upstream's draft 1.1 and the agent names it. There
+  // the cases the draft adds run, which the default run at 1.0 checks as 1.0 defines.
+  const versions = ["1.1"];
+  const report = await runPairing({ config: { protocolVersions: versions }, protocolVersions: versions });
+  const failed = Object.fromEntries(report.cases.filter((item) => item.outcome === "failed").map((item) => [item.id, item.message]));
+  assert.deepEqual(failed, {});
+  assert.equal(report.profile, "1.1");
+  const outcomes = Object.fromEntries(report.cases.map((item) => [item.id, item.outcome]));
+  for (const added of ["protocol.feedback-listed-tasks", "protocol.feedback-report-forms"]) {
+    assert.equal(outcomes[added], "passed");
+  }
+  assert.deepEqual(report.summary, { passed: report.cases.length, failed: 0, skipped: 0 });
 });
 
 test("the DPoP cases: TypeScript agent ↔ TypeScript company over TLS, in the world that binds", async () => {

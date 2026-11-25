@@ -38,7 +38,7 @@ import httpx
 from pydantic import Field, SecretStr, ValidationError
 from reactor import PluginPlatform  # type: ignore[import-untyped]
 
-from .auth import _scopes
+from .auth import _scopes, request_scope
 from .errors import AuthorizationError
 from .models import (
     MEDIATED_EXTENSION,
@@ -177,8 +177,12 @@ class MediatedSignInClient:
         scopes: tuple[str, ...],
         tenant_id: str,
         pairwise_user_id: str | None = None,
+        offline_access: bool = False,
     ) -> MediatedSignInResult:
         """Collect the declared fields from the user and send them with the grant.
+
+        `offline_access` asks for the `offline_access` scope when the issuer's
+        `scopes_supported` lists it (upstream's draft 1.1, §4.4). Off by default.
 
         A DPoP proof goes with the grant when the issuer's metadata lists ES256 (§4.5), by
         the DPoP key of `pairwise_user_id`, the User ID the sign-in is for, which proving
@@ -217,7 +221,9 @@ class MediatedSignInClient:
         try:
             form = {
                 "grant_type": MEDIATED_GRANT,
-                "scope": " ".join(requested),
+                "scope": request_scope(
+                    requested, metadata.scopes_supported if offline_access else None
+                ),
                 **{name: value.get_secret_value() for name, value in credentials.items()},
             }
         finally:

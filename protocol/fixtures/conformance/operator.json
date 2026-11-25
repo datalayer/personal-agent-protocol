@@ -82,6 +82,53 @@
       ]
     },
     {
+      "id": "operator.oauth-signed-vector",
+      "kind": "positive",
+      "role": "personal-agent",
+      "requirements": [
+        "PAP11-5.3-01",
+        "PAP11-5.3-02"
+      ],
+      "description": "A request to the token or pushed authorization request endpoint carries no Session header: both SDKs write this Content-Digest (RFC 9530) and these three headers, covering content-digest, and verify them over that body and no other (draft 1.1, 5.3). The key is RFC 9421's test key, B.1.4.",
+      "check": "operator_signature_oauth",
+      "input": [
+        {
+          "d": "n4Ni-HpISpVObnQMW0wOhCKROaIKqKtW_2ZYb2p9KcU",
+          "method": "POST",
+          "url": "https://manzanita.example/oauth/token",
+          "body": "grant_type=refresh_token&refresh_token=rt_example&client_id=https%3A%2F%2Fatlas.example%2Fclient.json&client_assertion_type=urn%3Aietf%3Aparams%3Aoauth%3Aclient-assertion-type%3Ajwt-bearer&client_assertion=assertion.jwt.value",
+          "signature_agent": "https://atlas.example/operator-keys.json",
+          "created": 1735689600,
+          "expires": 1735689660,
+          "nonce": "bm9uY2U"
+        },
+        {
+          "d": "n4Ni-HpISpVObnQMW0wOhCKROaIKqKtW_2ZYb2p9KcU",
+          "method": "post",
+          "url": "https://auth.manzanita.example:8443/oauth/par?tenant=eu",
+          "body": "response_type=code&scope=orders%3Aread+offline_access&client_assertion=assertion.jwt.value",
+          "signature_agent": "https://atlas.example/operator-keys.json",
+          "created": 1735689600,
+          "expires": 1735689660,
+          "nonce": "bm9uY2U"
+        }
+      ],
+      "expect": [
+        {
+          "content_digest": "sha-256=:9AN41oUiEiLM9b9qT/z1fdX42EuCgchDekytu9vxRiM=:",
+          "signature_agent": "sig1=\"https://atlas.example/operator-keys.json\"",
+          "signature_input": "sig1=(\"@authority\" \"signature-agent\";key=\"sig1\" \"@method\" \"@path\" \"@query\" \"content-digest\");created=1735689600;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";expires=1735689660;nonce=\"bm9uY2U\";tag=\"web-bot-auth\"",
+          "signature": "sig1=:BnuBa5MDsKNeqwmqFGeZxNoNZknjqtYjEkoKLYtLgJGzzWN2NgxGZrrTS9adc/jwQaualESJbSxZkx1dXtNdDQ==:"
+        },
+        {
+          "content_digest": "sha-256=:vcVK4NF5SuMYJdazAplf/yij+pD3Di5XWQ5CltA/HNs=:",
+          "signature_agent": "sig1=\"https://atlas.example/operator-keys.json\"",
+          "signature_input": "sig1=(\"@authority\" \"signature-agent\";key=\"sig1\" \"@method\" \"@path\" \"@query\" \"content-digest\");created=1735689600;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";expires=1735689660;nonce=\"bm9uY2U\";tag=\"web-bot-auth\"",
+          "signature": "sig1=:0eUI3dAoaxAvse4Y2POiO6j/Y4Tah3PKP6t52X7oTzM5NzZqm/HDXp5oPsizjq7XporH+JGto12aQzgcuFp5Bg==:"
+        }
+      ]
+    },
+    {
       "id": "operator.signed-read",
       "kind": "positive",
       "role": "company",

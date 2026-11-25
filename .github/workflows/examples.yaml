@@ -72,7 +72,25 @@ jobs:
       - name: Install this SDK with the latest Agent Runtimes release
         if: env.AGENT_RUNTIMES_REF == ''
         # `ui`: the AG-UI adapter its sign-in-display example draws through.
-        run: uv pip install "agent-runtimes[a2a,ui]>=1.3.114" .
+        #
+        # A pre-release of this SDK (X.Y.ZaN, bN, rcN) is accepted by no released Agent
+        # Runtimes: a pin such as `<1.1` leaves out 1.1.0a1 (PEP 440), and a release never
+        # depends on a pre-release. A pre-release adds to the API without breaking it, so
+        # the latest Agent Runtimes release is installed with the SDK release it pins, and
+        # this checkout then replaces that SDK alone: its applications are built on the
+        # pre-release's code. A release (X.Y.Z) is resolved together with Agent Runtimes,
+        # so a pin that refuses it fails here.
+        run: |
+          set -euo pipefail
+          version="$(python -c "import re;print(re.search(r'__version__\s*=\s*[\"\']([^\"\']+)', open('personal_agent_protocol/__version__.py').read())[1])")"
+          if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            uv pip install "agent-runtimes[a2a,ui]>=1.3.114" .
+          else
+            echo "personal-agent-protocol $version is a pre-release: installed over the release Agent Runtimes pins"
+            uv pip install "agent-runtimes[a2a,ui]>=1.3.114"
+            uv pip install --no-deps --reinstall-package personal-agent-protocol .
+            python -c "from importlib.metadata import version; assert version('personal-agent-protocol') == '$version', version('personal-agent-protocol')"
+          fi
       - name: Build every Agent Runtimes PAP application of that release
         if: env.AGENT_RUNTIMES_REF == ''
         run: |

@@ -262,6 +262,101 @@ export interface ClientPolicy {
    * service.
    */
   allowsResource?(clientId: string, resource: string): Promise<boolean>;
+  /**
+   * A policy may also accept the agents an operator speaks for (§5.3; guides, *Accepting
+   * personal agents your bot defenses verify*): asked for a `clientId` that `allows` refuses,
+   * when the request carries a Web Bot Auth signature, with its `Signature-Agent` URL. It is
+   * asked first before the operator's directory is read, so the company reads only directories
+   * of operators it knows, then the agent is accepted for that request once the signature
+   * verified. Which `client_id` values an operator speaks for is the company's policy: a
+   * verified signature proves control of the operator's key, never of a `client_id`, whose
+   * client assertion or Session JWT is verified all the same. Without the method, an operator
+   * signature accepts no one. `OperatorVerifiedAgents` is such a policy.
+   */
+  allowsOperator?(clientId: string, operator: string): Promise<boolean>;
+}
+
+export interface OperatorVerifiedAgentsOptions {
+  /** The allowlist of `client_id` values. */
+  readonly agents?: Iterable<string>;
+  /**
+   * The `Signature-Agent` URL of each operator the company trusts, mapped to the `client_id`
+   * values it speaks for, or to `null` for every `client_id` on the host of that URL.
+   */
+  readonly operators?: Readonly<Record<string, Iterable<string> | null>>;
+  /** Refused, whatever allows them or speaks for them. */
+  readonly blocked?: Iterable<string>;
+}
+
+/**
+ * A policy that accepts the personal agents it lists and the ones a verified operator speaks
+ * for (§5.3; guides, *Accepting personal agents your bot defenses verify*), and never one it
+ * blocks.
+ *
+ * `agents` is the allowlist of `client_id` values. `operators` maps the `Signature-Agent` URL
+ * of each operator the company trusts to the `client_id` values it speaks for, or to `null` for
+ * every `client_id` on the host of that URL: never `null` for a host others can publish on,
+ * such as a hosting provider's shared domain, unless the operator controls every client there.
+ * `blocked` wins over both.
+ *
+ * An agent accepted by its operator alone is accepted on requests that carry the operator's
+ * verified signature: at the pushed authorization request, token, device authorization and
+ * revocation endpoints, and with the Session header. The authorization endpoint is opened by
+ * the User's browser, with no signature, so such an agent signs in directly only through a
+ * Pushed Authorization Request: set `pushedAuthorizationRequests: "required"`, and the company
+ * decides before its sign-in page is shown.
+ */
+export class OperatorVerifiedAgents implements ClientPolicy {
+  readonly agents: ReadonlySet<string>;
+  readonly operators: ReadonlyMap<string, ReadonlySet<string> | null>;
+  readonly blocked: ReadonlySet<string>;
+
+  constructor(options: OperatorVerifiedAgentsOptions = {}) {
+    this.agents = new Set(options.agents ?? []);
+    this.operators = new Map(
+      Object.entries(options.operators ?? {}).map(([operator, speaksFor]) => [
+        operator,
+        speaksFor === null ? null : new Set(speaksFor),
+      ]),
+    );
+    this.blocked = new Set(options.blocked ?? []);
+    for (const operator of this.operators.keys()) {
+      if (httpsHost(operator) === undefined) {
+        throw new RangeError("an operator is named by its HTTPS Signature-Agent URL");
+      }
+    }
+  }
+
+  async allows(clientId: string): Promise<boolean> {
+    return !this.blocked.has(clientId) && this.agents.has(clientId);
+  }
+
+  async allowsOperator(clientId: string, operator: string): Promise<boolean> {
+    const speaksFor = this.operators.get(operator);
+    if (this.blocked.has(clientId) || speaksFor === undefined) return false;
+    if (speaksFor !== null) return speaksFor.has(clientId);
+    const host = httpsHost(operator);
+    return host !== undefined && httpsHost(clientId) === host;
+  }
+
+  async allowsSignIn(_clientId: string, _grantType: string): Promise<boolean> {
+    return true;
+  }
+
+  async allowsResource(_clientId: string, _resource: string): Promise<boolean> {
+    return true;
+  }
+}
+
+/** The host of an HTTPS URL, or `undefined` for anything else. */
+function httpsHost(value: string): string | undefined {
+  if (!value.startsWith("https://")) return undefined;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname !== "" ? url.hostname : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

@@ -185,7 +185,7 @@ class PapSession:
     #: The protocol version the Session uses the Company at (§3.4), named in
     #: `Poppy-Version` on every request with the Session header, the same for its whole
     #: life: the version this SDK implements, compatible with the one chosen at discovery
-    #: (`DiscoveredCompany.session_version`); the 1.0 draft unless the Personal Agent
+    #: (`DiscoveredCompany.session_version`); 1.0 as published unless the Personal Agent
     #: opted into 0.4.
     protocol_version: str = DEFAULT_PROTOCOL_VERSION
     #: The extensions the Session uses with the Company, one version each (§3.3, §3.4):

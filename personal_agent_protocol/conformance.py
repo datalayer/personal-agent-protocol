@@ -3008,9 +3008,10 @@ async def _feedback(ctx: ConformanceContext, _: FixtureCase) -> None:
     expect_refusal(bare, 400, "invalid_session", "a report needs the Session header")
 
 
-def _needs_listed_tasks(ctx: ConformanceContext) -> None:
-    if not version_defines(ctx.profile, LISTED_TASKS_SINCE):
-        raise SkipCase(f"listed tasks are {LISTED_TASKS_SINCE}'s: the suite runs at {ctx.profile}")
+def _lists_tasks(ctx: ConformanceContext) -> bool:
+    """Whether the suite runs at a version that defines listed tasks (§3.4, §9.3)."""
+
+    return version_defines(ctx.profile, LISTED_TASKS_SINCE)
 
 
 async def _post_report(
@@ -3026,18 +3027,28 @@ async def _post_report(
 
 @case("protocol.feedback-listed-tasks")
 async def _feedback_listed_tasks(ctx: ConformanceContext, _: FixtureCase) -> None:
-    """`feedback.tasks` as §9.3 writes it, and a report that names listed tasks: 202."""
+    """`feedback.tasks` as §9.3 writes it, and a report that names listed tasks: 202. Before
+    1.1, which defines them, the tasks response carries none (§3.4)."""
 
-    _needs_listed_tasks(ctx)
     session = await ctx.session(ctx.new_user())
     endpoint = await _feedback_endpoint(ctx, session)
     listed_at = cast(str, tasks_endpoint((await ctx.company()).document))
     answered = await ctx.send("GET", listed_at, headers=await ctx.auth(session, "GET", listed_at))
     body = answered.json()
     listed = body.get("feedback", {}).get("tasks")
+    if not _lists_tasks(ctx):
+        check(
+            listed is None, f"feedback.tasks is not sent at {ctx.profile}, which doesn't define it"
+        )
+        return
     if not listed:
         raise SkipCase("the company lists no feedback tasks")
-    check(isinstance(listed, list) and len(listed) <= MAX_LISTED_TASKS, "at most 50 tasks")
+    check(
+        isinstance(listed, list)
+        and len(listed) <= MAX_LISTED_TASKS
+        and all(isinstance(task, dict) for task in listed),
+        "at most 50 tasks, each an object",
+    )
     ids = [task.get("id") for task in listed]
     check(
         all(isinstance(task_id, str) and LISTED_TASK_ID.fullmatch(task_id) for task_id in ids),
@@ -3072,20 +3083,31 @@ async def _feedback_listed_tasks(ctx: ConformanceContext, _: FixtureCase) -> Non
 
 @case("protocol.feedback-report-forms")
 async def _feedback_report_forms(ctx: ConformanceContext, _: FixtureCase) -> None:
-    """A report has one form or the other: anything else is `invalid_request` (§9.3)."""
+    """A report has one form or the other: anything else is `invalid_request` (§9.3).
+    Before 1.1 it has `task` and `description`, and `task_ids` alone is malformed."""
 
-    _needs_listed_tasks(ctx)
     session = await ctx.session(ctx.new_user())
     endpoint = await _feedback_endpoint(ctx, session)
     free_text = {"task": "Conformance task", "description": "Not offered."}
-    for label, body in (
+    if not _lists_tasks(ctx):
+        before: tuple[tuple[str, dict[str, Any]], ...] = (
+            ("neither field", {}),
+            ("task_ids alone", {"task_ids": ["conformance-not-listed"]}),
+        )
+        for label, report in before:
+            expect_refusal(
+                await _post_report(ctx, session, endpoint, report), 400, "invalid_request", label
+            )
+        return
+    forms: tuple[tuple[str, dict[str, Any]], ...] = (
         ("both forms", {**free_text, "task_ids": ["conformance-not-listed"]}),
         ("neither form", {}),
         ("an empty task_ids", {"task_ids": []}),
         ("an id named twice", {"task_ids": ["conformance-not-listed", "conformance-not-listed"]}),
-    ):
+    )
+    for label, report in forms:
         expect_refusal(
-            await _post_report(ctx, session, endpoint, body), 400, "invalid_request", label
+            await _post_report(ctx, session, endpoint, report), 400, "invalid_request", label
         )
     # IDs the company doesn't list are ignored: the list can change during a Session.
     unknown = await _post_report(ctx, session, endpoint, {"task_ids": ["conformance-not-listed"]})

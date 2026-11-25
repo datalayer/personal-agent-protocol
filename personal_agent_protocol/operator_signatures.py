@@ -260,6 +260,11 @@ class WebBotAuthSigner:
     `signature_agent` is the HTTPS URL that serves the key in `operator_directory`.
     It signs for every tenant with its one key: a host with a key per tenant contributes
     a signer of its own over `sign_operator_request`.
+
+    `oauth_endpoints` also signs the agent's requests to the Company's pushed
+    authorization request, token, device authorization and revocation endpoints, over
+    their content digest (upstream's draft 1.1, §5.3). Off by default: it is not in 1.0
+    as published, and may change until upstream publishes 1.1.
     """
 
     def __init__(
@@ -270,9 +275,12 @@ class WebBotAuthSigner:
         now: Callable[[], datetime] | None = None,
         random_bytes: Callable[[int], bytes] = secrets.token_bytes,
         lifetime: timedelta = OPERATOR_SIGNATURE_LIFETIME,
+        oauth_endpoints: bool = False,
     ) -> None:
         if lifetime <= timedelta(0):
             raise ValueError("an operator signature's lifetime must be positive")
+        #: Whether `sign_oauth_request` signs requests to the OAuth endpoints with it.
+        self.signs_oauth_endpoints = oauth_endpoints
         self.key = key
         self.signature_agent = signature_agent
         self.now = now or (lambda: datetime.now(timezone.utc))
@@ -308,8 +316,11 @@ async def sign_oauth_request(
     reactor: PluginPlatform, request: httpx.Request, *, tenant_id: str
 ) -> None:
     """Sign a request to the Company's pushed authorization request, token, device
-    authorization or revocation endpoint as its operator (§5.3), when the host contributes
-    `pap.operatorSigner`; nothing otherwise.
+    authorization or revocation endpoint as its operator (§5.3 of upstream's draft 1.1),
+    when the host contributes a `pap.operatorSigner` that says it signs them
+    (`signs_oauth_endpoints`, as `WebBotAuthSigner(oauth_endpoints=True)` does); nothing
+    otherwise. Off by default: 1.0 as published signs only requests with the Session
+    header, and the draft can change until upstream publishes 1.1.
 
     Such a request carries no Session header, so the signature covers `content-digest`,
     which this adds over the body as built: that binds the signature to the client
@@ -318,7 +329,7 @@ async def sign_oauth_request(
     """
 
     operator = optional_contribution(reactor, OPERATOR_SIGNERS, "operator signer")
-    if operator is None:
+    if operator is None or getattr(operator, "signs_oauth_endpoints", False) is not True:
         return
     digest = content_digest(request.content)
     signed = await cast(OperatorSigner, operator).sign(

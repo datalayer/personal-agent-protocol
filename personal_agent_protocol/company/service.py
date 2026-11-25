@@ -686,7 +686,8 @@ class CompanyConfig:
     #: `poppy.json` is that version's document, and each other version's document is
     #: served at `/poppy/{version}.json` and listed in `supported_versions`. A request
     #: whose `Poppy-Version` is none of them is `version_unsupported`. By default the
-    #: 1.0 draft (`DEFAULT_PROTOCOL_VERSION`); `("1.0", "0.4")` also serves 0.4 as
+    #: 1.0 as published (`DEFAULT_PROTOCOL_VERSION`); `("1.1",)` serves upstream's
+    #: unpublished draft 1.1 instead, which may change; `("1.0", "0.4")` also serves 0.4 as
     #: published, and `("0.4",)` 0.4 only.
     protocol_versions: tuple[str, ...] = (DEFAULT_PROTOCOL_VERSION,)
     #: Whether a conversation continues in a Session on other protocol or extension versions

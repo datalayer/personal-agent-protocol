@@ -78,11 +78,12 @@ class DiscoveryClient:
         allow_ports: bool = False,
     ) -> None:
         """`protocol_versions` are the protocol versions this Personal Agent implements
-        (§3.4): `SUPPORTED_PROTOCOL_VERSIONS`, draft 1.1, by default, which uses a Company
-        whose document is 1.0 as 1.0 defines. Name `("1.0",)` to stay a 1.0 agent with every
-        Company, and `PROTOCOL_PROFILE` among them to use Companies that serve only 0.4 as
-        published, such as `("0.4", "1.1")`; the newest compatible version a Company serves
-        is chosen.
+        (§3.4): `SUPPORTED_PROTOCOL_VERSIONS`, 1.0 as published, by default, which uses a
+        Company whose document is a later 1.x as 1.0 defines. Name `DRAFT_PROTOCOL_VERSION`,
+        `("1.1",)`, to use what upstream's unpublished draft 1.1 adds with Companies that
+        serve it, and `PROTOCOL_PROFILE` among them to use Companies that serve only 0.4
+        as published, such as `("0.4", "1.0")`; the newest compatible version a Company
+        serves is chosen.
 
         `allow_ports` uses a Company on a port other than 443, such as
         `shop.example:8443` for testing: from 1.0 its `organization.domain` includes the

@@ -303,7 +303,7 @@ async def test_a_page_fetched_without_a_browser_carries_the_session_header_signe
         True,
     )
     (request,) = site.requests
-    assert "poppy-session" in request.headers and request.headers["poppy-version"] == "1.1"
+    assert "poppy-session" in request.headers and request.headers["poppy-version"] == "1.0"
     assert "authorization" not in request.headers and "dpop" not in request.headers
     (caller,) = site.sessions
     assert caller is not None and caller.sid == session.sid and caller.account_id is None

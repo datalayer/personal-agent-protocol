@@ -251,7 +251,7 @@ def test_a_persisted_session_without_its_version_restores_as_0_4() -> None:
         client_id=CLIENT_ID,
         tenant_id="tenant-one",
     )
-    assert fresh.protocol_version == "1.1"
+    assert fresh.protocol_version == "1.0"
 
 
 def test_a_session_id_is_at_least_128_random_bits() -> None:

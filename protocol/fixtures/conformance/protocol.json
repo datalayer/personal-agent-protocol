@@ -2402,7 +2402,7 @@
         "PAP11-9.3-02",
         "PAP11-9.3-03"
       ],
-      "description": "At 1.1, feedback.tasks lists at most 50 tasks, each an id and a task, ids unique, none also excluded; a report that names them by task_ids, an id the company doesn't list among them, is 202 (draft 1.1, 9, 9.3)."
+      "description": "At 1.1, feedback.tasks lists at most 50 tasks, each an id and a task, ids unique, none also excluded; a report that names them by task_ids, an id the company doesn't list among them, is 202 (draft 1.1, 9, 9.3). At a version that doesn't define them, the tasks response carries none (3.4)."
     },
     {
       "id": "protocol.feedback-report-forms",
@@ -2411,7 +2411,7 @@
       "requirements": [
         "PAP11-9.3-03"
       ],
-      "description": "At 1.1 a report has task_ids, or task and description: both forms, neither, an empty task_ids, or an id named twice is invalid_request (draft 1.1, 9.3)."
+      "description": "At 1.1 a report has task_ids, or task and description: both forms, neither, an empty task_ids, or an id named twice is invalid_request (draft 1.1, 9.3). Before 1.1 a report has task and description, and task_ids alone is invalid_request."
     },
     {
       "id": "protocol.listed-tasks-not-at-10",

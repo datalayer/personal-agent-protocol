@@ -2,11 +2,12 @@
 #
 # BSD 3-Clause License
 
-"""What draft 1.1 adds to 1.0 (upstream 589743a, 2026-11-18), both sides, in one process;
-`src/__tests__/draft-11.test.mjs` ports it.
+"""What upstream's unpublished draft 1.1 adds to 1.0 (589743a, 2026-11-18), both sides, in
+one process; `src/__tests__/draft-11.test.mjs` ports it.
 
-Draft 1.1 is the default version, and 1.0 stays available when named: from 1.0 each side
-sends only what the other's version defines (§3.4). `offline_access` (§4.4, §4.7),
+1.0 as published stays the default version, and draft 1.1 is used only when named: from
+1.0 each side sends only what the other's version defines (§3.4). Each addition is off
+until a caller turns it on. `offline_access` (§4.4, §4.7),
 operator signatures at the authorization server (§5.3), replacing a User ID (§5.1), and
 listed tasks in feedback (§9, §9.3).
 """
@@ -163,48 +164,54 @@ def test_a_version_defines_what_an_earlier_minor_added() -> None:
 
 
 @pytest.mark.asyncio
-async def test_each_side_names_the_version_both_define() -> None:
-    """The default agent (1.1) at a company whose document is 1.0 names 1.0, and an agent
-    that names 1.0 stays at 1.0 with a 1.1 company: nothing of 1.1 goes to a 1.0 peer."""
+async def test_10_stays_the_default_and_the_draft_is_used_when_both_sides_name_it() -> None:
+    """Nothing announces 1.1 unless asked. An agent on the default names 1.0 at every
+    company; one that names the draft uses it only where the company's document is 1.1,
+    so nothing of 1.1 goes to a 1.0 peer (§3.4)."""
 
     world = World()
+    assert CONFIG.protocol_versions == ("1.0",)
     default = await _session(world)
-    assert (world.company.protocol_version, default.protocol_version) == ("1.1", "1.1")
-    published = await _session(world, "1.0")
-    assert (world.company.protocol_version, published.protocol_version) == ("1.1", "1.0")
+    assert (world.company.protocol_version, default.protocol_version) == ("1.0", "1.0")
+    drafted = await _session(world, "1.1")
+    assert (world.company.protocol_version, drafted.protocol_version) == ("1.0", "1.0")
+    # A request that names 1.1 is compatible with 1.0, and handled as 1.0 defines (§3.4).
+    newer = replace(default, protocol_version="1.1")
+    answer = await world.transport.request("GET", f"{SHOP}/poppy/tasks", session=newer)
+    assert answer.status_code == 200 and "tasks" not in answer.json()["feedback"]
+
+    _serving(world, replace(CONFIG, protocol_versions=("1.1",)))
+    default = await _session(world)
+    assert (world.company.protocol_version, default.protocol_version) == ("1.1", "1.0")
     headers = await session_headers(
-        world.reactor, "GET", f"{SHOP}/poppy/tasks", session=published, token=None
+        world.reactor, "GET", f"{SHOP}/poppy/tasks", session=default, token=None
     )
     assert headers["Poppy-Version"] == "1.0"
-    # Both are served by the 1.1 company, each in its own version.
-    for session in (default, published):
+    drafted = await _session(world, "1.1")
+    assert (world.company.protocol_version, drafted.protocol_version) == ("1.1", "1.1")
+    for session in (default, drafted):
         answer = await world.transport.request("GET", f"{SHOP}/poppy/tasks", session=session)
         assert answer.status_code == 200
-    _serving(world, replace(CONFIG, protocol_versions=("1.0",)))
-    at_published = await _session(world)
-    assert (world.company.protocol_version, at_published.protocol_version) == ("1.0", "1.0")
-    # A 1.0 company accepts a request that names 1.1, compatible with what it serves.
-    newer = replace(at_published, protocol_version="1.1")
-    answer = await world.transport.request("GET", f"{SHOP}/poppy/tasks", session=newer)
-    assert answer.status_code == 200
 
 
 @pytest.mark.asyncio
-async def test_the_conformance_suite_passes_at_10_over_tls() -> None:
-    """Every case passes with Manzanita serving 1.0 as published only: the suite's agent
-    names 1.0 there, and the cases 1.1 adds are skipped, never passed."""
+async def test_the_conformance_suite_passes_at_the_draft_over_tls() -> None:
+    """Every case passes with Manzanita serving draft 1.1 and the suite's agent naming it:
+    there the cases the draft adds run, which the default run at 1.0 skips."""
 
     pytest.importorskip("uvicorn")
     from personal_agent_protocol.conformance import run_conformance, select_cases
     from personal_agent_protocol.demo.sockets import served_over_tls
 
-    world = ManzanitaConformance(protocol_versions=("1.0",))
+    world = ManzanitaConformance(protocol_versions=("1.1",))
     async with served_over_tls(world.network):
         report = await run_conformance(world.context())
-    failures = [f"{r.id}: {r.message}" for r in report.results if r.outcome == "failed"]
-    assert failures == []
-    assert report.profile == "1.0"
-    assert {r.id for r in report.results} == {case.id for case in select_cases()}
+    outcomes = {r.id: r.outcome for r in report.results}
+    assert [f"{r.id}: {r.message}" for r in report.results if r.outcome == "failed"] == []
+    assert report.profile == "1.1"
+    assert set(outcomes) == {case.id for case in select_cases()}
+    for added in ("protocol.feedback-listed-tasks", "protocol.feedback-report-forms"):
+        assert outcomes[added] == "passed"
 
 
 # `offline_access` (§4.4, §4.7, §4.8) -------------------------------------------------------
@@ -364,6 +371,7 @@ async def test_offline_access_in_a_pushed_request_a_mediated_sign_in_and_no_chal
         client_id=mediated_world.atlas.client_id,
         scopes=("orders:read",),
         tenant_id=TENANT,
+        offline_access=True,
     )
     grant = next(request for request in sent if request.url.path == "/oauth/token")
     assert _form(grant)["scope"] == "orders:read offline_access"
@@ -498,11 +506,15 @@ async def test_a_signature_over_the_content_digest_binds_the_body() -> None:
     assert await verdict(good, trusts=known) == "verified" and fetched == [AGENT]
 
 
-def _signing(world: World) -> None:
-    """Atlas signs as its operator, with the key its website publishes."""
+def _signing(world: World, *, oauth_endpoints: bool = True) -> None:
+    """Atlas signs as its operator, with the key its website publishes: its requests with
+    the Session header and, turned on, those to the OAuth endpoints."""
 
     world.host.operator_signer = WebBotAuthSigner(
-        world.atlas.operator_key, signature_agent=world.atlas.operator_url, now=world.clock.now
+        world.atlas.operator_key,
+        signature_agent=world.atlas.operator_url,
+        now=world.clock.now,
+        oauth_endpoints=oauth_endpoints,
     )
     world.reactor = personal_agent_reactor(
         world.host, network=world.network, http_client=world.http
@@ -520,6 +532,15 @@ async def test_the_agent_signs_its_requests_to_the_four_oauth_endpoints() -> Non
     # No operator signer: nothing is signed, and no digest is added.
     await _device_sign_in(world, session)
     assert all("signature" not in request.headers for request in sent)
+    assert all("content-digest" not in request.headers for request in sent)
+    # A signer that isn't told to: the Session header's requests only, as 1.0 has it.
+    _signing(world, oauth_endpoints=False)
+    sent.clear()
+    await _device_sign_in(world, session)
+    await world.transport.request("GET", f"{SHOP}/poppy/tasks", session=session)
+    assert [request.url.path for request in sent if "signature" in request.headers] == [
+        "/poppy/tasks"
+    ]
     assert all("content-digest" not in request.headers for request in sent)
 
     _signing(world)
@@ -1145,8 +1166,8 @@ def test_what_a_company_may_list() -> None:
 @pytest.mark.asyncio
 async def test_a_listed_task_is_reported_by_its_id() -> None:
     world = World()
-    _serving(world, replace(CONFIG, feedback_tasks=LISTED))
-    session = await _session(world)
+    _serving(world, replace(CONFIG, feedback_tasks=LISTED, protocol_versions=("1.1",)))
+    session = await _session(world, "1.1")
     tasks = await TasksClient(transport=world.transport).get(world.company, session=session)
     assert [(task.id, task.task) for task in tasks.listed_tasks] == [
         (LISTED[0]["id"], LISTED[0]["task"]),
@@ -1217,9 +1238,9 @@ async def test_a_listed_task_is_reported_by_its_id() -> None:
 @pytest.mark.asyncio
 async def test_nothing_of_listed_tasks_goes_to_a_peer_at_10() -> None:
     world = World()
-    _serving(world, replace(CONFIG, feedback_tasks=LISTED))
+    _serving(world, replace(CONFIG, feedback_tasks=LISTED, protocol_versions=("1.1",)))
     # A 1.0 agent at the 1.1 company: no `feedback.tasks`, and its reports are 1.0's.
-    published = await _session(world, "1.0")
+    published = await _session(world)
     answer = await world.transport.request("GET", f"{SHOP}/poppy/tasks", session=published)
     assert answer.json()["feedback"] == {"endpoint": FEEDBACK_URL}
     tasks = await TasksClient(transport=world.transport).get(world.company, session=published)
@@ -1245,8 +1266,8 @@ async def test_nothing_of_listed_tasks_goes_to_a_peer_at_10() -> None:
     assert world.shop.tasks_document()["feedback"]["tasks"] == list(LISTED)
 
     # A company that serves only 1.0 lists none, whatever the request names.
-    _serving(world, replace(CONFIG, feedback_tasks=LISTED, protocol_versions=("1.0",)))
-    session = await _session(world)
+    _serving(world, replace(CONFIG, feedback_tasks=LISTED))
+    session = await _session(world, "1.1")
     assert session.protocol_version == "1.0"
     newer = replace(session, protocol_version="1.1")
     answer = await world.transport.request("GET", f"{SHOP}/poppy/tasks", session=newer)
@@ -1257,7 +1278,7 @@ async def test_nothing_of_listed_tasks_goes_to_a_peer_at_10() -> None:
     document = DiscoveryDocument.model_validate(
         {**world.company.document.model_dump(mode="json"), "protocol_version": "1.0"}
     )
-    _serving(world, replace(CONFIG, feedback_tasks=LISTED))
+    _serving(world, replace(CONFIG, feedback_tasks=LISTED, protocol_versions=("1.1",)))
     wrong = await TasksClient(transport=world.transport).get(document, session=newer)
     assert wrong.available and wrong.listed_tasks == []
     assert wrong.feedback_endpoint == FEEDBACK_URL

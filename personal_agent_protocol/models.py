@@ -38,12 +38,12 @@ from .urls import browser_safe
 _VERSION = re.compile(r"^(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)$")
 #: The protocol versions a Personal Agent implements unless it asks for others (§3.4): a
 #: Company's document is used at a version compatible with one of them, the same major
-#: and, before 1.0, the same minor. Draft 1.1 only (`DEFAULT_PROTOCOL_VERSION`), which a
-#: Company's 1.0 document is compatible with.
+#: and, before 1.0, the same minor. 1.0 as published only (`DEFAULT_PROTOCOL_VERSION`): a
+#: Company whose document is a later 1.x is used as 1.0 defines.
 SUPPORTED_PROTOCOL_VERSIONS = frozenset({DEFAULT_PROTOCOL_VERSION})
-#: Every protocol version this SDK implements: 0.4 and 1.0 as published, and draft 1.1. A
-#: Personal Agent (`DiscoveryClient(protocol_versions=...)`) or a Company
-#: (`CompanyConfig.protocol_versions`) uses 0.4 or 1.0 only when it names it.
+#: Every protocol version this SDK implements: 0.4 and 1.0 as published, and upstream's
+#: unpublished draft 1.1. A Personal Agent (`DiscoveryClient(protocol_versions=...)`) or a
+#: Company (`CompanyConfig.protocol_versions`) uses 0.4 or the draft only when it names it.
 AVAILABLE_PROTOCOL_VERSIONS = frozenset(
     {PROTOCOL_PROFILE, PUBLISHED_PROTOCOL_VERSION, DRAFT_PROTOCOL_VERSION}
 )
@@ -94,10 +94,10 @@ def implemented_version_for(
 ) -> str:
     """The version a Personal Agent names in `Poppy-Version` when it uses a Company at
     `chosen` (§3.4): one this SDK implements, compatible with `chosen` and with one the
-    agent implements (`implemented`), and never later than either. The newest such: `1.1`
-    for an agent that implements 1.1 at a Company used at `1.1` or `1.4`; `1.0` at a
-    Company whose document is `1.0`, so each side sends only what the other's version
-    defines; and `1.0` for an agent that names only 1.0, whatever the Company's minor.
+    agent implements (`implemented`), and never later than either. The newest such: `1.0`
+    for an agent on the default, whatever the Company's minor; `1.1` for an agent that
+    names draft 1.1 at a Company used at `1.1` or `1.4`, and `1.0` for it at a Company
+    whose document is `1.0`, so each side sends only what the other's version defines.
     `ValueError` when there is none."""
 
     mine = [version for version in implemented if compatible_versions(chosen, version)]

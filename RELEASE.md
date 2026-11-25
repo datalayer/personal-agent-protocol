@@ -45,6 +45,16 @@ is published. For such a release:
 1. After the tag, release Agent Runtimes with the new pin, then empty
    `AGENT_RUNTIMES_REF` so the job tests the released package again.
 
+## A pre-release
+
+A pre-release is tagged with its Python version, as PEP 440 writes it: `vX.Y.ZaN`, `vX.Y.ZbN`
+or `vX.Y.ZrcN`. `package.json` and the TypeScript plugin manifests carry the same version as
+semver writes it: `X.Y.Z-alpha.N`, `-beta.N` or `-rc.N`. The workflow checks both, publishes
+to PyPI (a pre-release there by its version, which `pip install` skips unless asked), to npm
+under the dist-tag `alpha`, `beta` or `rc` and never `latest`, and marks the GitHub release
+a pre-release. The compatibility page keeps describing the stable release, and says what the
+pre-release is.
+
 ## Trusted publishing
 
 - PyPI project `personal-agent-protocol`: owner `datalayer`, repository

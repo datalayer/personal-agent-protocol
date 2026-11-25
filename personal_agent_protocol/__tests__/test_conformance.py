@@ -171,7 +171,7 @@ async def test_reports_as_json_and_junit_and_a_failure_does_not_stop_the_suite()
     assert outcomes["lifecycle.sign-out-takes-effect"] == "passed"
 
     payload = report.to_json()
-    assert payload["schema_version"] == 1 and payload["profile"] == "1.1"
+    assert payload["schema_version"] == 1 and payload["profile"] == "1.0"
     assert payload["extensions"] == {"operations": "3"}
     assert payload["summary"] == {"passed": 4, "failed": 1, "skipped": 0}
     text = json.dumps(payload)

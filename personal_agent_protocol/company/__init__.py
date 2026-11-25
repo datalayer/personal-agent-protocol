@@ -192,7 +192,7 @@ def build_company(
     reactor.register_plugin(
         PluginManifest(
             name="personal-agent-protocol.company",
-            version="1.0.4",
+            version="1.1.0a1",
             contribution_points=[
                 COMPANY_STORES.id,
                 COMPANY_ACCOUNTS.id,

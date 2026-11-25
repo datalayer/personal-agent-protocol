@@ -55,6 +55,7 @@ under the new ID.
 from __future__ import annotations
 
 import asyncio
+import weakref
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -207,7 +208,10 @@ async def replace_user_id(
     }
     # One replacement at a time for a User at a Company in this process; the store's own
     # check of the ID it replaces covers other processes.
-    lock = _REPLACING.setdefault((user.tenant_id, user.local_user_id, user.company), asyncio.Lock())
+    key = (user.tenant_id, user.local_user_id, user.company)
+    lock = _REPLACING.get(key)
+    if lock is None:
+        lock = _REPLACING[key] = asyncio.Lock()
     async with lock:
         if await store.get_or_create(**who) != user.pairwise_user_id:
             # Replaced already, or never the User's: nothing is checked or cleared for an
@@ -238,8 +242,11 @@ async def replace_user_id(
     return ReplacedUserId(pairwise_user_id=replaced, signed_out=bool(held), revoked=revoked)
 
 
-#: The replacements under way in this process, one at a time for a User at a Company.
-_REPLACING: dict[tuple[str, str, str], asyncio.Lock] = {}
+#: The replacements under way in this process, one at a time for a User at a Company: a
+#: lock is kept only while a caller holds or waits for it.
+_REPLACING: weakref.WeakValueDictionary[tuple[str, str, str], asyncio.Lock] = (
+    weakref.WeakValueDictionary()
+)
 
 
 def _stale() -> UserIdError:

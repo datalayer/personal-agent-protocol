@@ -15,6 +15,7 @@ listed tasks in feedback (§9, §9.3).
 from __future__ import annotations
 
 import asyncio
+import gc
 import sqlite3
 from contextlib import closing
 from dataclasses import replace
@@ -62,6 +63,7 @@ from personal_agent_protocol import (
     replace_user_id,
     request_scope,
     sign_operator_request,
+    user_ids,
     verify_operator_signature,
 )
 from personal_agent_protocol.auth import build_direct_sign_in_request
@@ -1099,6 +1101,37 @@ async def test_what_stops_a_replacement_leaves_the_old_id_in_place(tmp_path: Pat
             delegated_keys=plain.host.delegated_keys,
             reason="user_request",
         )
+
+
+@pytest.mark.asyncio
+async def test_a_finished_replacement_keeps_no_lock(tmp_path: Path) -> None:
+    bare, owned = build_pap_reactor()
+    assert owned is not None
+    await owned.aclose()
+    store = SqlitePairwiseUserIdStore(tmp_path / "ids.sqlite3")
+    bare.register_plugin(PluginManifest(name="ids", version="1"), _StorePlugin(store))
+
+    async def replace_once() -> None:
+        await replace_user_id(
+            bare,
+            user=UserIdAtCompany(
+                tenant_id=TENANT,
+                local_user_id="user-ada",
+                company=SHOP,
+                pairwise_user_id=await store.get_or_create(**WHO),
+            ),
+            data=_HostData([]),
+            dpop_keys=InMemoryDpopKeys(),
+            delegated_keys=InMemoryDelegatedKeys(),
+            reason="user_request",
+        )
+
+    gc.collect()
+    before = len(user_ids._REPLACING)
+    await replace_once()
+    await replace_once()
+    gc.collect()
+    assert len(user_ids._REPLACING) == before
 
 
 @pytest.mark.asyncio

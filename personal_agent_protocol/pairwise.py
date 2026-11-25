@@ -97,16 +97,20 @@ class SqlitePairwiseUserIdStore:
         tenant_id: str,
         local_user_id: str,
         company_issuer: str,
+        expected: str,
     ) -> str:
         """Replace the User's ID at the Company with a new random one, and return it
         (§5.1). The old ID is gone from the store, and when it was last used with it.
 
-        Only as the last step of `user_ids.replace_user_id`, which signs out first and
-        discards what the old ID held: an ID is never replaced while it is in use.
+        `expected` is the ID being replaced: when the store holds another one, or none,
+        nothing changes and `LookupError` is raised, in one transaction, so of two
+        replacements of the same ID only one is made. Only as the last step of
+        `user_ids.replace_user_id`, which signs out first and discards what the old ID
+        held: an ID is never replaced while it is in use.
         """
 
         key = _key(tenant_id, local_user_id, company_issuer)
-        return await asyncio.to_thread(self._replace_sync, key)
+        return await asyncio.to_thread(self._replace_sync, key, expected)
 
     async def mark_used(
         self,
@@ -191,9 +195,12 @@ class SqlitePairwiseUserIdStore:
                 return str(row[0])
             return self._insert(database, key)
 
-    def _replace_sync(self, key: tuple[str, str, str]) -> str:
+    def _replace_sync(self, key: tuple[str, str, str], expected: str) -> str:
         with closing(self._connect()) as connection, connection as database:
             database.execute("BEGIN IMMEDIATE")
+            row = database.execute(_SELECT_ID, key).fetchone()
+            if row is None or str(row[0]) != expected:
+                raise LookupError("the store holds another User ID than the one to replace")
             database.execute(
                 """
                 DELETE FROM pap_pairwise_user_ids
@@ -302,7 +309,12 @@ class PairwiseCounters(Protocol):
 
     async def get(self, *, tenant_id: str, local_user_id: str, company_issuer: str) -> int: ...
 
-    async def increase(self, *, tenant_id: str, local_user_id: str, company_issuer: str) -> int: ...
+    async def increase(
+        self, *, tenant_id: str, local_user_id: str, company_issuer: str, expected: int
+    ) -> int:
+        """The counter increased by one, when it is `expected`; `LookupError` and no
+        change when it is another value, atomically."""
+        ...
 
 
 class SqlitePairwiseCounters:
@@ -320,11 +332,13 @@ class SqlitePairwiseCounters:
         key = _key(tenant_id, local_user_id, company_issuer)
         return await asyncio.to_thread(self._sync, key, 0)
 
-    async def increase(self, *, tenant_id: str, local_user_id: str, company_issuer: str) -> int:
+    async def increase(
+        self, *, tenant_id: str, local_user_id: str, company_issuer: str, expected: int
+    ) -> int:
         key = _key(tenant_id, local_user_id, company_issuer)
-        return await asyncio.to_thread(self._sync, key, 1)
+        return await asyncio.to_thread(self._sync, key, 1, expected)
 
-    def _sync(self, key: tuple[str, str, str], by: int) -> int:
+    def _sync(self, key: tuple[str, str, str], by: int, expected: int | None = None) -> int:
         connection = sqlite3.connect(self._database, timeout=self._timeout, isolation_level=None)
         with closing(connection), connection as database:
             database.execute(
@@ -340,6 +354,9 @@ class SqlitePairwiseCounters:
             )
             database.execute("BEGIN IMMEDIATE")
             if by:
+                current = database.execute(_SELECT_COUNTER, key).fetchone()
+                if (0 if current is None else int(current[0])) != expected:
+                    raise LookupError("the counter is another value than the one to increase")
                 database.execute(
                     """
                     INSERT INTO pap_pairwise_counters VALUES (?, ?, ?, ?)
@@ -348,14 +365,14 @@ class SqlitePairwiseCounters:
                     """,
                     (*key, by),
                 )
-            row = database.execute(
-                """
-                SELECT counter FROM pap_pairwise_counters
-                WHERE tenant_id = ? AND local_user_id = ? AND company_issuer = ?
-                """,
-                key,
-            ).fetchone()
+            row = database.execute(_SELECT_COUNTER, key).fetchone()
             return 0 if row is None else int(row[0])
+
+
+_SELECT_COUNTER = """
+    SELECT counter FROM pap_pairwise_counters
+    WHERE tenant_id = ? AND local_user_id = ? AND company_issuer = ?
+"""
 
 
 class DerivedPairwiseUserIds:
@@ -380,17 +397,23 @@ class DerivedPairwiseUserIds:
         }
         return derive_pairwise_user_id(self._key, **who, counter=await self._counters.get(**who))
 
-    async def replace(self, *, tenant_id: str, local_user_id: str, company_issuer: str) -> str:
+    async def replace(
+        self, *, tenant_id: str, local_user_id: str, company_issuer: str, expected: str
+    ) -> str:
         """Increase the User's counter at the Company, and return the ID it now gives:
-        only as the last step of `user_ids.replace_user_id`."""
+        only as the last step of `user_ids.replace_user_id`. `expected` is the ID being
+        replaced: when the counter gives another one, `LookupError` and no change."""
 
         who = {
             "tenant_id": tenant_id,
             "local_user_id": local_user_id,
             "company_issuer": company_issuer,
         }
+        counter = await self._counters.get(**who)
+        if derive_pairwise_user_id(self._key, **who, counter=counter) != expected:
+            raise LookupError("the counter gives another User ID than the one to replace")
         return derive_pairwise_user_id(
-            self._key, **who, counter=await self._counters.increase(**who)
+            self._key, **who, counter=await self._counters.increase(**who, expected=counter)
         )
 
 

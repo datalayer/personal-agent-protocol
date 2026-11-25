@@ -18,7 +18,9 @@ IDs in no other case: a Company counts its Users and limits each one by them.
 
 `replace_user_id` does it in the order §5.1 asks:
 
-1. **Between tasks.** It refuses while a Session uses the ID (`UserIdData.in_use`).
+1. **The current ID, between tasks.** It refuses an ID that is no longer the User's at
+   the Company (`user_id_stale`), one replacement at a time, and while a Session uses the
+   ID (`UserIdData.in_use`).
 2. **Sign out first.** With a refresh token for the User at the Company, the account
    would link the old ID and the new one: every refresh token is revoked, and the
    replacement stops if the Company doesn't acknowledge one.
@@ -52,6 +54,7 @@ under the new ID.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -80,8 +83,9 @@ ReplacementReason = Literal["user_request", "unused"]
 
 
 class UserIdError(PersonalAgentProtocolError):
-    """A User ID was not replaced: `user_id_in_use`, `refresh_token_held`,
-    `user_id_recently_used`, `sign_out_failed`. Nothing of the old ID was discarded."""
+    """A User ID was not replaced: `user_id_stale`, `user_id_in_use`,
+    `refresh_token_held`, `user_id_recently_used`, `sign_out_failed`. The store's ID is
+    unchanged."""
 
 
 @dataclass(frozen=True)
@@ -123,7 +127,16 @@ class ReplaceablePairwiseUserIdStore(Protocol):
     `SqlitePairwiseUserIdStore` with a new random ID, `DerivedPairwiseUserIds` by its
     counter."""
 
-    async def replace(self, *, tenant_id: str, local_user_id: str, company_issuer: str) -> str: ...
+    async def get_or_create(
+        self, *, tenant_id: str, local_user_id: str, company_issuer: str
+    ) -> str: ...
+
+    async def replace(
+        self, *, tenant_id: str, local_user_id: str, company_issuer: str, expected: str
+    ) -> str:
+        """The new ID, when the store's ID is `expected`; `LookupError` and no change
+        when it is another one, atomically."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -183,26 +196,52 @@ async def replace_user_id(
     store = first_contribution(reactor, PAIRWISE_USER_ID_STORES, "pairwise user ID store")
     if not isinstance(store, ReplaceablePairwiseUserIdStore):
         raise TypeError("the pairwise user ID store can't replace an ID: it has no replace()")
-    references = tuple(dict.fromkeys(refresh_token_references))
-    tokens = cast(TokenStore, first_contribution(reactor, TOKEN_STORES, "token store"))
-    held = [reference for reference in references if await tokens.get(reference) is not None]
-    if reason == "unused":
-        _check_unused(reactor, last_used, held)
-    elif reason != "user_request":
-        raise ValueError("a User ID is replaced when the User asks, or once it went unused")
-    if await data.in_use(user):
-        raise UserIdError("user_id_in_use", "A User ID is replaced between tasks")
-    revoked = await _sign_out(held, accounts, context) if held else 0
-    who = {"tenant_id": user.tenant_id, "issuer": user.company, "sub": user.pairwise_user_id}
-    await dpop_keys.forget(**who)
-    await delegated_keys.forget(**who)
-    await data.discard(user)
-    replaced = await store.replace(
-        tenant_id=user.tenant_id, local_user_id=user.local_user_id, company_issuer=user.company
-    )
+    who = {
+        "tenant_id": user.tenant_id,
+        "local_user_id": user.local_user_id,
+        "company_issuer": user.company,
+    }
+    # One replacement at a time for a User at a Company in this process; the store's own
+    # check of the ID it replaces covers other processes.
+    lock = _REPLACING.setdefault((user.tenant_id, user.local_user_id, user.company), asyncio.Lock())
+    async with lock:
+        if await store.get_or_create(**who) != user.pairwise_user_id:
+            # Replaced already, or never the User's: nothing is checked or cleared for an
+            # ID that isn't the current one.
+            raise _stale()
+        references = tuple(dict.fromkeys(refresh_token_references))
+        held: list[str] = []
+        if references:
+            tokens = cast(TokenStore, first_contribution(reactor, TOKEN_STORES, "token store"))
+            held = [ref for ref in references if await tokens.get(ref) is not None]
+        if reason == "unused":
+            _check_unused(reactor, last_used, held)
+        elif reason != "user_request":
+            raise ValueError("a User ID is replaced when the User asks, or once it went unused")
+        if await data.in_use(user):
+            raise UserIdError("user_id_in_use", "A User ID is replaced between tasks")
+        revoked = await _sign_out(held, accounts, context) if held else 0
+        keys = {"tenant_id": user.tenant_id, "issuer": user.company, "sub": user.pairwise_user_id}
+        await dpop_keys.forget(**keys)
+        await delegated_keys.forget(**keys)
+        await data.discard(user)
+        try:
+            replaced = await store.replace(**who, expected=user.pairwise_user_id)
+        except LookupError as exc:
+            raise _stale() from exc
     if replaced == user.pairwise_user_id:
         raise RuntimeError("the pairwise user ID store returned the ID it was to replace")
     return ReplacedUserId(pairwise_user_id=replaced, signed_out=bool(held), revoked=revoked)
+
+
+#: The replacements under way in this process, one at a time for a User at a Company.
+_REPLACING: dict[tuple[str, str, str], asyncio.Lock] = {}
+
+
+def _stale() -> UserIdError:
+    return UserIdError(
+        "user_id_stale", "The User ID to replace is no longer the User's ID at the Company"
+    )
 
 
 def _check_unused(reactor: PluginPlatform, last_used: datetime | None, held: list[str]) -> None:

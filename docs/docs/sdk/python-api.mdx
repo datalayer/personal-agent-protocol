@@ -296,7 +296,7 @@ Unknown or internal symbols are deliberately excluded.
 - [`user_step_kind`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/browser_control.py) — Function. What a `data-poppy-user-step` value asks, or `None` without one (Browser Control 4).
 - [`UserIdAtCompany`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/user_ids.py) — Class. One User's ID at one Company: who (`tenant_id`, `local_user_id`), where (`company`,
 - [`UserIdData`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/user_ids.py) — Class. What the host holds under a User ID that the SDK can't reach (§5.1).
-- [`UserIdError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/user_ids.py) — Class. A User ID was not replaced: `user_id_in_use`, `refresh_token_held`,
+- [`UserIdError`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/user_ids.py) — Class. A User ID was not replaced: `user_id_stale`, `user_id_in_use`,
 - [`validate_direct_sign_in_callback`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/auth.py) — Function. Validate redirect location, state, and issuer before exposing the code.
 - [`verification_host_allowed`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/device.py) — Function. Whether a device sign-in link may be shown for this company (§4.3).
 - [`verify_operator_signature`](https://github.com/datalayer/personal-agent-protocol/blob/main/personal_agent_protocol/operator_signatures.py) — Function. What the request's operator signature comes to; `headers` are lower-case.

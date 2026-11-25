@@ -14,6 +14,7 @@ listed tasks in feedback (§9, §9.3).
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from contextlib import closing
 from dataclasses import replace
@@ -52,6 +53,7 @@ from personal_agent_protocol import (
     UserIdAtCompany,
     UserIdError,
     WebBotAuthSigner,
+    build_pap_reactor,
     content_digest,
     derive_pairwise_user_id,
     may_replace_unused,
@@ -66,6 +68,7 @@ from personal_agent_protocol.auth import build_direct_sign_in_request
 from personal_agent_protocol.company import CompanyConfig, OperatorVerifiedAgents
 from personal_agent_protocol.company.points import CLIENT_POLICIES
 from personal_agent_protocol.company.store import FEEDBACK, USER_ID
+from personal_agent_protocol.crypto import InMemoryDelegatedKeys, InMemoryDpopKeys
 from personal_agent_protocol.demo.conformance import ManzanitaConformance
 from personal_agent_protocol.demo.kit import personal_agent_reactor
 from personal_agent_protocol.demo.manzanita import ADA, CONFIG, manzanita
@@ -251,7 +254,7 @@ def test_offline_access_is_requested_when_the_issuer_lists_it_and_never_granted(
     # It is none of the scopes granted, and alone it is a decline (§4.7).
     token = AccessToken.from_response(response("orders:read offline_access"))
     assert token.scopes == ("orders:read",)
-    for declined in ("offline_access", "", " "):
+    for declined in ("offline_access", "", " ", " \t \n ", "offline_access \t"):
         with pytest.raises(ProtocolValidationError):
             AccessToken.from_response(response(declined))
     left_out = AccessToken.from_response(response(None), requested_scopes=("orders:read",))
@@ -772,7 +775,11 @@ async def test_the_store_replaces_one_users_id_and_remembers_when_it_was_used(
     assert await store.last_used(**WHO) == now
     with pytest.raises(ValueError):
         await store.mark_used(**WHO, at=now.replace(tzinfo=None))
-    replaced = await store.replace(**WHO)
+    with pytest.raises(LookupError):
+        await store.replace(**WHO, expected=other)
+    replaced = await store.replace(**WHO, expected=first)
+    with pytest.raises(LookupError):
+        await store.replace(**WHO, expected=first)  # of two replacements, one is made
     assert replaced != first and replaced.startswith("usr_")
     assert await store.get_or_create(**WHO) == replaced
     assert await store.last_used(**WHO) is None
@@ -822,7 +829,13 @@ async def test_a_keyed_hash_replaces_one_users_id_with_a_counter(tmp_path: Path)
     counters = SqlitePairwiseCounters(tmp_path / "counters.sqlite3")
     ids = DerivedPairwiseUserIds(key, counters=counters)
     assert await ids.get_or_create(**WHO) == first
-    replaced = await ids.replace(**WHO)
+    with pytest.raises(LookupError):
+        await ids.replace(**WHO, expected=different[2])
+    replaced = await ids.replace(**WHO, expected=first)
+    with pytest.raises(LookupError):
+        await ids.replace(**WHO, expected=first)
+    with pytest.raises(LookupError):
+        await counters.increase(**WHO, expected=0)
     assert replaced == derive_pairwise_user_id(key, **WHO, counter=1) != first
     # Durable: another process over the same counters derives the new ID.
     again = DerivedPairwiseUserIds(
@@ -876,9 +889,9 @@ class _Store:
     async def get_or_create(self, **who: str) -> str:
         return await self.store.get_or_create(**who)
 
-    async def replace(self, **who: str) -> str:
+    async def replace(self, *, expected: str, **who: str) -> str:
         self.calls.append("replace")
-        return await self.store.replace(**who)
+        return await self.store.replace(**who, expected=expected)
 
 
 class _StorePlugin:
@@ -1027,6 +1040,41 @@ async def test_what_stops_a_replacement_leaves_the_old_id_in_place(tmp_path: Pat
     aged = await replace_it(reason="unused", last_used=now - timedelta(days=28))
     assert (aged.signed_out, aged.revoked) == (False, 0) and aged.pairwise_user_id != old
     assert calls == ["in_use", "discard", "replace"]
+
+    # The ID just replaced is stale: nothing is checked or cleared for it again, and of
+    # two replacements at once only one is made.
+    calls.clear()
+    with pytest.raises(UserIdError) as raised:
+        await replace_it(reason="unused", last_used=now - timedelta(days=28))
+    assert raised.value.code == "user_id_stale" and calls == []
+    current = replace(user, pairwise_user_id=aged.pairwise_user_id)
+    outcomes = await asyncio.gather(
+        replace_it(user=current, refresh_token_references=[]),
+        replace_it(user=current, refresh_token_references=[]),
+        return_exceptions=True,
+    )
+    assert sorted(type(outcome).__name__ for outcome in outcomes) == [
+        "ReplacedUserId",
+        "UserIdError",
+    ]
+    assert calls.count("replace") == 1 and calls.count("discard") == 1
+
+    # A signed-out host with no token store replaces an ID all the same.
+    bare, owned = build_pap_reactor()
+    assert owned is not None
+    await owned.aclose()
+    bare_store = _Store(SqlitePairwiseUserIdStore(tmp_path / "bare.sqlite3"), [])
+    bare.register_plugin(PluginManifest(name="ids", version="1"), _StorePlugin(bare_store))
+    signed_out = replace(user, pairwise_user_id=await bare_store.get_or_create(**WHO))
+    done = await replace_user_id(
+        bare,
+        user=signed_out,
+        data=_HostData([]),
+        dpop_keys=InMemoryDpopKeys(),
+        delegated_keys=InMemoryDelegatedKeys(),
+        reason="user_request",
+    )
+    assert done.pairwise_user_id != signed_out.pairwise_user_id and not done.signed_out
 
     # A store that can't replace an ID is refused before anything is done.
     plain = World()

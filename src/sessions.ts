@@ -437,7 +437,8 @@ export function accessTokenFromResponse(
 ): AccessToken {
   const granted = (response.scope === undefined ? [...(options.requestedScopes ?? [])] : response.scope.split(" "))
     .filter((item) => item !== "" && item !== OFFLINE_ACCESS_SCOPE);
-  if (granted.length === 0) {
+  // Whitespace alone grants nothing either.
+  if (granted.join(" ").trim() === "") {
     throw new ProtocolValidationError("invalid_token_response", "A token response grants no scope");
   }
   return {

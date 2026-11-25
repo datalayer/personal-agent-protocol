@@ -317,7 +317,7 @@ class AccessToken(ProtocolModel):
         # `offline_access` asks for a refresh token, not account access: it is none of the
         # scopes granted, and is ignored when they are compared with those requested (§4.4).
         scope = " ".join(item for item in granted if item and item != OFFLINE_ACCESS_SCOPE)
-        if not scope:
+        if not scope.strip():
             # A sign-in grants at least one scope; approving none, or `offline_access`
             # alone, is a decline (§4.4, §4.7).
             raise ProtocolValidationError(

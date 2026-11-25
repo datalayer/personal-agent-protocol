@@ -117,8 +117,11 @@ export async function derivePairwiseUserId(
  */
 export interface PairwiseCounters {
   get(who: PairwiseWho): Promise<number>;
-  /** Increase the counter by one, atomically, and return its new value. */
-  increase(who: PairwiseWho): Promise<number>;
+  /**
+   * The counter increased by one, when it is `expected`; a `RangeError` and no change when it
+   * is another value, atomically.
+   */
+  increase(who: PairwiseWho, expected: number): Promise<number>;
 }
 
 /**
@@ -134,7 +137,8 @@ export class DerivedPairwiseUserIds {
     if (!(key instanceof Uint8Array) || key.byteLength < PAIRWISE_KEY_MIN_BYTES) {
       throw new RangeError(`the key has at least ${PAIRWISE_KEY_MIN_BYTES} bytes`);
     }
-    this.#key = key.slice();
+    // A copy the store owns: a Node.js Buffer's `slice` shares its memory.
+    this.#key = new Uint8Array(key);
     this.#counters = options.counters;
   }
 
@@ -145,10 +149,16 @@ export class DerivedPairwiseUserIds {
 
   /**
    * Increase the User's counter at the Company, and return the ID it now gives: only as the
-   * last step of `replaceUserId`.
+   * last step of `replaceUserId`. `expected` is the ID being replaced: when the counter gives
+   * another one, a `RangeError` and no change.
    */
-  async replace(who: PairwiseWho): Promise<string> {
+  async replace(who: PairwiseWho & { readonly expected: string }): Promise<string> {
     keyParts(who);
-    return derivePairwiseUserId(this.#key, { ...who, counter: await this.#counters.increase(who) });
+    const { expected, ...whom } = who;
+    const counter = await this.#counters.get(whom);
+    if ((await derivePairwiseUserId(this.#key, { ...whom, counter })) !== expected) {
+      throw new RangeError("the counter gives another User ID than the one to replace");
+    }
+    return derivePairwiseUserId(this.#key, { ...whom, counter: await this.#counters.increase(whom, counter) });
   }
 }

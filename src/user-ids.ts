@@ -106,10 +106,15 @@ export interface UserIdData {
  * random IDs with a new random one, `DerivedPairwiseUserIds` by its counter.
  */
 export interface ReplaceablePairwiseUserIdStore extends PairwiseUserIdStore {
+  /**
+   * The new ID, when the store's ID is `expected`; a `RangeError` and no change when it is
+   * another one, atomically.
+   */
   replace(options: {
     readonly tenantId: string;
     readonly localUserId: string;
     readonly companyIssuer: string;
+    readonly expected: string;
   }): Promise<string>;
 }
 
@@ -180,14 +185,41 @@ export async function replaceUserId(
   const store = firstContribution(reactor, PairwiseUserIdStores, "pairwise user ID store") as Partial<
     ReplaceablePairwiseUserIdStore
   >;
-  if (typeof store.replace !== "function") {
+  if (typeof store.replace !== "function" || typeof store.getOrCreate !== "function") {
     throw new TypeError("the pairwise user ID store can't replace an ID: it has no replace()");
   }
+  const replaceable = store as ReplaceablePairwiseUserIdStore;
+  const whom = { tenantId: user.tenantId, localUserId: user.localUserId, companyIssuer: user.company };
+  // One replacement at a time for a User at a Company in this process; the store's own check
+  // of the ID it replaces covers other processes.
+  const key = JSON.stringify([user.tenantId, user.localUserId, user.company]);
+  const before = replacing.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const mine = new Promise<void>((resolve) => (release = resolve));
+  const queued = before.then(() => mine);
+  replacing.set(key, queued);
+  await before;
+  try {
+    return await replaceCurrent();
+  } finally {
+    release();
+    if (replacing.get(key) === queued) replacing.delete(key);
+  }
+
+  async function replaceCurrent(): Promise<ReplacedUserId> {
+  if ((await replaceable.getOrCreate(whom)) !== user.pairwiseUserId) {
+    // Replaced already, or never the User's: nothing is checked or cleared for an ID that
+    // isn't the current one.
+    throw stale();
+  }
   const references = [...new Set(options.refreshTokenReferences ?? [])];
-  const tokens = firstContribution(reactor, TokenStores, "token store");
   const held: string[] = [];
-  for (const reference of references) {
-    if ((await tokens.get(reference)) !== undefined) held.push(reference);
+  if (references.length) {
+    // Only then: a signed-out host needs no token store to replace an ID.
+    const tokens = firstContribution(reactor, TokenStores, "token store");
+    for (const reference of references) {
+      if ((await tokens.get(reference)) !== undefined) held.push(reference);
+    }
   }
   if (options.reason === "unused") {
     if (options.lastUsed === undefined) {
@@ -235,13 +267,27 @@ export async function replaceUserId(
   await options.dpopKeys.forget(who);
   await options.delegatedKeys.forget(who);
   await data.discard(user);
-  const replaced = await store.replace({
-    tenantId: user.tenantId,
-    localUserId: user.localUserId,
-    companyIssuer: user.company,
-  });
+  let replaced: string;
+  try {
+    replaced = await replaceable.replace({ ...whom, expected: user.pairwiseUserId });
+  } catch (cause) {
+    if (!(cause instanceof RangeError)) throw cause;
+    throw stale(cause);
+  }
   if (replaced === user.pairwiseUserId) {
     throw new Error("the pairwise user ID store returned the ID it was to replace");
   }
   return { pairwiseUserId: replaced, signedOut: held.length > 0, revoked };
+  }
+}
+
+/** The replacements under way in this process, one at a time for a User at a Company. */
+const replacing = new Map<string, Promise<void>>();
+
+function stale(cause?: unknown): UserIdError {
+  return new UserIdError(
+    "user_id_stale",
+    "The User ID to replace is no longer the User's ID at the Company",
+    cause === undefined ? {} : { cause },
+  );
 }

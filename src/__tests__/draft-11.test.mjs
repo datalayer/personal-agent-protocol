@@ -271,7 +271,7 @@ test("offline_access is requested when the issuer lists it and never granted", a
   const response = (scope) => ({ accessToken: new SecretValue("at"), tokenType: "Bearer", ...(scope === undefined ? {} : { scope }) });
   // It is none of the scopes granted, and alone it is a decline (§4.7).
   assert.deepEqual([...accessTokenFromResponse(response("orders:read offline_access")).scopes], ["orders:read"]);
-  for (const declined of ["offline_access", "", " "]) {
+  for (const declined of ["offline_access", "", " ", " \t \n ", "offline_access \t"]) {
     assert.throws(() => accessTokenFromResponse(response(declined)), ProtocolValidationError);
   }
   const leftOut = accessTokenFromResponse(response(undefined), { requestedScopes: ["orders:read"] });
@@ -654,10 +654,10 @@ class Counters {
   async get(who) {
     return this.values.get(this.key(who)) ?? 0;
   }
-  async increase(who) {
-    const next = (await this.get(who)) + 1;
-    this.values.set(this.key(who), next);
-    return next;
+  async increase(who, expected) {
+    if ((await this.get(who)) !== expected) throw new RangeError("the counter is another value");
+    this.values.set(this.key(who), expected + 1);
+    return expected + 1;
   }
 }
 
@@ -687,7 +687,10 @@ test("a keyed hash replaces one user's ID with a counter", async () => {
   const counters = new Counters();
   const ids = new DerivedPairwiseUserIds(key, { counters });
   assert.equal(await ids.getOrCreate(WHO), first);
-  const replaced = await ids.replace(WHO);
+  await assert.rejects(ids.replace({ ...WHO, expected: different[2] }), RangeError);
+  const replaced = await ids.replace({ ...WHO, expected: first });
+  await assert.rejects(ids.replace({ ...WHO, expected: first }), RangeError);
+  await assert.rejects(counters.increase(WHO, 0), RangeError);
   assert.equal(replaced, await derivePairwiseUserId(key, { ...WHO, counter: 1 }));
   assert.notEqual(replaced, first);
   // Another process over the same counters derives the new ID.
@@ -732,6 +735,7 @@ async function replaceable(calls) {
       return ids.get(key(who));
     },
     async replace(who) {
+      if (ids.get(key(who)) !== who.expected) throw new RangeError("another User ID than the one to replace");
       calls.push("replace");
       ids.set(key(who), fresh());
       return ids.get(key(who));
@@ -844,6 +848,21 @@ test("what stops a replacement leaves the old ID in place", async () => {
   assert.deepEqual([aged.signedOut, aged.revoked], [false, 0]);
   assert.notEqual(aged.pairwiseUserId, old);
   assert.deepEqual(calls, ["in_use", "discard", "replace"]);
+
+  // The ID just replaced is stale: nothing is checked or cleared for it again, and of two
+  // replacements at once only one is made.
+  calls.length = 0;
+  await assert.rejects(replaceIt({ reason: "unused", lastUsed: daysAgo(28) }), rejectsWith("user_id_stale"));
+  assert.deepEqual(calls, []);
+  const current = { ...user, pairwiseUserId: aged.pairwiseUserId };
+  const outcomes = await Promise.allSettled([
+    replaceIt({ user: current, refreshTokenReferences: [] }),
+    replaceIt({ user: current, refreshTokenReferences: [] }),
+  ]);
+  assert.deepEqual(outcomes.map((outcome) => outcome.status).sort(), ["fulfilled", "rejected"]);
+  assert.equal(outcomes.find((outcome) => outcome.status === "rejected").reason.code, "user_id_stale");
+  assert.equal(calls.filter((call) => call === "replace").length, 1);
+  assert.equal(calls.filter((call) => call === "discard").length, 1);
 
   // A store that can't replace an ID is refused before anything is done.
   const plain = await world({

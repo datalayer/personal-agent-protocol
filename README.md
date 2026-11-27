@@ -338,9 +338,9 @@ The shared fixtures are in `fixtures/`. Documentation is a Docusaurus site in
 
 - [Documentation](https://personalagentprotocol.org/docs)
 - [Overview](https://personalagentprotocol.org/docs/introduction)
-- [Specification](https://personalagentprotocol.org/docs/0.4/spec)
-- [Implementation guides](https://personalagentprotocol.org/docs/0.4/guides)
-- [Extensions](https://personalagentprotocol.org/docs/0.4/extensions)
+- [Specification](https://personalagentprotocol.org/docs/1.0/spec)
+- [Implementation guides](https://personalagentprotocol.org/docs/1.0/guides)
+- [Extensions](https://personalagentprotocol.org/docs/1.0/extensions)
 - [Open topics](https://personalagentprotocol.org/docs/path-to-1#open-topics)
 - [Datalayer Reactor](https://github.com/datalayer/reactor)
 - [Datalayer Agent Runtimes](https://github.com/datalayer/agent-runtimes)
